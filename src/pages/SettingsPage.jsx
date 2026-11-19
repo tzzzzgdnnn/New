@@ -2,7 +2,7 @@ import { IS_IOS as __IS_IOS } from "../platform/target";
 import { AnimeDubSetting } from "../platform/ios/AnimeDubPrompt";
 import ProfileSettingsSection from "../platform/ios/profiles/ProfileSettingsSection";
 import { getAnimeDubMode } from "../platform/ios/playerBridge";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import UpdateModal from "../components/UpdateModal";
 import {
   storage,
@@ -3359,7 +3359,28 @@ function SettingsTopBar({ sectionRefs, contentRef }) {
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
-export default function SettingsPage({
+// iOS gets its own native-style Settings (grouped lists + sub-pages). The
+// import is compiled out of desktop builds.
+const IOSSettings = __IS_IOS
+  ? lazy(() => import("../platform/ios/settings/IOSSettings"))
+  : null;
+
+export default function SettingsPage(props) {
+  if (IOSSettings) {
+    return (
+      <Suspense fallback={null}>
+        <IOSSettings
+          {...props}
+          ageOptions={AGE_LIMIT_OPTIONS}
+          tmdbLanguages={TMDB_LANGUAGES}
+        />
+      </Suspense>
+    );
+  }
+  return <DesktopSettingsPage {...props} />;
+}
+
+function DesktopSettingsPage({
   apiKey,
   onChangeApiKey,
   initialSection,
