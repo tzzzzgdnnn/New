@@ -53,15 +53,6 @@
       "movie": "https://www.movy.sx/movie/{tmdb}?play=true",
       "tv": "https://www.movy.sx/tv/{tmdb}/{season}/{episode}?play=true",
       "mirrors": []
-    },
-    {
-      "id": "popcornmovies",
-      "name": "PopcornMovies",
-      "enabled": true,
-      "verified": true,
-      "movie": "https://popcornmovies.st/watch/movie/{tmdb}",
-      "tv": "https://popcornmovies.st/watch/tv/{tmdb}/{season}/{episode}",
-      "mirrors": []
     }
   ],
   "builtin": {
