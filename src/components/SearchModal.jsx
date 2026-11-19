@@ -6,6 +6,7 @@ import { SearchIcon, CloseIcon } from "./Icons";
 import { storage } from "../utils/storage";
 import { useKidsFilter } from "../platform/ios/kids/useKidsFilter";
 import { SearchSkeleton } from "../platform/ios/Skeletons";
+import MobileSearch from "./MobileSearch";
 
 const HISTORY_KEY = "searchHistory";
 const MAX_HISTORY = 12;
@@ -20,7 +21,12 @@ function saveHistory(history) {
   storage.set(HISTORY_KEY, history);
 }
 
-export default function SearchModal({ apiKey, onSelect, onClose, offline }) {
+// iPhone and Android get the Netflix-style full-screen search.
+export default function SearchModal(props) {
+  return IS_IOS ? <MobileSearch {...props} /> : <DesktopSearch {...props} />;
+}
+
+function DesktopSearch({ apiKey, onSelect, onClose, offline }) {
   const [query, setQuery] = useState("");
   const [rawResults, setResults] = useState([]);
   // Kids: tmdbFetch already returns only kid-rated titles; this re-checks
