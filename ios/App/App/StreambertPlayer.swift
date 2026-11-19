@@ -1113,7 +1113,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         if hit?.kind != activeSkip?.kind || hit?.start != activeSkip?.start {
             activeSkip = hit
             if let h = hit {
-                skipButton.setTitle(h.kind == "op" ? "Skip Intro" : "Skip Outro", for: .normal)
+                skipButton.setTitle(h.kind == "ed" ? "Skip Outro" : "Skip Intro", for: .normal)
                 skipButton.alpha = 0
                 skipButton.isHidden = false
                 UIView.animate(withDuration: 0.25) { self.skipButton.alpha = 1 }
@@ -1127,25 +1127,35 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     @objc private func skipTapped() {
         guard let s = activeSkip else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        seek(to: s.end)
+        if s.kind == "jump" {
+            // No real timestamps: jump 85 s (a typical opening) once.
+            let now = player?.currentTime().seconds ?? 0
+            skipIntervals.removeAll { $0.kind == "jump" }
+            activeSkip = nil
+            skipButton.isHidden = true
+            seek(to: now + 85)
+        } else {
+            seek(to: s.end)
+        }
     }
 
-    /// Anime: MAL id via Jikan title search, then AniSkip op/ed intervals.
-    /// No data -> no skip button at all.
+    /// Intro/outro skipping.
+    /// Anime: MAL id (from the AniList id the page knows, else a Jikan title
+    /// search), then real AniSkip op/ed timestamps.
+    /// Series without data: a "Skip Intro" jump of 85 s in the first 5 minutes.
     private func loadSkipTimes() {
+        if mediaType == "tv" {
+            // Generic fallback until real data arrives (replaced if it does).
+            skipIntervals = [(kind: "jump", start: 20, end: 300)]
+        }
         guard isAnime, !titleText.isEmpty else { return }
         let ep = episode ?? 1
-        var comps = URLComponents(string: "https://api.jikan.moe/v4/anime")!
-        comps.queryItems = [URLQueryItem(name: "q", value: titleText), URLQueryItem(name: "limit", value: "1")]
-        guard let jikan = comps.url else { return }
-        URLSession.shared.dataTask(with: jikan) { [weak self] data, _, _ in
-            guard let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let first = (json["data"] as? [[String: Any]])?.first,
-                  let mal = first["mal_id"] as? Int,
-                  let skipURL = URL(string: "https://api.aniskip.com/v2/skip-times/\(mal)/\(ep)?types=op&types=ed&episodeLength=0")
+        let anilist = (subtitleInfo["anilistId"] as? NSNumber)?.intValue
+        resolveMalId(anilist: anilist) { [weak self] mal in
+            guard let mal = mal,
+                  let url = URL(string: "https://api.aniskip.com/v2/skip-times/\(mal)/\(ep)?types=op&types=ed&episodeLength=0")
             else { return }
-            URLSession.shared.dataTask(with: skipURL) { data, _, _ in
+            URLSession.shared.dataTask(with: url) { data, _, _ in
                 guard let data = data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let results = json["results"] as? [[String: Any]] else { return }
@@ -1157,8 +1167,35 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
                           let e = (iv["endTime"] as? NSNumber)?.doubleValue, e > s else { continue }
                     out.append((kind: kind == "op" ? "op" : "ed", start: s, end: e))
                 }
+                guard !out.isEmpty else { return }
                 DispatchQueue.main.async { self?.skipIntervals = out }
             }.resume()
+        }
+    }
+
+    private func resolveMalId(anilist: Int?, done: @escaping (Int?) -> Void) {
+        if let id = anilist, var req = URL(string: "https://graphql.anilist.co").map({ URLRequest(url: $0) }) {
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: ["query": "query{Media(id:\(id)){idMal}}"])
+            URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+                let mal = ((((data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any])?["data"]
+                    as? [String: Any])?["Media"] as? [String: Any])?["idMal"] as? NSNumber)?.intValue
+                if let mal = mal { done(mal) } else { self?.jikanMalId(done) }
+            }.resume()
+        } else {
+            jikanMalId(done)
+        }
+    }
+
+    private func jikanMalId(_ done: @escaping (Int?) -> Void) {
+        var comps = URLComponents(string: "https://api.jikan.moe/v4/anime")!
+        comps.queryItems = [URLQueryItem(name: "q", value: titleText), URLQueryItem(name: "limit", value: "1")]
+        guard let url = comps.url else { return done(nil) }
+        URLSession.shared.dataTask(with: url) { data, _, _ in
+            let first = ((data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any])?["data"]
+                as? [[String: Any]])?.first
+            done(first?["mal_id"] as? Int)
         }.resume()
     }
 
