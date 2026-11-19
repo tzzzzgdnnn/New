@@ -1385,6 +1385,10 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private var timeObserver: Any?
     private var statusObs: NSKeyValueObservation?
     private var hideWork: DispatchWorkItem?
+    /// A tap-to-hide waiting out the double-tap window (a double-tap cancels it).
+    private var tapHideWork: DispatchWorkItem?
+    /// When the controls last went from hidden to shown (CACurrentMediaTime).
+    private var controlsShownAt: CFTimeInterval = 0
     private var isScrubbing = false
     private var failed = false
     private let rotateButton = UIButton(type: .system)
@@ -2094,6 +2098,9 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         spinner.color = red
         spinner.translatesAutoresizingMaskIntoConstraints = false
         spinner.startAnimating()
+        // Decorative: it sits mid-screen above the controls while buffering,
+        // exactly where a viewer taps to bring up Pause.
+        spinner.isUserInteractionEnabled = false
         view.addSubview(spinner)
 
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -2102,6 +2109,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         statusLabel.textAlignment = .center
         statusLabel.numberOfLines = 2
         statusLabel.isHidden = true
+        statusLabel.isUserInteractionEnabled = false
         view.addSubview(statusLabel)
         NSLayoutConstraint.activate([
             statusLabel.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 14),
@@ -2171,6 +2179,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         healthLabel.clipsToBounds = true
         healthLabel.insets = UIEdgeInsets(top: 5, left: 10, bottom: 5, right: 10)
         healthLabel.alpha = 0
+        healthLabel.isUserInteractionEnabled = false
         view.addSubview(healthLabel)
 
         // Safe area keeps it clear of the notch / Dynamic Island either way up.
@@ -2226,6 +2235,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         toastLabel.clipsToBounds = true
         toastLabel.alpha = 0
         toastLabel.isHidden = true
+        toastLabel.isUserInteractionEnabled = false
         view.addSubview(toastLabel)
 
         failureLabel.textColor = .white
@@ -2300,37 +2310,67 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     // MARK: Gestures
 
     private func setupGestures() {
+        // Both recognizers live on the root view, not on `videoView`/`controls`:
+        // in portrait the video is only a 16:9 box, and once the controls fade
+        // to alpha 0 UIKit hit-testing skips them, so a tap on the black area
+        // around the video (or on any decorative view above it, like the
+        // buffering spinner) used to reach no recognizer at all. Touches on
+        // buttons, sliders and cards are filtered out in the delegate below.
+        // The single tap no longer waits for the double tap to fail: hidden
+        // controls appear immediately, and a hide is deferred instead so a
+        // double-tap seek can still cancel it (see PlayerTap in DownloadMath.swift).
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
         doubleTap.numberOfTapsRequired = 2
-        videoView.addGestureRecognizer(doubleTap)
+        doubleTap.cancelsTouchesInView = false
+        doubleTap.delegate = self
+        view.addGestureRecognizer(doubleTap)
         let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap))
-        singleTap.require(toFail: doubleTap)
-        videoView.addGestureRecognizer(singleTap)
+        singleTap.cancelsTouchesInView = false
+        singleTap.delegate = self
+        view.addGestureRecognizer(singleTap)
         controls.isUserInteractionEnabled = true
-        // Taps on empty control-layer space fall through to the video view's gestures.
-        let passTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap))
-        passTap.require(toFail: doubleTap)
-        controls.addGestureRecognizer(passTap)
-        let passDouble = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
-        passDouble.numberOfTapsRequired = 2
-        controls.addGestureRecognizer(passDouble)
-        passTap.require(toFail: passDouble)
+    }
+
+    /// Whether the controls are on screen (fully, not fading in or out).
+    private var controlsShown: Bool {
+        guard controls.alpha > 0.99 else { return false }
+        if let p = controls.layer.presentation() { return p.opacity > 0.99 }
+        return true
     }
 
     @objc private func handleSingleTap() {
-        // Hidden (or mid-fade): always bring the controls back.
-        let shown = controls.alpha > 0.99 && controls.layer.presentation().map { $0.opacity > 0.99 } ?? true
-        setControls(visible: !shown)
+        let action = PlayerTap.singleTap(controlsShown: controlsShown,
+                                         sinceShown: CACurrentMediaTime() - controlsShownAt,
+                                         hidePending: tapHideWork != nil)
+        switch action {
+        case .show:
+            setControls(visible: true)
+        case .keep:
+            scheduleHide() // still showing: restart the auto-hide clock
+        case .cancelPendingHide:
+            tapHideWork?.cancel(); tapHideWork = nil
+            scheduleHide()
+        case .hideAfterDoubleTapWindow:
+            hideWork?.cancel()
+            let w = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
+                self.tapHideWork = nil
+                self.setControls(visible: false)
+            }
+            tapHideWork = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + PlayerTap.doubleTapWindow, execute: w)
+        }
     }
 
     @objc private func handleDoubleTap(_ g: UITapGestureRecognizer) {
+        tapHideWork?.cancel(); tapHideWork = nil
         let x = g.location(in: view).x
         let forward = x > view.bounds.width / 2
         let now = player?.currentTime().seconds ?? 0
         seek(to: now + (forward ? 10 : -10))
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         ripple(at: g.location(in: view), text: forward ? "+10s" : "-10s")
-        scheduleHide()
+        if controlsShown { scheduleHide() }
     }
 
     private func ripple(at p: CGPoint, text: String) {
@@ -2355,7 +2395,9 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
     private func setControls(visible: Bool) {
         hideWork?.cancel()
+        tapHideWork?.cancel(); tapHideWork = nil
         if isClosing { return }
+        if visible && !controlsShown { controlsShownAt = CACurrentMediaTime() }
         updateSubtitlePlacement(controlsVisible: visible)
         UIView.animate(withDuration: 0.25) {
             self.controls.alpha = visible ? 1 : 0
@@ -2422,6 +2464,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     /// to the next time an episode is opened.
     private func resetSessionState() {
         hideWork?.cancel(); hideWork = nil
+        tapHideWork?.cancel(); tapHideWork = nil
         toastWork?.cancel(); toastWork = nil
         healthLabelWork?.cancel(); healthLabelWork = nil
         clearDubStallHint()
@@ -3556,3 +3599,27 @@ extension StreambertPlayerViewController {
     }
 }
 
+
+// MARK: - Tap-to-show filtering
+
+extension StreambertPlayerViewController: UIGestureRecognizerDelegate {
+    /// The root-view tap recognizers ignore touches that belong to something
+    /// interactive (buttons, sliders, segmented controls, the Up Next card, the
+    /// failure panel); every other touch, anywhere on screen, toggles controls.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        var v: UIView? = touch.view
+        while let cur = v, cur !== view {
+            if cur is UIControl { return false }
+            if cur === upNextCard && !upNextCard.isHidden { return false }
+            if cur === failureView && !failureView.isHidden { return false }
+            v = cur.superview
+        }
+        return true
+    }
+
+    /// Never block other recognizers (scroll views in the options row, menus).
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
+    }
+}

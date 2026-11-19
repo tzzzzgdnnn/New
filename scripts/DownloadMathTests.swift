@@ -194,4 +194,23 @@ check("final size: output equals the sum of its fragments") {
         && !DLMath.finalSizeMatches(outputBytes: -1, fragmentBytes: [])
 }
 
+check("player tap: hidden or fading controls always show") {
+    PlayerTap.singleTap(controlsShown: false, sinceShown: 100, hidePending: false) == .show
+        && PlayerTap.singleTap(controlsShown: false, sinceShown: 0, hidePending: false) == .show
+}
+
+check("player tap: a tap right after the controls appeared keeps them") {
+    PlayerTap.singleTap(controlsShown: true, sinceShown: 0.1, hidePending: false) == .keep
+        && PlayerTap.singleTap(controlsShown: true, sinceShown: 0.59, hidePending: false) == .keep
+}
+
+check("player tap: settled controls hide, after the double-tap window") {
+    PlayerTap.singleTap(controlsShown: true, sinceShown: 2, hidePending: false) == .hideAfterDoubleTapWindow
+}
+
+check("player tap: second tap of a double-tap cancels the pending hide") {
+    PlayerTap.singleTap(controlsShown: true, sinceShown: 2, hidePending: true) == .cancelPendingHide
+        && PlayerTap.singleTap(controlsShown: false, sinceShown: 2, hidePending: true) == .cancelPendingHide
+}
+
 print("\n\(passed) Swift download-math checks passed")
