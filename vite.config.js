@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { webPwaPlugin } from "./src/platform/web/vite-pwa.js";
 
 export default defineConfig(({ mode }) => {
   const isDist = process.env.ELECTRON_DIST === "1";
@@ -12,8 +13,11 @@ export default defineConfig(({ mode }) => {
       handler: (html) => html.replace("/src/main.jsx", "/src/main.ios.jsx"),
     },
   };
+  // Web/PWA build (`vite build --mode web`): its own entry, manifest, service
+  // worker and icons, all added by a web-only plugin. iOS/desktop unchanged.
+  const isWeb = mode === "web";
   return {
-    plugins: isIOS ? [react(), iosEntry] : [react()],
+    plugins: isIOS ? [react(), iosEntry] : isWeb ? [react(), webPwaPlugin()] : [react()],
     base: "./",
     build: {
       minify: "terser",
