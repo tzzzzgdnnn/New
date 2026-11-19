@@ -42,6 +42,9 @@ import {
 } from "./utils/discordPresence";
 
 import SetupScreen from "./components/SetupScreen";
+import KidsTitleGate from "./platform/ios/kids/KidsTitleGate";
+import { isKidsAllowedNow } from "./platform/ios/kids/kidsFilter";
+import { isKidsProfileActive } from "./utils/profileScope";
 
 // Build-time TMDB token (iOS CI injects VITE_TMDB_TOKEN from a repo secret).
 // Empty/missing -> the normal setup screen. A token saved in the Keychain
@@ -220,7 +223,12 @@ export default function App() {
       if (!apiKey || cancelled) return;
 
       const tvSeries = Object.values(saved).filter(
-        (item) => item && item.media_type === "tv" && item.id,
+        (item) =>
+          item &&
+          item.media_type === "tv" &&
+          item.id &&
+          // Kids: only shows already verified as kid-rated.
+          (!isKidsProfileActive() || isKidsAllowedNow(item, "tv")),
       );
       if (!tvSeries.length) return;
 
@@ -1271,6 +1279,7 @@ export default function App() {
               />
             )}
             {page === "movie" && selected && (
+              <KidsTitleGate item={selected} type="movie" apiKey={apiKey} onBack={navigateBackOrHome}>
               <MoviePage
                 item={selected}
                 apiKey={apiKey}
@@ -1292,8 +1301,10 @@ export default function App() {
                 onGoToDownloads={handleGoToDownloads}
                 onSelect={handleSelectResult}
               />
+              </KidsTitleGate>
             )}
             {page === "tv" && selected && (
+              <KidsTitleGate item={selected} type="tv" apiKey={apiKey} onBack={navigateBackOrHome}>
               <TVPage
                 item={selected}
                 apiKey={apiKey}
@@ -1315,6 +1326,7 @@ export default function App() {
                 onGoToDownloads={handleGoToDownloads}
                 onEpisodeChange={setWatchingEpisode}
               />
+              </KidsTitleGate>
             )}
             {page === "history" && (
               <LibraryPage

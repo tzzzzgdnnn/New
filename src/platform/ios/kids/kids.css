@@ -1,0 +1,6 @@
+/* Kids profile: blocked-title screen (theme lives under [data-profile="kids"]). */
+.kids-blocked { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 60vh; padding: 32px 24px; text-align: center; }
+.kids-blocked-emoji { font-size: 64px; line-height: 1; }
+.kids-blocked-title { font-size: 22px; font-weight: 700; color: var(--text); }
+.kids-blocked-sub { font-size: 15px; color: var(--text2, #aaa); }
+.kids-blocked-btn { margin-top: 12px; min-height: 44px; padding: 0 22px; border: 0; border-radius: 22px; background: #1e90ff; color: #fff; font-size: 16px; font-weight: 700; }
