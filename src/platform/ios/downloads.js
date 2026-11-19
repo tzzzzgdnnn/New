@@ -77,14 +77,32 @@ export async function probeDownload({ season = null, episode = null, ctx = null,
   const context = ctx || downloadContext(override);
   const [ranked, movy] = await Promise.all([
     downloadCandidates(context, { exclude }),
-    context?.isAnime ? [] : directCandidates(context).catch(() => []),
+    // Downloads wait up to 15 s for the direct streams (they carry every resolution).
+    context?.isAnime ? [] : directCandidates(context, { waitMs: 15000 }).catch(() => []),
   ]);
   // Direct streams (Movy, Cinejoy) first (no page to sniff), unless it already failed.
   const candidates = [...movy.filter((c) => !exclude.includes(c.id)), ...ranked];
   if (!candidates.length) return { ok: false, error: "No server returned a downloadable stream" };
   const at = Date.now();
-  const res = await call("probe", { candidates });
+  let res = await call("probe", { candidates });
   recordLookup(res, candidates, Date.now() - at, streamHeight(res));
+  // Only one resolution? Keep looking (up to 15 s more) for a server that
+  // offers more of them, and keep whichever has the most.
+  const tiers = (r) => (r?.ok ? qualityOptions(r).length : 0);
+  const skipped = [];
+  const until = Date.now() + 15000;
+  while (res?.ok && tiers(res) <= 1 && Date.now() < until) {
+    skipped.push(res.server);
+    const rest = candidates.filter((c) => !skipped.includes(c.id));
+    if (!rest.length) break;
+    const more = await Promise.race([
+      call("probe", { candidates: rest }).catch(() => null),
+      new Promise((r) => setTimeout(() => r(null), Math.max(0, until - Date.now()))),
+    ]);
+    if (!more?.ok) break;
+    if (tiers(more) > tiers(res)) res = more;
+    else skipped.push(more.server);
+  }
   if (!res?.ok) {
     diag("download", "probe failed:", res?.error || "unknown");
     return res || { ok: false, error: "Download lookup failed" };
