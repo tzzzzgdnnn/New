@@ -3,6 +3,7 @@
 // the probe/measure/start functions of its downloader (iOS: native bridge).
 import { useEffect, useMemo, useState } from "react";
 import { defaultSubtitleChoice, optionSizeText } from "../../utils/downloadMath";
+import { createPortal } from "react-dom";
 import "./downloads-phone.css";
 
 const NO_SUBS = { include: false, urls: [] };
@@ -69,7 +70,7 @@ export default function QualitySheet({
     onClose?.();
   };
 
-  return (
+  return createPortal(
     <div className="pd-sheet-backdrop" onClick={onClose}>
       <div className="pd-sheet" role="dialog" aria-modal="true" aria-label="Download" onClick={(e) => e.stopPropagation()}>
         <div className="pd-sheet__grabber" aria-hidden="true" />
@@ -140,6 +141,7 @@ export default function QualitySheet({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

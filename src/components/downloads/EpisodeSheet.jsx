@@ -11,6 +11,7 @@ import {
   episodeChoices,
   formatBytes,
 } from "../../utils/downloadMath";
+import { createPortal } from "react-dom";
 import "./downloads-phone.css";
 
 const keyOf = (e) => `${e.season}:${e.episode}`;
@@ -164,7 +165,7 @@ export default function EpisodeSheet({
           ? "size unknown"
           : "estimating size…";
 
-  return (
+  return createPortal(
     <div className="pd-sheet-backdrop" onClick={onClose}>
       <div className="pd-sheet" role="dialog" aria-modal="true" aria-label="Download episodes" onClick={(e) => e.stopPropagation()}>
         <div className="pd-sheet__grabber" aria-hidden="true" />
@@ -324,6 +325,7 @@ export default function EpisodeSheet({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
