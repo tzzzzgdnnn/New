@@ -45,6 +45,7 @@ const DownloadCard = memo(function DownloadCard({ d, title, inShow, highlighted,
         <div className="pd-card__meta">
           <span className={`pd-card__state pd-card__state--${d.status}`}>{d.statusLabel}</span>
           {!inShow && episodeTag(d) && <span>{episodeTag(d)}</span>}
+          {d.audio && <span className={`pd-chip pd-chip--${d.audio.toLowerCase()}`} aria-label={`${d.audio} audio`}>{d.audio}</span>}
           {d.size && <span>{d.size}</span>}
           {d.fragments && <span>{d.fragments}</span>}
         </div>

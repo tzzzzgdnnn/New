@@ -19,7 +19,7 @@ export default function DownloadPicker({
 }) {
   const { isAnime, dub } = currentAudioMode();
   const start = async ({ probe, option, subtitles }) => {
-    const args = { name: mediaName, mediaId, mediaType, season, episode, posterPath, tmdbId, probe, option, subtitles };
+    const args = { audio: isAnime ? (dub ? "Dub" : "Sub") : undefined, name: mediaName, mediaId, mediaType, season, episode, posterPath, tmdbId, probe, option, subtitles };
     const res = await window.electron.runDownload(args);
     // The native job as the downloader reports it (live events keep it current).
     if (res?.ok && res.record) onDownloadStarted?.(res.record);
@@ -27,7 +27,7 @@ export default function DownloadPicker({
   };
   return (
     <QualitySheet
-      title={mediaName}
+      title={isAnime ? `${mediaName} · ${dub ? "Dub" : "Sub"}` : mediaName}
       probe={() => probeDownload({ season, episode })}
       measure={measureOptions}
       start={start}

@@ -376,6 +376,9 @@ export function downloadMeta(args = {}, ctx = {}) {
     tmdbId: args.tmdbId || args.mediaId || null,
     quality: args.option?.name || args.option?.label || null,
   };
+  // Anime: which audio this copy has, so Dub and Sub are told apart.
+  if (args.audio === "Dub" || args.audio === "Sub") meta.audio = args.audio;
+  else if (ctx.isAnime) meta.audio = ctx.dubMode === "dub" ? "Dub" : "Sub";
   if (meta.mediaType === "tv") {
     const { season, episode } = episodeNumbers({ ...meta, name: args.name });
     meta.season = season;

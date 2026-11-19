@@ -43,7 +43,7 @@ export default function EpisodePicker({
   };
   return (
     <EpisodeSheet
-      showName={show.name}
+      showName={isAnime ? `${show.name} · ${dub ? "Dub" : "Sub"}` : show.name}
       showKey={showKeyOf({ mediaType: "tv", tmdbId: show.tmdbId, name: show.name })}
       seasons={seasons}
       initialSeason={initialSeason}
