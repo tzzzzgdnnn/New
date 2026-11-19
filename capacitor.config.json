@@ -9,7 +9,7 @@
     "backgroundColor": "#0A0A0A",
     "allowsLinkPreview": false,
     "scrollEnabled": true,
-    "webContentsDebuggingEnabled": true
+    "webContentsDebuggingEnabled": false
   },
   "server": {
     "iosScheme": "capacitor",
