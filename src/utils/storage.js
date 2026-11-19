@@ -9,10 +9,18 @@ let _lastStorageEvent = 0;
 // The log names ordinary settings keys, but never the keys that hold
 // credentials (API keys, tokens, PINs): those show as "a secure key".
 const SENSITIVE_KEY = /key|token|secret|pass|pin|auth/i;
+// Only names from a fixed list of plain settings keys are ever logged. The
+// label is read from that list, never copied from the caller, so nothing a
+// caller passes in (such as a credential key) can reach the log.
+let _loggable = null;
 function logLabel(key) {
-  const name = String(key ?? "");
-  if (SENSITIVE_KEY.test(name)) return "a secure key";
-  return name.replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 64);
+  try {
+    _loggable ||= Object.values(STORAGE_KEYS).filter((k) => typeof k === "string" && !SENSITIVE_KEY.test(k));
+    const i = _loggable.indexOf(String(key ?? ""));
+    return i >= 0 ? _loggable[i] : "a secure or unlisted key";
+  } catch {
+    return "a key";
+  }
 }
 function reportStorageProblem(kind, key, err) {
   try {
@@ -160,6 +168,8 @@ export const STORAGE_KEYS = {
   PLAYER_QUALITY: "playerQuality",
   PLAYER_SUBS_ON: "playerSubsOn",
   PLAYER_SUB_SCALE: "playerSubScale",
+  // iOS: false once the viewer picked a server by hand (Auto otherwise)
+  SERVER_AUTO_PICK: "serverAutoPick",
 };
 
 // ── Profiles ──────────────────────────────────────────────────────────────────
@@ -187,6 +197,10 @@ export const PROFILE_SCOPED_KEYS = new Set([
   STORAGE_KEYS.PLAYER_QUALITY,
   STORAGE_KEYS.PLAYER_SUBS_ON,
   STORAGE_KEYS.PLAYER_SUB_SCALE,
+  // Server choice (Auto, or the server picked by hand) is per person.
+  STORAGE_KEYS.PLAYER_SOURCE,
+  STORAGE_KEYS.SERVER_AUTO_PICK,
+  "serverPin",
   "searchHistory",
 ]);
 
@@ -202,7 +216,7 @@ export const PROFILE_SCOPED_PREFIXES = ["dlTime_", "sbDur_", "sbLastEp_"];
  * under their global name (platform/ios/webview.js). Writes also refresh that
  * global copy, which always mirrors the active profile.
  */
-export const NATIVE_MIRRORED_KEYS = new Set([STORAGE_KEYS.SUBTITLE_LANG]);
+export const NATIVE_MIRRORED_KEYS = new Set([STORAGE_KEYS.SUBTITLE_LANG, STORAGE_KEYS.PLAYER_SOURCE]);
 
 /** Whether a logical key holds per-person data. */
 export const isProfileScoped = (key) =>

@@ -8,8 +8,9 @@ import { isRestricted } from "../utils/ageRating";
 import { storage } from "../utils/storage";
 import { loadHomeLayout, loadHomeViewMode } from "../utils/homeLayout";
 import { IS_IOS } from "../platform/target";
-import HomeSections, { Billboard, PosterRail, RankRail, WideRail } from "../platform/ios/HomeSections";
+import HomeSections, { Billboard, PosterRail, WideRail } from "../platform/ios/HomeSections";
 import { HomeSkeleton } from "../platform/ios/Skeletons";
+import { useKidsFilter } from "../platform/ios/kids/useKidsFilter";
 
 /**
  * Extract up to `count` unique, recently watched items from the user's
@@ -36,12 +37,12 @@ function getRecentHistoryItems(history, count = 5) {
 }
 
 export default function HomePage({
-  trending,
-  trendingTV,
+  trending: trendingAll,
+  trendingTV: trendingTVAll,
   loading,
   onSelect,
   progress,
-  inProgress,
+  inProgress: inProgressAll,
   offline,
   onRetry,
   watched,
@@ -52,6 +53,10 @@ export default function HomePage({
   isSaved,
   onToggleSave,
 }) {
+  // Kids: every list on Home only holds verified kid-rated titles.
+  const trending = useKidsFilter(trendingAll, apiKey, "movie");
+  const trendingTV = useKidsFilter(trendingTVAll, apiKey, "tv");
+  const inProgress = useKidsFilter(inProgressAll, apiKey);
   const hero = trending[0];
 
   const [recommendedItems, setRecommendedItems] = useState([]);
@@ -308,10 +313,8 @@ export default function HomePage({
           const rail = { onSelect, watched, onMarkWatched, onMarkUnwatched, ratingsMap: enrichedRatingsMap };
           if (id === "continue")
             return <WideRail key={id} title="Continue Watching" items={inProgress} progress={progress} onSelect={onSelect} />;
-          if (id === "trendingMovies")
-            return <RankRail key={id} title="Top 10 Movies Today" items={trendingMovieItems} onSelect={onSelect} watched={watched} />;
-          if (id === "trendingTV")
-            return <RankRail key={id} title="Top 10 Series Today" items={trendingTVItems} onSelect={onSelect} watched={watched} />;
+          // No "Top 10 Today" rails on the phone: trending already leads in
+          // the Billboard (IOS_HIDDEN_HOME_ROWS), so those rows render nothing.
           if (id === "recommended")
             return <PosterRail key={id} title="Recommended for You" items={filteredRecommendedItems} {...rail} />;
           if (id === "topRated")

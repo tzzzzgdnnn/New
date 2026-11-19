@@ -5,11 +5,12 @@ import { EyeIcon, WatchedIcon } from "../components/Icons";
 import { useRatings, getRatingForItem } from "../utils/useRatings";
 import { isRestricted } from "../utils/ageRating";
 import { storage, STORAGE_KEYS } from "../utils/storage";
+import { useKidsFilter } from "../platform/ios/kids/useKidsFilter";
 
 export default function LibraryPage({
-  history,
-  inProgress,
-  saved,
+  history: historyAll,
+  inProgress: inProgressAll,
+  saved: savedAll,
   progress,
   onSelect,
   watched,
@@ -17,6 +18,11 @@ export default function LibraryPage({
   onMarkUnwatched,
   onRemoveHistory,
 }) {
+  // Kids: history, Continue Watching and the watchlist only show verified
+  // kid-rated titles (a profile switched to Kids keeps its older entries).
+  const history = useKidsFilter(historyAll);
+  const inProgress = useKidsFilter(inProgressAll);
+  const saved = useKidsFilter(savedAll);
   const allItems = useMemo(
     () => [...inProgress, ...saved],
     [inProgress, saved],

@@ -6,7 +6,7 @@ import { IS_IOS } from "../target";
 import { storage, STORAGE_KEYS } from "../../utils/storage";
 import { PLAYER_SOURCES, sourcesForContent } from "../../utils/api";
 import { parseServerKey } from "../../utils/servers/catalog";
-import { setAutoPick } from "./autoServer";
+import { setServerChoice, ANIPM_CHOICE } from "./autoServer";
 
 export const normalizeDubMode = (mode) => (mode === "dub" ? "dub" : "sub");
 
@@ -29,7 +29,13 @@ export function setAnimeDubMode(mode) {
 
 /** Publish the playing title for the native player (read by webview.js). */
 export function publishPlayerContext(ctx) {
-  if (IS_IOS) window.__sbCtx = ctx;
+  if (!IS_IOS) return;
+  window.__sbCtx = ctx;
+  // Anime: look the episode up on ani.pm now, so Play starts on it at once.
+  // (Dynamic import: keeps ani.pm and the native HTTP client out of desktop.)
+  if (ctx?.isAnime && ctx.anilistId) import("./anipm").then((m) => m.prefetchAnipm(ctx)).catch(() => {});
+  // Measure the title's servers now (player Auto ranking), not on Play.
+  import("./webview").then((m) => m.prefetchTitle(ctx)).catch(() => {});
 }
 
 /**
@@ -48,8 +54,14 @@ export function useNativeServerSelect(handler) {
       const raw = typeof e?.detail === "string" ? e.detail : null;
       if (!raw) return;
       const { sourceId, mode } = parseServerKey(raw);
+      if (sourceId === ANIPM_CHOICE) {
+        // ani.pm is not a page source: pin it, keep the page's own server.
+        setServerChoice(ANIPM_CHOICE);
+        ref.current?.({ sourceId: null, dubMode: mode });
+        return;
+      }
       if (!PLAYER_SOURCES.some((s) => s.id === sourceId)) return;
-      setAutoPick(false);
+      setServerChoice(sourceId);
       ref.current?.({ sourceId, dubMode: mode });
     };
     window.addEventListener("sb-select-server", onSelect);
@@ -78,4 +90,22 @@ export function useAnimeServerGuard({ isAnime, playerSource, dubMode, setPlayerS
       setPlayerSource((animeRoute || usable[0]).id);
     }
   }, [isAnime, playerSource, dubMode, setPlayerSource]);
+}
+
+/**
+ * Apply a pick from the server sheet: "auto", "anipm" or a page source id.
+ * A page source becomes the page's server (its URL changes, which restarts
+ * the native player when playing); Auto / ani.pm / the same server keep the
+ * URL, so a play in progress is restarted here.
+ */
+export function applyServerChoice(choice, { playerSource, setPlayerSource, reset, playing }) {
+  const saved = setServerChoice(choice);
+  const isSource = PLAYER_SOURCES.some((s) => s.id === saved);
+  if (isSource && saved !== playerSource) {
+    setPlayerSource(saved);
+    reset?.();
+    return saved;
+  }
+  if (playing) window.dispatchEvent(new CustomEvent("sb-replay"));
+  return saved;
 }
