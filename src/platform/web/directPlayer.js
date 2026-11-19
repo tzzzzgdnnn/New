@@ -1,6 +1,11 @@
-// Web app: plays Cinejoy's stream straight in a <video> with hls.js (no embed
-// page, so no ads and a much faster start). Some hosts wrap TS segments in a
-// fake image header; the loader cuts to the TS sync byte.
+// Web app: plays a direct HLS stream (Cinejoy, ani.pm) straight in a <video>
+// with hls.js (no embed page, so no ads and a much faster start). Some hosts
+// wrap TS segments in a fake image header; the loader cuts to the TS sync byte.
+//
+// Instant start: while a title page is open, prewarmDirect() loads the stream
+// into a hidden player (playlist + first seconds of video). Play then just
+// moves that player on screen and calls play() inside the tap, so iPhone and
+// Android start at once, with no playlist or first-segment wait.
 import Hls from "hls.js";
 
 function unwrap(buf) {
@@ -26,93 +31,193 @@ class UnwrapLoader extends Hls.DefaultConfig.loader {
   }
 }
 
-/**
- * Play `src` inside `box`. Calls onFail() if nothing plays within `timeoutMs`
- * or on a fatal error. Returns a stop() function.
- */
-export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 12000, nativeOnly = false } = {}) {
+const HLS_BASE = {
+  loader: UnwrapLoader,
+  enableWorker: true,
+  // Lowest rung first: the picture shows in a fraction of a second, then ABR
+  // climbs to the best quality the connection allows.
+  startLevel: 0,
+  testBandwidth: false,
+  capLevelToPlayerSize: true,
+  backBufferLength: 30,
+  startFragPrefetch: true,
+  fragLoadingMaxRetry: 4,
+  manifestLoadingMaxRetry: 2,
+};
+const PLAY_BUFFER_S = 30;
+const WARM_BUFFER_S = 8; // buffered ahead while waiting for Play (light on data)
+const WARM_MAX_AGE_MS = 10 * 60_000; // stream tokens expire; rewarm after this
+
+const isIPhoneUA = () => /iPhone|iPod/.test(navigator.userAgent);
+
+function makeVideo() {
   const video = document.createElement("video");
   video.className = "sb-direct-video";
   video.controls = true;
   // iPhone: no playsinline, so play() opens Apple's own full-screen player.
-  const isIPhone = /iPhone|iPod/.test(navigator.userAgent);
-  const nativeHls = !!video.canPlayType("application/vnd.apple.mpegurl");
+  const isIPhone = isIPhoneUA();
   video.playsInline = !isIPhone;
   if (!isIPhone) video.setAttribute("playsinline", "");
-  // iPhone: Apple's full-screen player only opens from a tap, so we wait for one.
-  video.autoplay = true;
   video.preload = "auto";
   // Required for ManagedMediaSource (hls.js on iPhone, iOS 17.1+).
   video.disableRemotePlayback = true;
+  return video;
+}
+
+// hls.js wherever it runs, unless the caller asks for Safari's own HLS and the
+// browser has it. Android and desktop Chrome have no reliable native HLS, so
+// `nativeOnly` falls back to hls.js there instead of failing.
+const useHlsJs = (video, nativeOnly) =>
+  Hls.isSupported() && (!nativeOnly || !video.canPlayType("application/vnd.apple.mpegurl"));
+
+// ── Warm-up pool (one stream at a time) ───────────────────────────────────
+let warm = null; // { src, video, hls, onErr, at, dead, nativeOnly }
+let warmHost = null;
+function host() {
+  if (warmHost?.isConnected) return warmHost;
+  warmHost = document.createElement("div");
+  warmHost.setAttribute("aria-hidden", "true");
+  // Kept "visible" (tiny, transparent) so iPhone's ManagedMediaSource streams.
+  warmHost.style.cssText =
+    "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none;overflow:hidden;z-index:-1";
+  document.body.appendChild(warmHost);
+  return warmHost;
+}
+
+function dropWarm() {
+  if (!warm) return;
+  const w = warm;
+  warm = null;
+  try { w.hls?.destroy(); } catch {}
+  try {
+    w.video.pause();
+    w.video.removeAttribute("src");
+    w.video.load();
+  } catch {}
+  w.video.remove();
+}
+
+/** Load `src` into a hidden player now, so playDirect(src) starts at once. */
+export function prewarmDirect(src, { startAt = 0, nativeOnly = false } = {}) {
+  if (!src || typeof document === "undefined" || !document.body) return;
+  if (warm && warm.src === src && !warm.dead && Date.now() - warm.at < WARM_MAX_AGE_MS) return;
+  dropWarm();
+  const video = makeVideo();
+  video.muted = true; // silent while hidden; unmuted when it goes on screen
+  host().appendChild(video);
+  const w = { src, video, hls: null, at: Date.now(), dead: false, nativeOnly };
+  if (useHlsJs(video, nativeOnly)) {
+    const hls = new Hls({
+      ...HLS_BASE,
+      maxBufferLength: WARM_BUFFER_S,
+      maxMaxBufferLength: WARM_BUFFER_S,
+      startPosition: startAt > 0 ? startAt : -1,
+    });
+    w.onErr = (_, d) => d.fatal && (w.dead = true);
+    hls.on(Hls.Events.ERROR, w.onErr);
+    hls.loadSource(src);
+    hls.attachMedia(video);
+    w.hls = hls;
+  } else {
+    video.addEventListener("error", () => (w.dead = true));
+    if (startAt > 0) video.addEventListener("loadedmetadata", () => (video.currentTime = startAt), { once: true });
+    video.src = src;
+    video.load();
+  }
+  warm = w;
+}
+
+/** Forget the warmed-up player (leaving a title page). */
+export const cancelPrewarm = () => dropWarm();
+
+function takeWarm(src, nativeOnly) {
+  const w = warm;
+  if (!w || w.src !== src) return null;
+  if (w.dead || w.nativeOnly !== nativeOnly || Date.now() - w.at > WARM_MAX_AGE_MS) {
+    dropWarm();
+    return null;
+  }
+  warm = null;
+  w.video.muted = false;
+  if (w.hls) {
+    w.hls.config.maxBufferLength = PLAY_BUFFER_S;
+    w.hls.config.maxMaxBufferLength = 600;
+  }
+  return w;
+}
+
+/**
+ * Put `el` full screen and turn the phone sideways (Android, desktop; iPhone
+ * only full-screens a <video>, handled in playDirect). Call inside a tap.
+ */
+export function forceFullscreen(el) {
+  try {
+    if (document.fullscreenElement || document.webkitFullscreenElement) return;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    const p = req?.call(el, { navigationUI: "hide" });
+    Promise.resolve(p)
+      .then(() => screen.orientation?.lock?.("landscape"))
+      .catch(() => {});
+  } catch {}
+}
+
+/**
+ * Play `src` inside `box`. Calls onFail() if nothing plays within `timeoutMs`
+ * or on a fatal error. onTime(position, duration) reports progress every few
+ * seconds, on pause, at the end and on stop. Returns a stop() function.
+ */
+export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 12000, nativeOnly = false } = {}) {
+  const w = takeWarm(src, nativeOnly);
+  const video = w ? w.video : makeVideo();
+  const isIPhone = isIPhoneUA();
+  video.autoplay = true;
   try { video.playbackRate = Number(localStorage.getItem("sbWebRate")) || 1; } catch {}
   video.style.cssText = "position:absolute;inset:0;width:100%;height:100%;background:#000;object-fit:contain;z-index:3";
+  // Moving a warmed-up player keeps its buffer and its MediaSource.
   box.appendChild(video);
   let done = false;
-  let hls = null;
+  let hls = w?.hls || null;
   const fail = (why) => {
     if (done) return;
     stop();
     onFail?.(why);
   };
   const timer = setTimeout(() => !(video.currentTime > 0) && fail("timeout"), timeoutMs);
-  const startHls = () => {
-    hls = new Hls({
-      loader: UnwrapLoader,
-      enableWorker: true,
-      startLevel: -1,
-      capLevelToPlayerSize: true,
-      maxBufferLength: 30,
-      backBufferLength: 30,
-      startFragPrefetch: true,
-      fragLoadingMaxRetry: 4,
-    });
+  const seekIfOff = () => {
+    if (startAt > 0 && video.readyState >= 1 && Math.abs(video.currentTime - startAt) > 5) video.currentTime = startAt;
+  };
+  if (w && hls) {
+    hls.off(Hls.Events.ERROR, w.onErr);
+    hls.on(Hls.Events.ERROR, (_, d) => d.fatal && fail(d.details));
+    seekIfOff();
+  } else if (w) {
+    video.addEventListener("error", () => fail("video error"));
+    seekIfOff();
+  } else if (useHlsJs(video, nativeOnly)) {
+    // hls.js first wherever it runs (iPhone too, via ManagedMediaSource): Cinejoy's
+    // segments are TS wrapped in a fake PNG header that Safari's own HLS can't play.
+    hls = new Hls({ ...HLS_BASE, maxBufferLength: PLAY_BUFFER_S, startPosition: startAt > 0 ? startAt : -1 });
     hls.on(Hls.Events.ERROR, (_, d) => d.fatal && fail(d.details));
     hls.loadSource(src);
     hls.attachMedia(video);
-    video.play().catch(() => {});
-  };
-  // hls.js first wherever it runs (iPhone too, via ManagedMediaSource): Cinejoy's
-  // segments are TS wrapped in a fake PNG header that Safari's own HLS can't play.
-  if (Hls.isSupported() && !nativeOnly) {
-    startHls();
-  } else if (nativeHls) {
-    // Safari's own HLS (Apple's player, like the app): fastest start. If it
-    // can't read this host's segments, hls.js takes over.
-    video.src = src;
-    video.addEventListener("error", () => {
-      if (done || hls) return;
-      fail("video error");
-    });
   } else {
+    // Safari's own HLS (Apple's player, like the app).
     video.src = src;
     video.addEventListener("error", () => fail("video error"));
+    if (startAt > 0) video.addEventListener("loadedmetadata", () => (video.currentTime = startAt), { once: true });
   }
-  if (startAt > 0) video.addEventListener("loadedmetadata", () => (video.currentTime = startAt), { once: true });
-  // iPhone: open Apple's own full-screen player as soon as the stream plays.
+  // iPhone: Apple's full-screen player (works in the tap once the player has
+  // its first frames, which a warmed-up player already does).
   const goFull = () => {
     try {
-      if (isIPhone && video.webkitEnterFullscreen) video.webkitEnterFullscreen();
-      else (video.requestFullscreen || video.webkitRequestFullscreen)?.call(video)?.catch?.(() => {});
+      if (isIPhone && video.webkitEnterFullscreen) return video.webkitEnterFullscreen();
+      forceFullscreen(box);
     } catch {}
   };
-  // play() right now, inside the Play tap when the stream was already known,
-  // so iPhone opens its own full-screen player; else on canplay; if the
-  // browser still blocks it, one tap on the button.
-  // Inside the Play tap (stream already known): start now; iPhone also opens
-  // Apple's full-screen player in the same tap. Android/desktop unchanged.
-  const tapPlay = video.play();
-  if (isIPhone) goFull();
-  video.addEventListener("canplay", () => {
-    if (!video.paused) return;
-    video.play().then(() => goFull()).catch(() => {
-      // Autoplay blocked: one tap starts it, full screen.
-      fullBtn.textContent = "▶  Play";
-      fullBtn.style.display = "";
-    });
-  }, { once: true });
   const fullBtn = document.createElement("button");
   fullBtn.textContent = "⛶  Full screen";
-  fullBtn.style.cssText = "position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;padding:12px 22px;border-radius:24px;border:0;background:rgba(229,9,20,.92);color:#fff;font-size:16px;font-weight:600;display:none";
+  fullBtn.style.cssText =
+    "position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;padding:12px 22px;border-radius:24px;border:0;background:rgba(229,9,20,.92);color:#fff;font-size:16px;font-weight:600;display:none";
   fullBtn.onclick = () => {
     fullBtn.style.display = "none";
     // Inside the tap: play, then Apple's player (iPhone needs both in the gesture).
@@ -120,6 +225,20 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     goFull();
     p?.catch?.(() => { fullBtn.textContent = "▶  Play"; fullBtn.style.display = ""; });
   };
+  box.appendChild(fullBtn);
+  // play() right now, inside the Play tap; iPhone also opens Apple's
+  // full-screen player in the same tap.
+  const tapPlay = video.play();
+  goFull(); // every phone: straight into the full-screen player
+
+  video.addEventListener("canplay", () => {
+    if (!video.paused || done) return;
+    video.play().then(() => goFull()).catch(() => {
+      // Autoplay blocked: one tap starts it, full screen.
+      fullBtn.textContent = "▶  Play";
+      fullBtn.style.display = "";
+    });
+  }, { once: true });
   // Only if the browser refused to start without a fresh tap: one big Play button.
   tapPlay?.catch?.(() => {
     if (done || !video.paused) return;
@@ -128,9 +247,8 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     fullBtn.style.display = "";
     clearTimeout(timer);
   });
-  box.appendChild(fullBtn);
-  // iPhone: if it started inline (no tap left to use), try Apple's full-screen
-  // player at once, and keep a big Full screen button up until it's on.
+  // iPhone: if it started inline (no tap left to use), keep a Full screen
+  // button up until Apple's player is on.
   video.addEventListener("playing", () => {
     if (!isIPhone || video.webkitDisplayingFullscreen) return;
     setTimeout(() => {
@@ -153,8 +271,20 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     lastTap = now;
   });
   video.addEventListener("ratechange", () => { try { localStorage.setItem("sbWebRate", String(video.playbackRate)); } catch {} });
-  video.addEventListener("timeupdate", () => onTime?.(video.currentTime, video.duration));
+  // Progress: throttled, plus pause / end / stop, so Resume works on the web.
+  let lastReport = 0;
+  const report = (force) => {
+    const now = Date.now();
+    if (!force && now - lastReport < 5000) return;
+    lastReport = now;
+    if (video.currentTime > 0) onTime?.(video.currentTime, video.duration);
+  };
+  video.addEventListener("timeupdate", () => report(false));
+  video.addEventListener("pause", () => report(true));
+  video.addEventListener("ended", () => report(true));
   function stop() {
+    if (done) return;
+    report(true);
     done = true;
     clearTimeout(timer);
     try { hls?.destroy(); } catch {}

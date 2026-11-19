@@ -60,13 +60,13 @@ window.electron = {
 
   openExternal: (url) => {
     try {
-      window.open(String(url), "_blank");
+      (window.__sbOpen || window.open)(String(url), "_blank");
     } catch {}
     return Promise.resolve();
   },
   openStreamExternal: ({ url } = {}) => {
     if (!/^https?:/i.test(url || "")) return Promise.resolve({ ok: false, error: "Invalid stream URL" });
-    window.open("vlc-x-callback://x-callback-url/stream?url=" + encodeURIComponent(url), "_blank");
+    (window.__sbOpen || window.open)("vlc-x-callback://x-callback-url/stream?url=" + encodeURIComponent(url), "_blank");
     return Promise.resolve({ ok: true });
   },
 

@@ -29,6 +29,19 @@ if (import.meta.env.VITE_WEB) {
     }
   } catch {}
   import("./platform/web/web.css");
+  // Pop-up ads: no script on the page may open a new tab or window.
+  try {
+    window.__sbOpen = window.open.bind(window); // the app's own links (Settings, help)
+    window.open = () => null;
+  } catch {}
+  document.addEventListener(
+    "click",
+    (e) => {
+      const a = e.target?.closest?.("a[target=_blank]");
+      if (a && !a.dataset.sbAllow) e.preventDefault();
+    },
+    true,
+  );
 }
 const webReady = import.meta.env.VITE_WEB
   ? import("./platform/web/offlineDownloads").then((m) => m.installWebDownloads()).catch(() => {})
