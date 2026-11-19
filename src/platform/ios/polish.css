@@ -205,6 +205,15 @@ html.sb-ios .sb-tape.sp-img-ready > img { animation: spImgIn .35s ease both; }
 .sp-skel-thumb-poster { flex: none; width: 44px; aspect-ratio: 2 / 3; border-radius: 6px; }
 .sp-skel-text { flex: 1; min-width: 0; }
 .sp-skel-text > .sp-skel-line:first-child { margin-top: 0; }
+/* Search: placeholder cards in the shape of a .search-result row. */
+.sp-search-skel { display: flex; flex-direction: column; }
+.sp-search-skel-card { pointer-events: none; }
+.sp-search-skel-poster { flex: none; width: 40px; height: 58px; border-radius: 5px; }
+.sp-search-skel-title { width: 70%; height: 14px; }
+.sp-search-skel-meta { width: 34%; height: 10px; }
+.sp-search-skel-badge { flex: none; width: 52px; height: 18px; border-radius: 3px; }
+.sp-search-skel-card:nth-child(3n+2) .sp-search-skel-title { width: 52%; }
+.sp-search-skel-card:nth-child(3n) .sp-search-skel-title { width: 82%; }
 
 /* ── Motion: pages and modals ───────────────────────────────────────────── */
 html.sb-ios .main > div { animation: spPageIn var(--dur-page) var(--ease-out) both; }

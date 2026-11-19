@@ -5,6 +5,7 @@ import { diag } from "../utils/diag";
 import { SearchIcon, CloseIcon } from "./Icons";
 import { storage } from "../utils/storage";
 import { useKidsFilter } from "../platform/ios/kids/useKidsFilter";
+import { SearchSkeleton } from "../platform/ios/Skeletons";
 
 const HISTORY_KEY = "searchHistory";
 const MAX_HISTORY = 12;
@@ -239,11 +240,14 @@ export default function SearchModal({ apiKey, onSelect, onClose, offline }) {
             </div>
           )}
 
-          {!offline && loading && (
+          {!offline && loading && (IS_IOS ? (
+            // iOS: placeholder cards in the results' shape instead of a spinner.
+            <SearchSkeleton />
+          ) : (
             <div className="loader">
               <div className="spinner" />
             </div>
-          )}
+          ))}
 
           {!offline && !loading && error && query.trim() && (
             <div className="search-empty search-error" role="alert">

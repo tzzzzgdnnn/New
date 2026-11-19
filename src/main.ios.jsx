@@ -5,6 +5,8 @@ import ReactDOM from "react-dom/client";
 import "./styles/global.css";
 import { bootIOS } from "./platform/ios/index.js";
 import "./platform/ios/polish.css";
+// Last: phone sizing pass (titles, gutters, landscape).
+import "./platform/ios/screen-fit.css";
 import { showLaunchSplash } from "./platform/ios/splash";
 import { installImageReadyMarker } from "./platform/ios/imageReady";
 
