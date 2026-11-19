@@ -6,6 +6,22 @@ import { downloadCandidates, downloadContext, currentAudioMode, directCandidates
 import { recordLookup } from "./autoServer";
 import { getResumeSeconds, progressKeyFor } from "./resume";
 import { diag } from "../../utils/diag";
+import { cinejoyCandidates } from "./cinejoy";
+import { prefetchAnipm } from "./anipm";
+
+// Web app: the browser can only save streams handed over directly (Cinejoy,
+// ani.pm), never embed pages, and a fresh lookup can take a while, so
+// it waits for them instead of giving up after 2.5 s.
+async function webCandidates(ctx) {
+  if (!ctx) return [];
+  if (ctx.isAnime) {
+    const want = ctx.dubMode === "dub" ? "dub" : "sub";
+    const r = await Promise.race([prefetchAnipm(ctx).catch(() => null), new Promise((res) => setTimeout(() => res(null), 15000))]);
+    return r?.ok && r.lang === want ? [{ id: "anipm", label: "ani.pm", url: `${r.source}#sb-direct` }] : [];
+  }
+  // (Movy doesn't answer browsers, so the web uses Cinejoy.)
+  return cinejoyCandidates(ctx, { waitMs: 15000 }).catch(() => []);
+}
 import {
   applyMeasurements,
   dedupeSubtitleTracks,
@@ -75,6 +91,19 @@ export async function probeDownload({ season = null, episode = null, ctx = null,
   const override =
     season != null && episode != null ? { season, episode, tmdbSeason: season, tmdbEpisode: episode } : {};
   const context = ctx || downloadContext(override);
+  if (import.meta.env.VITE_WEB) {
+    const candidates = (await webCandidates(context)).filter((c) => !exclude.includes(c.id));
+    if (!candidates.length) return { ok: false, error: "No stream for this title right now. Try again in a minute." };
+    const res = await call("probe", { candidates });
+    if (!res?.ok) return res || { ok: false, error: "Download lookup failed" };
+    return {
+      ...res,
+      subtitles: dedupeSubtitleTracks(res.subtitles || []),
+      options: qualityOptions(res),
+      ctx: context,
+      tried: [...exclude, res.server].filter(Boolean),
+    };
+  }
   const [ranked, movy] = await Promise.all([
     downloadCandidates(context, { exclude }),
     context?.isAnime ? [] : directCandidates(context).catch(() => []),
