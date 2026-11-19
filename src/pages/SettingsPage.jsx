@@ -1,8 +1,5 @@
-import { IS_IOS as __IS_IOS } from "../platform/target";
-import { AnimeDubSetting } from "../platform/ios/AnimeDubPrompt";
-import ProfileSettingsSection from "../platform/ios/profiles/ProfileSettingsSection";
-import { getAnimeDubMode } from "../platform/ios/playerBridge";
-import { useState, useEffect, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useRef } from "react";
+import { AGE_LIMIT_OPTIONS, TMDB_LANGUAGES } from "../utils/settingsOptions";
 import UpdateModal from "../components/UpdateModal";
 import {
   storage,
@@ -165,19 +162,6 @@ function SettingsSelect({ value, onChange, options, style }) {
 }
 
 // ── Start page config ─────────────────────────────────────────────────────────
-
-// Age limit options: null = none, or specific ages
-const AGE_LIMIT_OPTIONS = [
-  { value: "", label: "No restriction" },
-  { value: "0", label: "0 — All audiences (G / FSK 0)" },
-  { value: "7", label: "7 — Family friendly (PG / FSK 6)" },
-  { value: "12", label: "12 — Teens and up" },
-  { value: "13", label: "13 — PG-13 and equivalent" },
-  { value: "15", label: "15 — Older teens" },
-  { value: "16", label: "16 — FSK 16 and equivalent" },
-  { value: "17", label: "17 — R / 17+ and equivalent" },
-  { value: "18", label: "18 — Adults only (NC-17 / FSK 18)" },
-];
 
 // ── Confirmation Dialog ───────────────────────────────────────────────────────
 function ResetConfirmDialog({ onConfirm, onCancel }) {
@@ -590,12 +574,6 @@ function VersionSection() {
   return (
     <div style={{ marginBottom: 40 }}>
       <div className="settings-section-title">App Version</div>
-      {__IS_IOS && (
-        <div style={{ fontSize: 13, color: "var(--text2)", margin: "4px 0 10px" }}>
-          Made by <strong style={{ color: "#e50914" }}>Tez</strong>
-          <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 2 }}>Open-source software · GPL-3.0</div>
-        </div>
-      )}
 
       {/* Version row */}
       <div
@@ -1862,28 +1840,6 @@ function StartPageSection() {
   );
 }
 
-// ── TMDB Metadata Language ────────────────────────────────────────────────────
-const TMDB_LANGUAGES = [
-  { value: "en-US", label: "English (en-US)" },
-  { value: "de-DE", label: "Deutsch (de-DE)" },
-  { value: "fr-FR", label: "Français (fr-FR)" },
-  { value: "es-ES", label: "Español (es-ES)" },
-  { value: "it-IT", label: "Italiano (it-IT)" },
-  { value: "pt-BR", label: "Português (Brasil) (pt-BR)" },
-  { value: "nl-NL", label: "Nederlands (nl-NL)" },
-  { value: "pl-PL", label: "Polski (pl-PL)" },
-  { value: "sv-SE", label: "Svenska (sv-SE)" },
-  { value: "nb-NO", label: "Norsk (nb-NO)" },
-  { value: "da-DK", label: "Dansk (da-DK)" },
-  { value: "fi-FI", label: "Suomi (fi-FI)" },
-  { value: "tr-TR", label: "Türkçe (tr-TR)" },
-  { value: "ru-RU", label: "Русский (ru-RU)" },
-  { value: "ja-JP", label: "日本語 (ja-JP)" },
-  { value: "ko-KR", label: "한국어 (ko-KR)" },
-  { value: "zh-CN", label: "中文 (简体) (zh-CN)" },
-  { value: "ar-SA", label: "العربية (ar-SA)" },
-];
-
 function TmdbLanguageSection() {
   const [lang, setLang] = useState(
     () => storage.get(STORAGE_KEYS.TMDB_LANG) || "en-US",
@@ -1937,21 +1893,6 @@ function TmdbLanguageSection() {
           </span>
         )}
       </div>
-    </div>
-  );
-}
-
-// ── Anime audio (iOS) ─────────────────────────────────────────────────────────
-function AnimeAudioSection() {
-  const [mode, setMode] = useState(getAnimeDubMode);
-  return (
-    <div style={{ marginBottom: 40 }}>
-      <div className="settings-section-title">Anime: Sub or Dub</div>
-      <div style={{ fontSize: 13, color: "var(--text3)", marginBottom: 14, lineHeight: 1.6 }}>
-        How anime plays by default. The SUB/DUB button in the player still
-        switches a single episode.
-      </div>
-      <AnimeDubSetting value={mode} onChange={setMode} />
     </div>
   );
 }
@@ -3359,28 +3300,7 @@ function SettingsTopBar({ sectionRefs, contentRef }) {
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
-// iOS gets its own native-style Settings (grouped lists + sub-pages). The
-// import is compiled out of desktop builds.
-const IOSSettings = __IS_IOS
-  ? lazy(() => import("../platform/ios/settings/IOSSettings"))
-  : null;
-
-export default function SettingsPage(props) {
-  if (IOSSettings) {
-    return (
-      <Suspense fallback={null}>
-        <IOSSettings
-          {...props}
-          ageOptions={AGE_LIMIT_OPTIONS}
-          tmdbLanguages={TMDB_LANGUAGES}
-        />
-      </Suspense>
-    );
-  }
-  return <DesktopSettingsPage {...props} />;
-}
-
-function DesktopSettingsPage({
+export default function SettingsPage({
   apiKey,
   onChangeApiKey,
   initialSection,
@@ -3682,12 +3602,6 @@ function DesktopSettingsPage({
           App configuration for Streambert
         </div>
 
-        {__IS_IOS && (
-          <>
-            <SectionGroupHeader title="Profiles" subtitle="Who is watching on this device" />
-            <ProfileSettingsSection />
-          </>
-        )}
 
         {/* ══════════════════════════════════════════════════════════════════ */}
         {/* GROUP: GENERAL                                                     */}
@@ -4274,7 +4188,6 @@ function DesktopSettingsPage({
             title="Subtitles"
             subtitle="Subtitle download source, preferred language, and API key"
           />
-          {__IS_IOS && <AnimeAudioSection />}
           <SubtitleSettingsSection />
         </div>
 

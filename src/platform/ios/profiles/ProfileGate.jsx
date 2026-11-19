@@ -146,6 +146,14 @@ export default function ProfileGate({ children }) {
     [active, openPicker],
   );
 
+  // Theme hook: <html data-profile="kids"> while a kids profile is in use.
+  const kids = !!active?.kids;
+  useEffect(() => {
+    const root = document.documentElement;
+    if (kids) root.dataset.profile = "kids";
+    else delete root.dataset.profile;
+  }, [kids]);
+
   if (!profiles) return null; // a few ms behind the launch splash
 
   return (

@@ -1,4 +1,5 @@
 import { IS_IOS } from "../platform/target";
+import { ActionSheet, contextMenuProps } from "../platform/ui";
 import AnimeDubPrompt, { shouldAskAnimeDub } from "../platform/ios/AnimeDubPrompt";
 import {
   getAnimeDubMode,
@@ -8,6 +9,7 @@ import {
 } from "../platform/ios/playerBridge";
 import { setAutoPick } from "../platform/ios/autoServer";
 import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
+import { DetailSkeleton, SkeletonList } from "../platform/ios/Skeletons";
 import { isShuffleable, pickRandomEpisode } from "../utils/shuffle";
 import { syncPlayerPrefs, postUpNext } from "../platform/ios/playerPrefs";
 import {
@@ -159,6 +161,7 @@ function PartialCircleIcon({ pct }) {
 function ContextMenu({
   x,
   y,
+  title,
   isWatched,
   hasProgress,
   watchedLabel,
@@ -179,6 +182,16 @@ function ContextMenu({
       window.removeEventListener("contextmenu", close);
     };
   }, []);
+  if (ActionSheet) {
+    const actions = [
+      isWatched
+        ? { label: unwatchedLabel, onSelect: onMarkUnwatched }
+        : { label: watchedLabel, onSelect: onMarkWatched },
+    ];
+    if (onMarkNotStarted && !isWatched && hasProgress)
+      actions.push({ label: "Mark as Not Started", onSelect: onMarkNotStarted });
+    return <ActionSheet title={title} actions={actions} onClose={onClose} />;
+  }
   return (
     <div
       className="context-menu"
@@ -2083,11 +2096,14 @@ export default function TVPage({
           }}
         />
       )}
-      {loading && (
-        <div className="loader">
-          <div className="spinner" />
-        </div>
-      )}
+      {loading &&
+        (IS_IOS ? (
+          <DetailSkeleton />
+        ) : (
+          <div className="loader">
+            <div className="spinner" />
+          </div>
+        ))}
       {!loading && (
         <>
           <div className="detail-hero">
@@ -2668,34 +2684,36 @@ export default function TVPage({
                       </span>
                     )}
                   </button>
-                  {/* Pop-out button */}
-                  <button
-                    className="player-overlay-btn"
-                    onClick={() => {
-                      if (pipOpen) {
-                        window.electron?.closePipWindow?.();
-                        return;
+                  {/* Pop-out window (desktop only) */}
+                  {!IS_IOS && (
+                    <button
+                      className="player-overlay-btn"
+                      onClick={() => {
+                        if (pipOpen) {
+                          window.electron?.closePipWindow?.();
+                          return;
+                        }
+                        const url = isAsync ? resolvedPlayerUrl : playerDirectUrl;
+                        if (!url) return;
+                        pipUrlRef.current = url;
+                        window.electron?.openPipWindow?.(
+                          url,
+                          item.name ?? item.title,
+                          sourceUsesCleanUa(playerSource)
+                            ? CLEAN_USER_AGENT
+                            : null,
+                        );
+                      }}
+                      title={pipOpen ? "Close pop-out" : "Pop out player"}
+                      disabled={
+                        !pipOpen &&
+                        (webviewLoading || !!(isAsync && !resolvedPlayerUrl))
                       }
-                      const url = isAsync ? resolvedPlayerUrl : playerDirectUrl;
-                      if (!url) return;
-                      pipUrlRef.current = url;
-                      window.electron?.openPipWindow?.(
-                        url,
-                        item.name ?? item.title,
-                        sourceUsesCleanUa(playerSource)
-                          ? CLEAN_USER_AGENT
-                          : null,
-                      );
-                    }}
-                    title={pipOpen ? "Close pop-out" : "Pop out player"}
-                    disabled={
-                      !pipOpen &&
-                      (webviewLoading || !!(isAsync && !resolvedPlayerUrl))
-                    }
-                    style={pipOpen ? { color: "var(--red)" } : undefined}
-                  >
-                    <PopOutIcon />
-                  </button>
+                      style={pipOpen ? { color: "var(--red)" } : undefined}
+                    >
+                      <PopOutIcon />
+                    </button>
+                  )}
                 </div>
                 {showSourceMenu && menuPos && (
                   <div
@@ -2937,7 +2955,7 @@ export default function TVPage({
                       key={s.season_number}
                       className={`season-btn ${selectedSeason === s.season_number ? "active" : ""} ${sw === "all" ? "season-watched" : sw.startsWith("some") ? "season-partial" : ""}`}
                       onClick={() => setSelectedSeason(s.season_number)}
-                      onContextMenu={(e) => {
+                      {...contextMenuProps((e) => {
                         e.preventDefault();
                         e.stopPropagation();
                         setSeasonMenu({
@@ -2945,8 +2963,12 @@ export default function TVPage({
                           y: e.clientY,
                           seasonNum: s.season_number,
                         });
-                      }}
-                      title="Right-click to mark season as watched/unwatched"
+                      })}
+                      title={
+                        IS_IOS
+                          ? undefined
+                          : "Right-click to mark season as watched/unwatched"
+                      }
                     >
                       {sw === "all" && (
                         <span className="season-watched-icon">✓</span>
@@ -2985,11 +3007,14 @@ export default function TVPage({
                 </span>
               </div>
             )}
-            {loadingSeason && (
-              <div className="loader">
-                <div className="spinner" />
-              </div>
-            )}
+            {loadingSeason &&
+              (IS_IOS ? (
+                <SkeletonList rows={4} />
+              ) : (
+                <div className="loader">
+                  <div className="spinner" />
+                </div>
+              ))}
             {!loadingSeason &&
               (seasonData?.episodes || episodeGroupCurrentEpisodes?.length) && (
                 <div className="episodes-grid">
@@ -3060,6 +3085,7 @@ export default function TVPage({
         <ContextMenu
           x={seasonMenu.x}
           y={seasonMenu.y}
+          title={`Season ${seasonMenu.seasonNum}`}
           isWatched={isSeasonWatched(seasonMenu.seasonNum)}
           watchedLabel="Mark Season as Watched"
           unwatchedLabel="Mark Season as Unwatched"
@@ -3136,12 +3162,12 @@ const EpisodeCard = memo(function EpisodeCard({
     <div
       className={`episode-card ${isPlaying ? "playing" : ""} ${epWatched ? "ep-watched" : ""} ${restricted ? "episode-card--restricted" : ""} ${epUnreleased ? "episode-card--unreleased" : ""}`}
       onClick={() => (restricted || epUnreleased ? null : onPlay(ep))}
-      onContextMenu={(e) => {
+      {...contextMenuProps((e) => {
         e.preventDefault();
         e.stopPropagation();
         if (!restricted && !epUnreleased)
           onContextMenu({ x: e.clientX, y: e.clientY, pk });
-      }}
+      })}
       style={epUnreleased ? { cursor: "default" } : undefined}
     >
       <div className="episode-thumb">

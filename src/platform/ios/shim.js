@@ -1,6 +1,8 @@
 // iOS (Capacitor) replacement for the Electron preload API (window.electron).
-// Streaming + core app only: downloads, Discord RPC, auto-update, window
-// controls and file-system helpers are safe no-ops on iOS.
+// Streaming + core app only. Desktop-only UI (window controls, updater,
+// Discord RPC, close confirm, scheduled backups) is compiled out of the iOS
+// build (see src/platform/ui.js), so it needs no stubs here; file-system
+// helpers the shared pages still call are safe no-ops.
 import { version as APP_VERSION } from "../../../package.json";
 import "./ios.css";
 import { SecureStorage } from "@aparajita/capacitor-secure-storage";
@@ -61,10 +63,6 @@ window.electron = {
     return Promise.resolve({ ok: true });
   },
 
-  onConfirmClose: on("confirm-close"),
-  offConfirmClose: off("confirm-close"),
-  respondClose: noop,
-
   // HiAnime needs the desktop main-process resolver (CORS + Referer). TODO iOS.
   resolveHiAnime: resolved({ ok: false, error: "HiAnime is not available on iOS yet" }),
   setPlayerVideo: resolved({ playerUrl: "about:blank" }),
@@ -83,7 +81,6 @@ window.electron = {
   getBlockStats: resolved({ total: 0, domains: {} }),
 
   showNotification: resolved(undefined),
-  quitApp: resolved(undefined),
   playerStopped: noop,
 
   getCacheSize: resolved(-1),
@@ -149,30 +146,7 @@ window.electron = {
   onPipClosed: on("pip-window-closed"),
   offPipClosed: off("pip-window-closed"),
 
-  windowMinimize: resolved(undefined),
-  windowToggleMaximize: resolved(undefined),
-  windowClose: resolved(undefined),
-  windowIsMaximized: resolved(false),
-  getPlatform: resolved("ios"),
-  onWindowMaximize: on("window-maximized"),
-  offWindowMaximize: off("window-maximized"),
   setZoomFactor: noop,
-
-  detectUpdateFormat: resolved(null),
-  downloadAndInstallUpdate: resolved({ ok: false, error: "Updates come from new IPA builds on iOS" }),
-  cancelUpdate: resolved(undefined),
-  onUpdateProgress: on("update-progress"),
-  offUpdateProgress: off("update-progress"),
-
-  getScheduledBackupSettings: resolved({ enabled: false }),
-  setScheduledBackupSettings: resolved({ ok: true }),
-  performScheduledBackup: resolved({ ok: false }),
-  onScheduledBackupRequested: on("scheduled-backup-requested"),
-  offScheduledBackupRequested: off("scheduled-backup-requested"),
-
-  fetchReleaseImage: resolved(null),
-  discordRpcSetEnabled: resolved(undefined),
-  discordRpcUpdateActivity: resolved(undefined),
 };
 
 // Native download progress -> the existing "download-progress" listeners.
@@ -180,12 +154,6 @@ window.__sbDownloadEvent = (e) => {
   const record = recordFromEvent(e);
   if (record) emit("download-progress", record);
 };
-
-// No auto-update checks on iOS (the desktop updater can't install an IPA).
-try {
-  if (localStorage.getItem("streambert_autoCheckUpdates") === null)
-    localStorage.setItem("streambert_autoCheckUpdates", "0");
-} catch {}
 
 // Notch / Dynamic Island: let CSS use env(safe-area-inset-*)
 const vp = document.querySelector('meta[name="viewport"]');

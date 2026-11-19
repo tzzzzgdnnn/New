@@ -4,7 +4,7 @@
 import { prefetchDetails } from "../../utils/prefetch";
 import { useEffect, useRef, useState } from "react";
 import MediaCard from "../../components/MediaCard";
-import { PlayIcon } from "../../components/Icons";
+import { PlayIcon, InfoIcon, BookmarkIcon, BookmarkFillIcon } from "../../components/Icons";
 import { imgUrl, tmdbFetch } from "../../utils/api";
 import NOSTALGIA from "./nostalgia.json";
 import HORROR from "./horror.json";
@@ -330,7 +330,7 @@ function useLogo(item, apiKey) {
   return logo;
 }
 
-export function Billboard({ items, apiKey, onSelect, kicker = "Trending Now" }) {
+export function Billboard({ items, apiKey, onSelect, isSaved, onToggleSave, kicker = "Trending Now" }) {
   const list = (items || []).filter((i) => i.backdrop_path).slice(0, 6);
   const [idx, setIdx] = useState(0);
   const touchX = useRef(null);
@@ -396,11 +396,21 @@ export function Billboard({ items, apiKey, onSelect, kicker = "Trending Now" }) 
           ))}
         </div>
         <div className="sb-bill-actions">
-          <button className="sb-btn-play" onClick={() => onSelect(item)} onPointerDown={() => prefetchDetails(item)}>
+          {/* Play starts a film straight away; a series opens on its episodes. */}
+          <button
+            className="sb-btn-play"
+            onClick={() => onSelect(typeOf(item) === "movie" ? { ...item, autoResume: true } : item)}
+            onPointerDown={() => prefetchDetails(item)}
+          >
             <PlayIcon /> Play
           </button>
-          <button className="sb-btn-info" onClick={() => onSelect(item)} onPointerDown={() => prefetchDetails(item)}>
-            ⓘ More Info
+          {onToggleSave && (
+            <button className="sb-btn-info" onClick={() => onToggleSave(item)} aria-pressed={isSaved(item)}>
+              {isSaved(item) ? <BookmarkFillIcon /> : <BookmarkIcon />} My List
+            </button>
+          )}
+          <button className="sb-btn-icon" onClick={() => onSelect(item)} onPointerDown={() => prefetchDetails(item)} aria-label="More info">
+            <InfoIcon />
           </button>
         </div>
         {list.length > 1 && (

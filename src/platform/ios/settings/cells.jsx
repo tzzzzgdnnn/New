@@ -1,7 +1,7 @@
 // iOS Settings building blocks: inset grouped sections, rows with colored
-// icon tiles, chevrons, native-style switches, checkmark lists and an
-// action sheet. Styled by settings.css (iOS build only).
-import { useEffect, useId } from "react";
+// icon tiles, chevrons, native-style switches and checkmark lists. Styled by
+// settings.css (iOS build only).
+import { useId } from "react";
 
 // ── Glyphs (24×24, stroke = currentColor) ─────────────────────────────────
 const P = {
@@ -218,32 +218,5 @@ export function Stepper({ value, min, max, step = 1, onChange, format = (v) => v
         </button>
       </span>
     </span>
-  );
-}
-
-/** Bottom action sheet for destructive confirmations. */
-export function ActionSheet({ title, message, confirmLabel, onConfirm, onCancel }) {
-  useEffect(() => {
-    const onKey = (e) => e.key === "Escape" && onCancel();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-  return (
-    <div className="sps-sheet-scrim" onClick={onCancel}>
-      <div className="sps-sheet" role="alertdialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
-        <div className="sps-sheet-card">
-          <div className="sps-sheet-msg">
-            <strong>{title}</strong>
-            {message && <span>{message}</span>}
-          </div>
-          <button type="button" className="sps-sheet-btn is-danger" onClick={onConfirm}>
-            {confirmLabel}
-          </button>
-        </div>
-        <button type="button" className="sps-sheet-btn sps-sheet-cancel" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-    </div>
   );
 }

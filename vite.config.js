@@ -27,7 +27,8 @@ export default defineConfig(({ mode }) => {
         output: {
           manualChunks: {
             react: ["react", "react-dom"],
-            settings: ["./src/pages/SettingsPage"],
+            // Desktop only; listing it here would pull it into the iOS build.
+            ...(isIOS ? {} : { settings: ["./src/pages/SettingsPage"] }),
             movie: ["./src/pages/MoviePage"],
             tv: ["./src/pages/TVPage"],
             downloads: ["./src/pages/DownloadsPage"],

@@ -1315,35 +1315,37 @@ export default function MoviePage({
                   <span className="player-blocked-badge">{blockedSession}</span>
                 )}
               </button>
-              {/* Pop-out button*/}
-              <button
-                className="player-overlay-btn"
-                onClick={() => {
-                  if (pipOpen) {
-                    window.electron?.closePipWindow?.();
-                    return;
+              {/* Pop-out window (desktop only) */}
+              {!IS_IOS && (
+                <button
+                  className="player-overlay-btn"
+                  onClick={() => {
+                    if (pipOpen) {
+                      window.electron?.closePipWindow?.();
+                      return;
+                    }
+                    const url = sourceIsAsync(playerSource)
+                      ? resolvedPlayerUrl
+                      : playerDirectUrl;
+                    if (!url) return;
+                    pipUrlRef.current = url;
+                    window.electron?.openPipWindow?.(
+                      url,
+                      item.title,
+                      sourceUsesCleanUa(playerSource) ? CLEAN_USER_AGENT : null,
+                    );
+                  }}
+                  title={pipOpen ? "Close pop-out" : "Pop out player"}
+                  disabled={
+                    !pipOpen &&
+                    (webviewLoading ||
+                      !!(sourceIsAsync(playerSource) && !resolvedPlayerUrl))
                   }
-                  const url = sourceIsAsync(playerSource)
-                    ? resolvedPlayerUrl
-                    : playerDirectUrl;
-                  if (!url) return;
-                  pipUrlRef.current = url;
-                  window.electron?.openPipWindow?.(
-                    url,
-                    item.title,
-                    sourceUsesCleanUa(playerSource) ? CLEAN_USER_AGENT : null,
-                  );
-                }}
-                title={pipOpen ? "Close pop-out" : "Pop out player"}
-                disabled={
-                  !pipOpen &&
-                  (webviewLoading ||
-                    !!(sourceIsAsync(playerSource) && !resolvedPlayerUrl))
-                }
-                style={pipOpen ? { color: "var(--red)" } : undefined}
-              >
-                <PopOutIcon />
-              </button>
+                  style={pipOpen ? { color: "var(--red)" } : undefined}
+                >
+                  <PopOutIcon />
+                </button>
+              )}
             </div>
             {showSourceMenu && menuPos && (
               <div

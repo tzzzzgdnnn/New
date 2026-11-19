@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { imgUrl, isAnimeContent } from "../utils/api";
 import { prefetchDetails } from "../utils/prefetch";
+import { ActionSheet, contextMenuProps } from "../platform/ui";
 import {
   PlayIcon,
   FilmIcon,
@@ -85,7 +86,7 @@ const MediaCard = memo(function MediaCard({
         className={`card${isWatched ? " ep-watched" : ""}${isUnreleased ? " card--unreleased" : ""}`}
         onClick={onClick}
         onPointerDown={() => prefetchDetails(item)}
-        onContextMenu={isUnreleased ? undefined : openMenu}
+        {...(isUnreleased ? null : contextMenuProps(openMenu))}
       >
         <div className="card-poster">
           {item.poster_path ? (
@@ -158,7 +159,18 @@ const MediaCard = memo(function MediaCard({
         </span>
       </div>
 
-      {menu && (
+      {menu && ActionSheet && (
+        <ActionSheet
+          title={title}
+          actions={[
+            isWatched
+              ? { label: "Mark as Unwatched", onSelect: () => onMarkUnwatched?.(watchedKey) }
+              : { label: "Mark as Watched", onSelect: () => onMarkWatched?.(watchedKey) },
+          ]}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {menu && !ActionSheet && (
         <div
           ref={menuRef}
           className="context-menu"
