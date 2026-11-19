@@ -888,7 +888,9 @@ export default function MoviePage({
       (dl.tmdbId === item.id || dl.mediaId === item.id) &&
       (dl.status === "completed" ||
         dl.status === "local" ||
-        dl.status === "downloading"),
+        dl.status === "downloading" ||
+        dl.status === "queued" ||
+        dl.status === "paused"),
   );
 
   return (
@@ -1076,6 +1078,21 @@ export default function MoviePage({
                     )}
                   </>
                 ))}
+              {IS_IOS && (
+                <button
+                  className="btn btn-ghost"
+                  onClick={() =>
+                    movieDownload ? onGoToDownloads?.(movieDownload.id) : setShowDownload(true)
+                  }
+                >
+                  <DownloadIcon />{" "}
+                  {!movieDownload
+                    ? "Download"
+                    : movieDownload.status === "completed"
+                      ? "Downloaded"
+                      : "Downloading"}
+                </button>
+              )}
               <button className="btn btn-ghost" onClick={onBack}>
                 <BackIcon /> Back
               </button>
@@ -1503,6 +1520,7 @@ export default function MoviePage({
           onDownloadStarted={onDownloadStarted}
           mediaId={item.id}
           mediaType="movie"
+          runtimeMin={d.runtime || 0}
           posterPath={d.poster_path}
           tmdbId={item.id}
         />

@@ -498,6 +498,8 @@ export default function TVPage({
   const [loading, setLoading] = useState(true);
   const [loadingSeason, setLoadingSeason] = useState(false);
   const [showDownload, setShowDownload] = useState(false);
+  // iOS: the episode the Download button targets ({ season, episode }).
+  const [downloadTarget, setDownloadTarget] = useState(null);
   const [trailerKey, setTrailerKey] = useState(null);
   const [showTrailer, setShowTrailer] = useState(false);
   const [showCast, setShowCast] = useState(false);
@@ -1161,7 +1163,9 @@ export default function TVPage({
         (dl.tmdbId === item.id || dl.mediaId === item.id) &&
         (dl.status === "completed" ||
           dl.status === "local" ||
-          dl.status === "downloading")
+          dl.status === "downloading" ||
+          dl.status === "queued" ||
+          dl.status === "paused")
       ) {
         map.set(`s${dl.season}e${dl.episode}`, dl);
       }
@@ -1842,6 +1846,11 @@ export default function TVPage({
     return plan(selectedSeason, firstEp);
   }, [item.id, progress, watched, selectedSeason, currentSeasonEpisodes, displaySeasonCount]);
 
+  // iOS: download state of the episode the Resume/Play button targets.
+  const planDownload = resumePlan
+    ? (downloadsByEpisodeKey.get(`s${resumePlan.season}e${resumePlan.episode}`) ?? null)
+    : null;
+
   // Episode to start once its season's episode list is loaded.
   const [pendingPlay, setPendingPlay] = useState(null);
   const startEpisode = useCallback(
@@ -2211,6 +2220,21 @@ export default function TVPage({
                     {isSaved ? <BookmarkFillIcon /> : <BookmarkIcon />}
                     {isSaved ? "Saved" : "Save"}
                   </button>
+                  {IS_IOS && resumePlan && (
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() =>
+                        planDownload ? onGoToDownloads?.(planDownload.id) : setDownloadTarget(resumePlan)
+                      }
+                    >
+                      <DownloadIcon />{" "}
+                      {!planDownload
+                        ? `Download S${resumePlan.season}:E${resumePlan.episode}`
+                        : planDownload.status === "completed"
+                          ? "Downloaded"
+                          : "Downloading"}
+                    </button>
+                  )}
                   <button className="btn btn-ghost" onClick={onBack}>
                     <BackIcon /> Back
                   </button>
@@ -3052,20 +3076,28 @@ export default function TVPage({
         />
       )}
 
-      {showDownload && (
+      {(showDownload || downloadTarget) && (
         <DownloadModal
-          onClose={() => setShowDownload(false)}
+          onClose={() => {
+            setShowDownload(false);
+            setDownloadTarget(null);
+          }}
           m3u8Url={m3u8Url}
           subtitles={interceptedSubs}
-          mediaName={mediaName}
+          mediaName={
+            downloadTarget
+              ? `${item.name || item.title} S${downloadTarget.season}E${downloadTarget.episode}`
+              : mediaName
+          }
           downloaderFolder={downloaderFolder}
           setDownloaderFolder={handleSetDownloaderFolder}
           onOpenSettings={onSettings}
           onDownloadStarted={onDownloadStarted}
           mediaId={item.id}
           mediaType="tv"
-          season={selectedSeason}
-          episode={selectedEp?.episode_number}
+          season={downloadTarget?.season ?? selectedSeason}
+          episode={downloadTarget?.episode ?? selectedEp?.episode_number}
+          runtimeMin={d.episode_run_time?.[0] || 0}
           posterPath={d.poster_path}
           tmdbId={item.id}
         />

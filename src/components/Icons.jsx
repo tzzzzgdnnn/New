@@ -52,6 +52,12 @@ export const PlayIcon = () => (
     <polygon points="5 3 19 12 5 21 5 3" />
   </svg>
 );
+export const PauseIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor">
+    <rect x="6" y="4" width="4" height="16" rx="1" />
+    <rect x="14" y="4" width="4" height="16" rx="1" />
+  </svg>
+);
 export const CloseIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <line x1="18" y1="6" x2="6" y2="18" />

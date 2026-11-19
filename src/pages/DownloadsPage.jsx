@@ -4,6 +4,7 @@ import {
   TrashIcon,
   FolderIcon,
   PlayIcon,
+  PauseIcon,
   FilmIcon,
   WatchedIcon,
   SubtitlesIcon,
@@ -11,6 +12,12 @@ import {
 import { storage, isElectron, STORAGE_KEYS } from "../utils/storage";
 import SubtitleDownloaderModal from "../components/SubtitleDownloaderModal";
 import { imgUrl } from "../utils/api";
+import { IS_IOS } from "../platform/target";
+
+// Statuses shown as an active card. The iOS downloader queues, pauses, and
+// resumes a failed download where it stopped, so those stay active there.
+const IN_PROGRESS = new Set(IS_IOS ? ["downloading", "queued", "paused", "error"] : ["downloading"]);
+const isStopped = (dl) => dl.status === "paused" || dl.status === "error";
 
 const STATUS_CLASS = {
   downloading: "dl-status--downloading",
@@ -158,14 +165,14 @@ export default function DownloadsPage({
 
   // ── Stable derived lists ──────────────────────────────────────
   const active = useMemo(
-    () => downloads.filter((d) => d.status === "downloading"),
+    () => downloads.filter((d) => IN_PROGRESS.has(d.status)),
     [downloads],
   );
 
   const finished = useMemo(
     () =>
       downloads
-        .filter((d) => d.status !== "downloading")
+        .filter((d) => !IN_PROGRESS.has(d.status))
         .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)),
     [downloads],
   );
@@ -494,6 +501,14 @@ export default function DownloadsPage({
                 key={dl.id}
                 dl={dl}
                 onDelete={() => handleDelete(dl)}
+                onPauseResume={
+                  IS_IOS
+                    ? () =>
+                        isStopped(dl)
+                          ? window.electron.resumeDownload(dl.id)
+                          : window.electron.pauseDownload(dl.id)
+                    : null
+                }
                 onSelect={
                   dl.tmdbId && dl.mediaType
                     ? () =>
@@ -653,7 +668,7 @@ export default function DownloadsPage({
 }
 
 // ── Active download card ───────────────────────────────────────────────────────
-const ActiveCard = memo(function ActiveCard({ dl, onDelete, onSelect }) {
+const ActiveCard = memo(function ActiveCard({ dl, onDelete, onSelect, onPauseResume }) {
   const pct = dl.progress || 0;
   return (
     <div className="dl-card dl-card-active">
@@ -709,6 +724,16 @@ const ActiveCard = memo(function ActiveCard({ dl, onDelete, onSelect }) {
         </div>
         <div className="dl-card__right">
           <div className="dl-card__pct">{pct.toFixed(1)}%</div>
+          {onPauseResume && (
+            <button
+              className="icon-btn"
+              onClick={onPauseResume}
+              title={isStopped(dl) ? "Resume" : "Pause"}
+              aria-label={isStopped(dl) ? "Resume" : "Pause"}
+            >
+              {isStopped(dl) ? <PlayIcon /> : <PauseIcon />}
+            </button>
+          )}
           <button className="icon-btn" onClick={onDelete} title="Remove">
             <TrashIcon />
           </button>

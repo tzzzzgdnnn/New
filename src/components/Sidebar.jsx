@@ -130,15 +130,13 @@ export default function Sidebar({
         icon={<HistoryIcon />}
         label="Library & History"
       />
-      {!IS_IOS && (
-        <SideBtn
-          active={page === "downloads"}
-          onClick={() => onNavigate("downloads")}
-          icon={<DownloadsQueueIcon />}
-          label="Downloads"
-          badge={activeDownloads > 0 ? activeDownloads : null}
-        />
-      )}
+      <SideBtn
+        active={page === "downloads"}
+        onClick={() => onNavigate("downloads")}
+        icon={<DownloadsQueueIcon />}
+        label="Downloads"
+        badge={activeDownloads > 0 ? activeDownloads : null}
+      />
 
       <div className="sidebar-sep" />
 
