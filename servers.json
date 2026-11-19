@@ -44,29 +44,12 @@
       "mirrors": [
         "https://www.flikhub.net"
       ]
-    },
-    {
-      "id": "cinejoy",
-      "name": "Cinejoy",
-      "enabled": true,
-      "verified": true,
-      "movie": "https://cinejoy.pk/watch/movie/{tmdb}",
-      "tv": "https://cinejoy.pk/watch/tv/{tmdb}/{season}/{episode}",
-      "mirrors": []
     }
   ],
   "builtin": {
     "_comment": "Overrides for the app's built-in sources by id: set enabled:false to hide one, movie/tv templates to move it to a new domain, or an anime template ({anilist}, {episode}, {lang} = sub|dub) to list it under Dub as well as Sub. Entries in servers[] take the same optional anime template.",
-    "vidsrc": {
-      "enabled": false,
-      "_note": "Cloudflare challenge before every play (not instant)"
-    },
     "vidfast": {
       "enabled": true
-    },
-    "vidlove": {
-      "enabled": false,
-      "_note": "domain does not answer"
     },
     "aether": {
       "enabled": true
@@ -76,18 +59,6 @@
     },
     "vidnest": {
       "enabled": true
-    },
-    "devideosrc": {
-      "enabled": false,
-      "_note": "German audio; needs an IMDb lookup first"
-    },
-    "frembed": {
-      "enabled": false,
-      "_note": "French audio"
-    },
-    "kinohub": {
-      "enabled": false,
-      "_note": "Russian audio, movies only; needs a Kinopoisk lookup first"
     },
     "hianime": {
       "enabled": false,

@@ -44,11 +44,6 @@ function hideCss(...selectors) {
 
 const SITE_RULES = [
   {
-    // KinoHub: player picker + player only
-    hosts: ["on.kinohub.vip"],
-    css: onlyElementCss("section.player_section"),
-  },
-  {
     hosts: ["aether.ist"],
     css: hideCss(
       "div:has(> .top-content)",
@@ -68,10 +63,6 @@ const SITE_RULES = [
   {
     hosts: ["vidnest.fun"],
     css: hideCss(".popup-selector", "#overlay-id"),
-  },
-  {
-    hosts: ["frembed.uno"],
-    css: hideCss(".popup-selector"),
   },
 ];
 

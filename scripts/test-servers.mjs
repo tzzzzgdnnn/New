@@ -43,7 +43,7 @@ test("anime: every server under Sub, every anime route under Dub", () => {
 
 test("server keys round-trip", () => {
   assert.deepEqual(parseServerKey(serverKey("vidnest", "dub")), { sourceId: "vidnest", mode: "dub" });
-  assert.deepEqual(parseServerKey("vidsrc"), { sourceId: "vidsrc", mode: null });
+  assert.deepEqual(parseServerKey("vidfast"), { sourceId: "vidfast", mode: null });
 });
 
 test("bundled config: more than one Dub server, all labelled", () => {

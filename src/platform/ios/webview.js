@@ -17,6 +17,7 @@ import { autoOrder, prefetchRanking } from "./autoRank";
 import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
 import { anipmCandidates, ANIPM_ID } from "./anipm";
 import { movyCandidates, MOVY_ID } from "./movy";
+import { cinejoyCandidates, CINEJOY_ID } from "./cinejoy";
 import { parseServerKey } from "../../utils/servers/catalog";
 import { diag } from "../../utils/diag";
 
@@ -186,9 +187,16 @@ export function withAnipm(ranked, anipm) {
  * Movy's direct stream leads for movies and series (it is the stream itself,
  * no page to load), unless the viewer picked another server by hand.
  */
+/** Direct-stream servers (Movy, Cinejoy) for a movie or episode, both looked up at once. */
+export async function directCandidates(ctx) {
+  const [m, c] = await Promise.all([movyCandidates(ctx).catch(() => []), cinejoyCandidates(ctx).catch(() => [])]);
+  return [...m, ...c];
+}
+
 export function withMovy(ranked, movy) {
   if (!movy?.length) return ranked;
-  const rest = ranked.filter((c) => c.id !== MOVY_ID);
+  const ids = new Set(movy.map((c) => c.id));
+  const rest = ranked.filter((c) => !ids.has(c.id) && c.id !== MOVY_ID && c.id !== CINEJOY_ID);
   if (!isAutoPick() && rest.length && readStored("playerSource")) {
     return [rest[0], ...movy, ...rest.slice(1)].slice(0, MAX_CANDIDATES + movy.length);
   }
@@ -404,7 +412,7 @@ function upgrade(wv) {
         subCtxReady,
         rankedCandidates(url, ctx, { signal: probing.signal }),
         ctx.isAnime ? anipmCandidates(ctx) : [],
-        ctx.isAnime ? [] : movyCandidates(ctx),
+        ctx.isAnime ? [] : directCandidates(ctx),
       ]);
       if (nativeToken !== token) return;
       const candidates = withMovy(withAnipm(playerOrder(ranked, ctx), anipm), movy);

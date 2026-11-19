@@ -332,13 +332,9 @@ export function saveTrendingCache(lang, movies, tv) {
 // https://vsembed.su/api/
 // https://peachify.top/
 // https://vidfast.vc
-// https://vidlove.cc/#embed
 // https://rentry.co/aetherdomains
 // https://vidrift.net/docs
 // https://vidnest.fun
-// https://devideosrc.co/docs
-// https://frembed.bar/api-docs
-// https://on.kinohub.vip/
 
 // ── Player Sources ────────────────────────────────────────────────────────────
 // supportsProgress: true = executeJavaScript tracking works for this source
@@ -347,23 +343,6 @@ export function saveTrendingCache(lang, movies, tv) {
 //                   tokens). Omit/false = Electron's untouched default UA.
 //
 export const PLAYER_SOURCES = [
-  {
-    id: "vidsrc",
-    animeTmdb: true, // carries anime under its TMDB id
-    label: "VidSrc",
-    tag: null,
-    note: null,
-    supportsProgress: true,
-    progressViaFrames: true, // video is in a nested iframe, needs main-process frame query
-    colorParam: null, // vidsrc doesn't support color param
-    langParam: "ds_lang", // ISO 639-1 language code
-    params: {
-      autoplay: "1"
-    },
-    movieUrl: (id) => `https://vsembed.su/embed/movie/${id}`,
-    tvUrl: (id, season, ep) =>
-      `https://vsembed.su/embed/tv/${id}/${season}/${ep}`,
-  },
   {
     id: "vidfast",
     animeTmdb: true, // carries anime under its TMDB id
@@ -383,26 +362,6 @@ export const PLAYER_SOURCES = [
     movieUrl: (id) => `https://vidfast.vc/movie/${id}`,
     tvUrl: (id, season, ep) =>
       `https://vidfast.vc/tv/${id}/${season}/${ep}`,
-  },
-  {
-    id: "vidlove",
-    animeTmdb: true, // carries anime under its TMDB id
-    label: "Vidlove",
-    tag: null,
-    note: null,
-    supportsProgress: true,
-    colorParam: "primarycolor", // hex without # → e.g. "e50914"
-    params: {
-      autoplay: "true",
-      autonext: "false",
-      tour: "true",
-      showNextEpisode: "false",
-      hideautonext: "true",
-      hidenextbutton: "true",
-    },
-    movieUrl: (id) => `https://player.vidlove.cc/embed/movie/${id}`,
-    tvUrl: (id, season, ep) =>
-      `https://player.vidlove.cc/embed/tv/${id}/${season}/${ep}`,
   },
   {
     id: "aether",
@@ -455,55 +414,6 @@ export const PLAYER_SOURCES = [
       `https://vidnest.fun/anime/${anilistId}/${ep}/${lang}`,
   },
   {
-    id: "devideosrc",
-    label: "DeVideoSrc",
-    tag: null,
-    note: "🇩🇪",
-    supportsProgress: true,
-    progressViaFrames: true, // player may sit in a nested provider iframe -> main-process frame query
-    skipResetGuard: true, // no quality-change reset -> don't "seek back" after a manual rewind
-    idType: "imdb", // needs an IMDb ID (tt…) instead of the TMDB ID
-    colorParam: "color", // hex WITH # (URLSearchParams encodes it as %23)
-    colorWithHash: true,
-    langParam: null,
-    params: {
-      autoplay: "1",
-      muted: "0",
-    },
-    movieUrl: (id) => `https://devideosrc.co/custom/movie/${id}`,
-    tvUrl: (id, season, ep) =>
-      `https://devideosrc.co/custom/serial/${id}/${season}/${ep}`,
-  },
-  {
-    id: "frembed",
-    label: "Frembed",
-    tag: null, // movies, TV and anime (anime uses the normal movie/serie endpoints)
-    note: "🇫🇷",
-    supportsProgress: true,
-    progressViaFrames: true,
-    skipResetGuard: true, // no quality-change reset -> don't "seek back" after a manual rewind
-    colorParam: null,
-    langParam: null,
-    params: {},
-    movieUrl: (id) => `https://frembed.uno/embed/movie/${id}`,
-    tvUrl: (id, season, ep) =>
-      `https://frembed.uno/embed/serie/${id}?sa=${season}&epi=${ep}`,
-  },
-  {
-    id: "kinohub",
-    label: "KinoHub",
-    tag: null,
-    note: "🇷🇺",
-    supportsProgress: true,
-    progressViaFrames: true, // player may sit in a nested iframe -> main-process frame query
-    idType: "kinopoisk", // needs a Kinopoisk ID (resolved via Wikidata)
-    movieOnly: true, // series support not implemented yet
-    colorParam: null,
-    langParam: null,
-    params: {},
-    movieUrl: (id) => `https://on.kinohub.vip/movie/${id}`,
-  },
-  {
     id: "hianime",
     label: "HiAnime",
     tag: "ANIME",
@@ -517,7 +427,7 @@ export const PLAYER_SOURCES = [
 ];
 
 // Sources that require a transparent webRequest intercept to load properly
-export const NEEDS_INTERCEPT = ["vidsrc", "devideosrc", "frembed", "kinohub"];
+export const NEEDS_INTERCEPT = [];
 
 export const getSourceUrl = (
   sourceId,

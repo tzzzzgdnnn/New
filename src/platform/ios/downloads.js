@@ -2,8 +2,7 @@
 // DownloadManager (Downloads.swift) does the fetching; this maps its jobs onto
 // the records the Downloads page and App.jsx already use, and turns a stream's
 // variants into the quality choices the picker shows.
-import { movyCandidates } from "./movy";
-import { downloadCandidates, downloadContext, currentAudioMode } from "./webview";
+import { downloadCandidates, downloadContext, currentAudioMode, directCandidates } from "./webview";
 import { recordLookup } from "./autoServer";
 import { getResumeSeconds, progressKeyFor } from "./resume";
 import { diag } from "../../utils/diag";
@@ -78,9 +77,9 @@ export async function probeDownload({ season = null, episode = null, ctx = null,
   const context = ctx || downloadContext(override);
   const [ranked, movy] = await Promise.all([
     downloadCandidates(context, { exclude }),
-    context?.isAnime ? [] : movyCandidates(context).catch(() => []),
+    context?.isAnime ? [] : directCandidates(context).catch(() => []),
   ]);
-  // Movy's direct stream first (no page to sniff), unless it already failed.
+  // Direct streams (Movy, Cinejoy) first (no page to sniff), unless it already failed.
   const candidates = [...movy.filter((c) => !exclude.includes(c.id)), ...ranked];
   if (!candidates.length) return { ok: false, error: "No server returned a downloadable stream" };
   const at = Date.now();
