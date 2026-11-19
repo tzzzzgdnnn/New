@@ -30,6 +30,13 @@ if (import.meta.env.VITE_WEB) {
       ".sb-android [class*=scroll],.sb-android [class*=Scroll],.sb-android [class*=row],.sb-android [class*=Row]{transform:translateZ(0);overscroll-behavior:contain}",
       ".sb-android [class*=row],.sb-android [class*=Row],.sb-android section{content-visibility:auto;contain-intrinsic-size:auto 260px}",
       ".sb-android img{content-visibility:auto}",
+      // OLED: true-black base (pixels off), crisper white text, and cards a
+      // touch lighter so they still separate from the black. Kept gentle.
+      ".sb-android{--bg:#000;--sp-sheet-bg:#000;--text:#fff;--sp-chrome-bg:rgba(0,0,0,.82)}",
+      ".sb-android,.sb-android body,.sb-android #root{background:#000!important}",
+      ".sb-android{--surface:#141416;--sp-group-bg:#18181b}",
+      ".sb-android body{-webkit-font-smoothing:antialiased;color:#fff}",
+      ".sb-android img{filter:contrast(1.04) saturate(1.05)}",
     ].join("");
     document.head.appendChild(st);
   }
