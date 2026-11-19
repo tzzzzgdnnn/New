@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import stripDesktopCss from "./vite/strip-desktop-css.mjs";
 
 export default defineConfig(({ mode }) => {
   const isDist = process.env.ELECTRON_DIST === "1";
@@ -15,6 +16,9 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: isIOS ? [react(), iosEntry] : [react()],
     base: "./",
+    // iOS: drop desktop-only rules from the shared stylesheets. Desktop CSS
+    // is left exactly as written.
+    ...(isIOS ? { css: { postcss: { plugins: [stripDesktopCss()] } } } : {}),
     build: {
       minify: "terser",
       terserOptions: {

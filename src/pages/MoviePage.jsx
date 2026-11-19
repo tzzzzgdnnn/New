@@ -5,7 +5,11 @@ import {
   publishPlayerContext,
   useAnimeServerGuard,
   useNativeServerSelect,
+  applyServerChoice,
 } from "../platform/ios/playerBridge";
+import { ServerSheet } from "../platform/ui";
+import { getServerChoice } from "../platform/ios/autoServer";
+import { serverChoiceLabel } from "../platform/ios/serverSheetLogic.js";
 import { setAutoPick } from "../platform/ios/autoServer";
 import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
 import { syncPlayerPrefs, postUpNext } from "../platform/ios/playerPrefs";
@@ -143,6 +147,8 @@ export default function MoviePage({
     [playerSource],
   );
   const [showSourceMenu, setShowSourceMenu] = useState(false);
+  // iOS: server bottom sheet (Auto + manual servers + Sub/Dub for anime)
+  const [showServerSheet, setShowServerSheet] = useState(false);
   const [dubMode, setDubMode] = useState(getAnimeDubMode);
   // iOS: ask "Sub or Dub?" once, on the first anime title
   const [askDubMode, setAskDubMode] = useState(
@@ -848,8 +854,10 @@ export default function MoviePage({
       setDubMode(mode);
       storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, mode);
     }
-    setPlayerSource(sourceId);
-    storage.set(STORAGE_KEYS.PLAYER_SOURCE, sourceId);
+    if (sourceId) {
+      setPlayerSource(sourceId);
+      storage.set(STORAGE_KEYS.PLAYER_SOURCE, sourceId);
+    }
     resetPlayerResolution();
   });
 
@@ -1274,6 +1282,10 @@ export default function MoviePage({
                 ref={sourceRef}
                 className="player-overlay-btn"
                 onClick={() => {
+                  if (ServerSheet) {
+                    setShowServerSheet(true);
+                    return;
+                  }
                   const rect = sourceRef.current?.getBoundingClientRect();
                   if (rect)
                     setMenuPos({ top: rect.bottom + 6, left: rect.left });
@@ -1282,8 +1294,9 @@ export default function MoviePage({
                 title="Change source"
               >
                 <SourceIcon />
-                {PLAYER_SOURCES.find((s) => s.id === playerSource)?.label ??
-                  "Source"}
+                {ServerSheet
+              ? serverChoiceLabel(getServerChoice(), PLAYER_SOURCES)
+              : PLAYER_SOURCES.find((s) => s.id === playerSource)?.label ?? "Source"}
               </button>
               {/* Sub/Dub toggle: HiAnime, and anime-capable sources (Vidnest) on anime titles */}
               {(sourceIsAsync(playerSource) ||
@@ -1347,6 +1360,29 @@ export default function MoviePage({
                 </button>
               )}
             </div>
+            {ServerSheet && showServerSheet && (
+              <ServerSheet
+                title={title}
+                type="movie"
+                anime={!!isAnime}
+                choice={getServerChoice()}
+                dubMode={dubMode}
+                onDubChange={(next) => {
+                  setDubMode(next);
+                  storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, next);
+                  resetPlayerResolution();
+                }}
+                onSelect={(choice) =>
+                  applyServerChoice(choice, {
+                    playerSource,
+                    setPlayerSource,
+                    reset: resetPlayerResolution,
+                    playing,
+                  })
+                }
+                onClose={() => setShowServerSheet(false)}
+              />
+            )}
             {showSourceMenu && menuPos && (
               <div
                 className="source-dropdown source-dropdown--fixed"

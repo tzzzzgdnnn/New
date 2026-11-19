@@ -60,7 +60,8 @@ async function mount() {
     input.dispatchEvent(new win.KeyboardEvent("keydown", { key: k, bubbles: true }));
   });
   const text = () => host.textContent;
-  const spinning = () => !!host.querySelector(".spinner");
+  // iOS shows skeleton cards (not a spinner) while a search loads.
+  const spinning = () => !!host.querySelector(".sp-search-skel");
   return { root, host, input, type, key, text, spinning };
 }
 
@@ -74,6 +75,31 @@ await t("no 'No results' while the debounce is pending", async () => {
   await flush(450);
   assert.equal(calls.length, 1);
   assert.ok(m.spinning());
+  m.root.unmount();
+});
+
+await t("loading shows skeleton result cards, never a spinner", async () => {
+  calls.length = 0;
+  const m = await mount();
+  await m.type("dune s1");
+  await m.key("Enter");
+  await flush(10);
+  assert.ok(!m.host.querySelector(".spinner"), "spinner rendered on iOS");
+  const skel = m.host.querySelector(".sp-search-skel");
+  assert.ok(skel, "no skeleton while loading");
+  assert.equal(skel.getAttribute("role"), "status");
+  assert.equal(skel.getAttribute("aria-busy"), "true");
+  const cards = skel.querySelectorAll(".search-result.sp-search-skel-card");
+  assert.equal(cards.length, 6, "skeleton card count");
+  for (const c of cards) {
+    assert.ok(c.querySelector(".sp-search-skel-poster"), "card has a poster block");
+    assert.equal(c.querySelectorAll(".sp-skel-line").length, 2, "card has title + meta lines");
+    assert.ok(c.querySelector(".sp-search-skel-badge"), "card has a type badge block");
+  }
+  await act(async () => calls[0].resolve(json({ results: [result(7, "Dune")] })));
+  await flush(20);
+  assert.ok(!m.host.querySelector(".sp-search-skel"), "skeleton left after results");
+  assert.ok(m.text().includes("Dune"));
   m.root.unmount();
 });
 

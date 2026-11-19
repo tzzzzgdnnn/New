@@ -1,5 +1,9 @@
 import { isKidsProfileActive } from "./profileScope";
-import { filterKidSafeResults } from "./kidsFilter";
+import {
+  filterKidsResponse,
+  kidsRewritePath,
+  KIDS_FILTER_VERSION,
+} from "../platform/ios/kids/kidsFilter.js";
 import { storage } from "./storage";
 import { serverCatalog, groupedLabel } from "./servers/catalog";
 
@@ -153,6 +157,13 @@ function _releaseSlot() {
  *   (it then skips the shared in-flight request so aborting can't affect others)
  */
 export const tmdbFetch = async (path, apiKey, opts = {}) => {
+  // opts.kidsRaw: skip the Kids list filter. Only the Kids character catalog
+  // uses it, and it verifies the one title it keeps (kidsCatalog.js).
+  const view = (data) => (opts.kidsRaw ? data : forActiveProfile(path, data, apiKey));
+  if (apiKey) _lastApiKey = apiKey;
+  // Kids: search/discover never include adult titles and discover asks for
+  // kid certifications; every title list is filtered before it is returned.
+  if (isKidsProfileActive()) path = kidsRewritePath(path);
   const localizedPath = withLanguage(path);
   const cacheKey = `${apiKey}|${localizedPath}`;
   if (!apiKey) throw tmdbError("missing-token", "No TMDB token set. Add one in Settings.");
@@ -163,15 +174,15 @@ export const tmdbFetch = async (path, apiKey, opts = {}) => {
   }
   if (cached) {
     const age = Date.now() - cached.savedAt;
-    if (age < TMDB_CACHE_TTL) return forActiveProfile(cached.data);
+    if (age < TMDB_CACHE_TTL) return view(cached.data);
     if (age < TMDB_STALE_MAX) {
       // Stale: answer now, refresh quietly for next time.
       _tmdbNetwork(localizedPath, apiKey, cacheKey).catch(() => {});
-      return forActiveProfile(cached.data);
+      return view(cached.data);
     }
   }
-  if (opts.signal) return forActiveProfile(await _tmdbRequest(localizedPath, apiKey, cacheKey, opts.signal));
-  return forActiveProfile(await _tmdbNetwork(localizedPath, apiKey, cacheKey));
+  if (opts.signal) return view(await _tmdbRequest(localizedPath, apiKey, cacheKey, opts.signal));
+  return view(await _tmdbNetwork(localizedPath, apiKey, cacheKey));
 };
 
 /** Error with a `code` and a message fit to show the viewer. */
@@ -278,9 +289,18 @@ async function _tmdbRequest(localizedPath, apiKey, cacheKey, signal) {
   throw lastErr || tmdbError("unreachable", "Can't reach TMDB.");
 }
 
-// Responses are cached unfiltered; Kids profiles get a filtered view of lists.
-const forActiveProfile = (data) =>
-  isKidsProfileActive() ? filterKidSafeResults(data) : data;
+// Responses are cached unfiltered; Kids profiles get a filtered view of every
+// title list (US certification checked per title, unrated hidden).
+let _lastApiKey = null;
+const forActiveProfile = (path, data, apiKey) =>
+  isKidsProfileActive()
+    ? filterKidsResponse(path, data, (p) => tmdbFetch(p, apiKey))
+    : data;
+
+/** TMDB JSON with the token last used by the app (for code without one). */
+export const tmdbJson = (path) => tmdbFetch(path, _lastApiKey);
+/** The TMDB token last used by the app, or null. */
+export const lastTmdbKey = () => _lastApiKey;
 
 // ── Home trending lists, kept 30 minutes (across restarts) ────────────────
 // Saved as shown, so a Kids profile's copy is already filtered: a copy is
@@ -298,13 +318,14 @@ export function readTrendingCache(lang) {
   const usable =
     c?.lang === lang &&
     c.kids === isKidsProfileActive() &&
+    (!c.kids || c.kv === KIDS_FILTER_VERSION) &&
     Date.now() - c.ts < TRENDING_CACHE_TTL;
   return usable ? { movies: c.movies || [], tv: c.tv || [] } : null;
 }
 
 /** Save trending lists fetched in `lang` for the active profile. */
 export function saveTrendingCache(lang, movies, tv) {
-  storage.set(TRENDING_CACHE_KEY, { movies, tv, lang, kids: isKidsProfileActive(), ts: Date.now() });
+  storage.set(TRENDING_CACHE_KEY, { movies, tv, lang, kids: isKidsProfileActive(), kv: KIDS_FILTER_VERSION, ts: Date.now() });
 }
 
 // Documentation:

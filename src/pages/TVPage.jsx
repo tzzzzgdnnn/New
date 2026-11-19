@@ -6,7 +6,11 @@ import {
   publishPlayerContext,
   useAnimeServerGuard,
   useNativeServerSelect,
+  applyServerChoice,
 } from "../platform/ios/playerBridge";
+import { ServerSheet } from "../platform/ui";
+import { getServerChoice } from "../platform/ios/autoServer";
+import { serverChoiceLabel } from "../platform/ios/serverSheetLogic.js";
 import { setAutoPick } from "../platform/ios/autoServer";
 import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
 import { DetailSkeleton, SkeletonList } from "../platform/ios/Skeletons";
@@ -28,6 +32,8 @@ import {
   useMemo,
   useCallback,
   memo,
+  lazy,
+  Suspense,
 } from "react";
 import {
   EPISODE_GROUP_IDS,
@@ -78,6 +84,8 @@ import {
   CastIcon,
 } from "../components/Icons";
 import DownloadModal from "../components/DownloadModal";
+// iOS: pick several episodes to download at one quality (compiled out of desktop).
+const EpisodePicker = IS_IOS ? lazy(() => import("../platform/ios/EpisodePicker")) : null;
 import TrailerModal from "../components/TrailerModal";
 import BlockedStatsModal from "../components/BlockedStatsModal";
 import { useBlockedStats } from "../utils/useBlockedStats";
@@ -514,6 +522,8 @@ export default function TVPage({
   const [showDownload, setShowDownload] = useState(false);
   // iOS: the episode the Download button targets ({ season, episode }).
   const [downloadTarget, setDownloadTarget] = useState(null);
+  // iOS: the multi-episode download picker is open.
+  const [showEpisodePicker, setShowEpisodePicker] = useState(false);
   const [trailerKey, setTrailerKey] = useState(null);
   const [showTrailer, setShowTrailer] = useState(false);
   const [showCast, setShowCast] = useState(false);
@@ -528,6 +538,8 @@ export default function TVPage({
   const playerAccentColor = playerSettings?.accentColor ?? null;
   const playerSubLang = playerSettings?.subtitleLang ?? null;
   const [showSourceMenu, setShowSourceMenu] = useState(false);
+  // iOS: server bottom sheet (Auto + manual servers + Sub/Dub for anime)
+  const [showServerSheet, setShowServerSheet] = useState(false);
   // Derived from playerSource, computed once per render instead of 5-6× inline
   const isAsync = useMemo(() => sourceIsAsync(playerSource), [playerSource]);
   const supportsProgress = useMemo(
@@ -1824,8 +1836,10 @@ export default function TVPage({
       setDubMode(mode);
       storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, mode);
     }
-    setPlayerSource(sourceId);
-    storage.set(STORAGE_KEYS.PLAYER_SOURCE, sourceId);
+    if (sourceId) {
+      setPlayerSource(sourceId);
+      storage.set(STORAGE_KEYS.PLAYER_SOURCE, sourceId);
+    }
     resetPlayerResolution();
   });
 
@@ -1861,6 +1875,39 @@ export default function TVPage({
   }, [item.id, progress, watched, selectedSeason, currentSeasonEpisodes, displaySeasonCount]);
 
   // iOS: download state of the episode the Resume/Play button targets.
+  // iOS episode picker: a season's episodes (the one on screen as listed,
+  // TMDB seasons fetched, episode-group / AniList seasons from what we have).
+  // Only episode-group seasons map to another TMDB season/episode for servers;
+  // everything else uses the same season/episode as a single download.
+  const loadPickerEpisodes = useCallback(
+    async (season) => {
+      const shape = (eps) =>
+        (eps || []).map((ep) => ({
+          episode_number: ep.episode_number,
+          name: ep.name,
+          runtime: ep.runtime,
+          _tmdbSeason: ep._tmdbSeason,
+          _tmdbAbsolute: ep._tmdbSeason != null ? ep._tmdbAbsolute : undefined,
+        }));
+      if (season === selectedSeason && currentSeasonEpisodes.length) return shape(currentSeasonEpisodes);
+      if (episodeGroupData?.groups) {
+        const group = [...episodeGroupData.groups].sort((a, b) => a.order - b.order)[season - 1];
+        return shape(
+          [...(group?.episodes || [])]
+            .sort((a, b) => a.order - b.order)
+            .map((ep, i) => ({ ...ep, episode_number: i + 1, _tmdbSeason: ep.season_number, _tmdbAbsolute: ep.episode_number })),
+        );
+      }
+      if (!useAnilistSeasons) {
+        const data = await tmdbFetch(`/tv/${item.id}/season/${season}`, apiKey);
+        return shape(data?.episodes);
+      }
+      const count = seasons.find((x) => x.season_number === season)?.episode_count || 0;
+      return Array.from({ length: count }, (_, i) => ({ episode_number: i + 1, name: `Episode ${i + 1}` }));
+    },
+    [selectedSeason, currentSeasonEpisodes, episodeGroupData, useAnilistSeasons, item.id, apiKey, seasons],
+  );
+
   const planDownload = resumePlan
     ? (downloadsByEpisodeKey.get(`s${resumePlan.season}e${resumePlan.episode}`) ?? null)
     : null;
@@ -2641,6 +2688,10 @@ export default function TVPage({
                     ref={sourceRef}
                     className="player-overlay-btn"
                     onClick={() => {
+                      if (ServerSheet) {
+                        setShowServerSheet(true);
+                        return;
+                      }
                       const rect = sourceRef.current?.getBoundingClientRect();
                       if (rect)
                         setMenuPos({ top: rect.bottom + 6, left: rect.left });
@@ -2649,8 +2700,9 @@ export default function TVPage({
                     title="Change source"
                   >
                     <SourceIcon />
-                    {PLAYER_SOURCES.find((s) => s.id === playerSource)?.label ??
-                      "Source"}
+                    {ServerSheet
+                  ? serverChoiceLabel(getServerChoice(), PLAYER_SOURCES)
+                  : PLAYER_SOURCES.find((s) => s.id === playerSource)?.label ?? "Source"}
                   </button>
                   {/* Sub/Dub toggle: HiAnime, and anime-capable sources (Vidnest) on anime titles */}
                   {(isAsync ||
@@ -2715,6 +2767,29 @@ export default function TVPage({
                     </button>
                   )}
                 </div>
+                {ServerSheet && showServerSheet && (
+                  <ServerSheet
+                    title={title}
+                    type="tv"
+                    anime={!!isAnime}
+                    choice={getServerChoice()}
+                    dubMode={dubMode}
+                    onDubChange={(next) => {
+                      setDubMode(next);
+                      storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, next);
+                      resetPlayerResolution();
+                    }}
+                    onSelect={(choice) =>
+                      applyServerChoice(choice, {
+                        playerSource,
+                        setPlayerSource,
+                        reset: resetPlayerResolution,
+                        playing,
+                      })
+                    }
+                    onClose={() => setShowServerSheet(false)}
+                  />
+                )}
                 {showSourceMenu && menuPos && (
                   <div
                     className="source-dropdown source-dropdown--fixed"
@@ -2946,6 +3021,15 @@ export default function TVPage({
 
           <div className="section">
             <div className="section-title">Episodes</div>
+            {IS_IOS && seasons.length > 0 && !restricted && (
+              <button
+                type="button"
+                className="btn btn-ghost sb-episodes-download"
+                onClick={() => setShowEpisodePicker(true)}
+              >
+                <DownloadIcon /> Download Episodes
+              </button>
+            )}
             {seasons.length > 0 && (
               <div className="season-selector">
                 {seasons.map((s) => {
@@ -3102,6 +3186,25 @@ export default function TVPage({
           alltimeTotal={blockedAlltime}
           onClose={() => setShowBlockedModal(false)}
         />
+      )}
+
+      {EpisodePicker && showEpisodePicker && (
+        <Suspense fallback={null}>
+          <EpisodePicker
+            show={{ tmdbId: item.id, name: item.name || item.title, posterPath: d.poster_path || null }}
+            seasons={seasons}
+            initialSeason={selectedSeason}
+            loadEpisodes={loadPickerEpisodes}
+            ctxFor={(season) =>
+              isAnime && anilistSeasons?.length
+                ? { anilistId: anilistSeasons.find((s) => s.seasonNum === season)?.id ?? anilistData?.id ?? null }
+                : {}
+            }
+            downloads={downloads}
+            onDownloadStarted={onDownloadStarted}
+            onClose={() => setShowEpisodePicker(false)}
+          />
+        </Suspense>
       )}
 
       {(showDownload || downloadTarget) && (

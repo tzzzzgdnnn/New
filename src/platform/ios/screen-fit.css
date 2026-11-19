@@ -1,0 +1,153 @@
+/* ── iPhone screen fit ──────────────────────────────────────────────────────
+   Loaded last on iOS (main.ios.jsx), after ios.css and polish.css. Sizes
+   every page for phones 375–430pt wide in portrait and 375–430pt tall in
+   landscape: display titles scale with clamp() and stop at two lines, and
+   gutters respect the safe-area insets (notch / Dynamic Island / home bar).
+   Selectors carry `html.sb-ios` so they also beat the lazily loaded sheets
+   (settings.css, profiles.css, downloads-phone.css) that land after this one.
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.sb-ios {
+  /* Height left for content between the top bar and the tab bar. */
+  --sp-fit-top: calc(var(--sp-topbar-h, 52px) + env(safe-area-inset-top));
+  --sp-fit-bottom: calc(var(--sp-tabbar-h, 49px) + env(safe-area-inset-bottom));
+  --sp-fit-gutter-l: max(16px, env(safe-area-inset-left));
+  --sp-fit-gutter-r: max(16px, env(safe-area-inset-right));
+}
+
+/* Two-line clamp for every display title. */
+html.sb-ios .detail-title,
+html.sb-ios .sb-bill-title,
+html.sb-ios .library-title,
+html.sb-ios .pd-page__title:not(.pd-show-head__title),
+html.sb-ios .pd-show-head__title .sp-clamp2,
+html.sb-ios .sps-large-title,
+html.sb-ios .sp-who-title,
+html.sb-ios .search-result-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* ── Home billboard ───────────────────────────────────────────────────── */
+html.sb-ios .sb-bill-title {
+  font-size: clamp(32px, 10.5vw, 46px);
+  line-height: 1;
+  max-width: 100%;
+  /* A tighter glow: the clamp clips anything outside the box. */
+  text-shadow: 0 2px 14px rgba(0, 0, 0, .75);
+  padding-top: .06em;
+}
+html.sb-ios .sb-bill-logo { max-height: clamp(72px, 14vh, 120px); max-width: min(78vw, 360px); }
+html.sb-ios .sb-bill-body {
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+}
+@media (orientation: portrait) and (max-width: 760px) {
+  /* Never taller than the space between the bars on a 667pt-tall phone. */
+  html.sb-ios .sb-bill {
+    height: clamp(420px, 72vh, 640px);
+    min-height: 0;
+    max-height: calc(100vh - var(--sp-fit-top) - var(--sp-fit-bottom) + 40px);
+  }
+}
+
+/* ── Detail page (movie / series) ─────────────────────────────────────── */
+html.sb-ios .detail-title {
+  font-size: clamp(26px, 8vw, 36px);
+  line-height: 1.04;
+  margin-bottom: 10px;
+  max-width: 100%;
+}
+html.sb-ios .detail-content {
+  padding-left: var(--sp-fit-gutter-l);
+  padding-right: var(--sp-fit-gutter-r);
+}
+html.sb-ios .detail-overview { overflow-wrap: break-word; }
+
+/* ── Library / My List ─────────────────────────────────────────────────── */
+html.sb-ios .library-header {
+  padding: 24px var(--sp-fit-gutter-r) 0 var(--sp-fit-gutter-l);
+}
+html.sb-ios .library-title { font-size: clamp(32px, 9.5vw, 44px); line-height: 1; }
+
+/* ── Downloads (list + show detail view) ──────────────────────────────── */
+html.sb-ios .pd-page__title { font-size: clamp(28px, 8.5vw, 40px); }
+html.sb-ios .pd-show-head__title { font-size: clamp(22px, 6.6vw, 30px); line-height: 1.1; }
+html.sb-ios .pd-show-head__title .sp-clamp2 { text-align: left; }
+
+/* ── Settings ─────────────────────────────────────────────────────────── */
+html.sb-ios .sps-large-title { font-size: clamp(28px, 8.6vw, 34px); }
+
+/* ── Profiles (Who's watching, editor, PIN) ───────────────────────────── */
+html.sb-ios .sp-who-title { font-size: clamp(22px, 7vw, 28px); margin-bottom: clamp(18px, 5vh, 32px); }
+html.sb-ios .sp-who-body {
+  padding-left: max(24px, env(safe-area-inset-left));
+  padding-right: max(24px, env(safe-area-inset-right));
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
+}
+@media (max-width: 380px) {
+  html.sb-ios .sp-who-grid { grid-template-columns: repeat(2, 112px); gap: 20px 24px; }
+}
+
+/* ── Search ───────────────────────────────────────────────────────────── */
+html.sb-ios .search-result-info { min-width: 0; }
+
+/* ── Player overlay (inline player on the detail page) ────────────────── */
+html.sb-ios .player-overlay-btn { min-height: 32px; padding: 6px 10px; max-width: calc(100% - 24px); }
+html.sb-ios .player-overlay-group { max-width: calc(100% - 16px); flex-wrap: wrap; justify-content: flex-end; }
+html.sb-ios .sb-native-note {
+  left: max(8px, env(safe-area-inset-left));
+  max-width: calc(100% - 16px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Landscape phones (375–430pt tall) ────────────────────────────────── */
+@media (orientation: landscape) and (max-height: 500px) {
+  /* Billboard fills exactly the space between the bars; copy sits left. */
+  html.sb-ios .sb-bill {
+    height: calc(100vh - var(--sp-fit-top) - var(--sp-fit-bottom));
+    min-height: 240px;
+    max-height: none;
+  }
+  html.sb-ios .sb-bill-body {
+    right: auto;
+    max-width: min(62%, 560px);
+    padding: 0 16px 14px max(28px, calc(env(safe-area-inset-left) + 12px));
+    align-items: flex-start;
+    text-align: left;
+  }
+  html.sb-ios .sb-bill-kicker { font-size: 10px; letter-spacing: 2px; margin-bottom: 6px; }
+  html.sb-ios .sb-bill-n { font-size: 20px; }
+  html.sb-ios .sb-bill-logo {
+    max-height: clamp(44px, 17vh, 84px);
+    max-width: min(320px, 40vw);
+    object-position: left bottom;
+    margin-bottom: 8px;
+  }
+  html.sb-ios .sb-bill-title { font-size: clamp(26px, 9vh, 40px); margin-bottom: 8px; }
+  html.sb-ios .sb-bill-meta { margin-bottom: 10px; font-size: 12px; justify-content: flex-start; }
+  html.sb-ios .sb-bill-actions { width: auto; }
+  html.sb-ios .sb-bill-actions .sb-btn-play,
+  html.sb-ios .sb-bill-actions .sb-btn-info { flex: 0 0 auto; padding: 9px 18px; }
+  html.sb-ios .sb-bill-dots { margin-top: 10px; }
+
+  html.sb-ios .detail-title { font-size: clamp(24px, 8vh, 34px); }
+  html.sb-ios .detail-content { padding-top: 18px; padding-bottom: 16px; }
+
+  html.sb-ios .library-header { padding-top: 16px; }
+  html.sb-ios .library-title { font-size: clamp(28px, 9vh, 38px); }
+  html.sb-ios .pd-page__title { font-size: clamp(26px, 8.5vh, 34px); }
+  html.sb-ios .pd-show-head__title { font-size: clamp(20px, 6.5vh, 26px); }
+  html.sb-ios .sps-large-title { font-size: clamp(24px, 7.5vh, 30px); }
+
+  html.sb-ios .sp-who-body { justify-content: flex-start; padding-top: 8px; }
+  html.sb-ios .sp-who-title { font-size: clamp(20px, 6.5vh, 26px); margin-bottom: 14px; }
+  html.sb-ios .sp-who-grid { gap: 14px 28px; }
+}

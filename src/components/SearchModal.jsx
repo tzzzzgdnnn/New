@@ -4,6 +4,8 @@ import { IS_IOS } from "../platform/target";
 import { diag } from "../utils/diag";
 import { SearchIcon, CloseIcon } from "./Icons";
 import { storage } from "../utils/storage";
+import { useKidsFilter } from "../platform/ios/kids/useKidsFilter";
+import { SearchSkeleton } from "../platform/ios/Skeletons";
 
 const HISTORY_KEY = "searchHistory";
 const MAX_HISTORY = 12;
@@ -20,7 +22,10 @@ function saveHistory(history) {
 
 export default function SearchModal({ apiKey, onSelect, onClose, offline }) {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState([]);
+  const [rawResults, setResults] = useState([]);
+  // Kids: tmdbFetch already returns only kid-rated titles; this re-checks
+  // every shown result against the same rules.
+  const results = useKidsFilter(rawResults, apiKey);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   // Query the shown results belong to: "No results" only for a finished
@@ -235,11 +240,14 @@ export default function SearchModal({ apiKey, onSelect, onClose, offline }) {
             </div>
           )}
 
-          {!offline && loading && (
+          {!offline && loading && (IS_IOS ? (
+            // iOS: placeholder cards in the results' shape instead of a spinner.
+            <SearchSkeleton />
+          ) : (
             <div className="loader">
               <div className="spinner" />
             </div>
-          )}
+          ))}
 
           {!offline && !loading && error && query.trim() && (
             <div className="search-empty search-error" role="alert">
