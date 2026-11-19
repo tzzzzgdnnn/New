@@ -9,7 +9,12 @@ import {
   NATIVE_MIRRORED_KEYS,
   isProfileScoped,
 } from "../../../utils/storage";
-import { profileNamespace, scopedKey, setActiveProfileScope } from "../../../utils/profileScope";
+import {
+  getActiveProfileId,
+  profileNamespace,
+  scopedKey,
+  setActiveProfileScope,
+} from "../../../utils/profileScope";
 import { defaultAvatarFor } from "./avatars";
 import { diag } from "../../../utils/diag";
 
@@ -233,10 +238,13 @@ export async function updateProfile(id, changes) {
 
 /**
  * Delete a profile and everything stored for it. The last profile can't go.
+ * Deleting the active profile also ends its storage scope, so a late write
+ * can't recreate its data under a profile that no longer exists.
  */
 export async function deleteProfile(id) {
   const profiles = listProfiles();
   if (profiles.length <= 1) throw new Error("The last profile can't be deleted");
+  if (getActiveProfileId() === id) setActiveProfileScope(null);
   const ns = STORAGE_PREFIX + profileNamespace(id);
   Object.keys(localStorage)
     .filter((k) => k.startsWith(ns))

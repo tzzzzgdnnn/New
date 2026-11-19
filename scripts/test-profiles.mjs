@@ -120,6 +120,16 @@ await t("delete removes only that profile's data; last profile can't go", async 
   await assert.rejects(() => store.deleteProfile(main.id));
 });
 
+await t("deleting the active profile: a late write can't recreate its data", async () => {
+  const doomed = await store.createProfile({ name: "Doomed" });
+  store.activateProfile(doomed); storage.set("history", [{ id: 4 }]);
+  await store.deleteProfile(doomed.id);
+  assert.equal(getActiveProfileId(), null);
+  storage.set("progress", { movie_4: 30 }); // e.g. a progress report landing late
+  assert.ok(![...mem.keys()].some((k) => k.includes(`p.${doomed.id}.`)), "deleted profile's data came back");
+  store.activateProfile(main);
+});
+
 await t("profile cap is enforced", async () => {
   while (store.listProfiles().length < store.MAX_PROFILES) await store.createProfile({ name: "x" });
   await assert.rejects(() => store.createProfile({ name: "too many" }));

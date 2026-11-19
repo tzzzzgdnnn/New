@@ -125,6 +125,13 @@ export default function ProfileGate({ children }) {
   const removeEdited = () => {
     const removedId = editing.id;
     setEditing(null);
+    if (removedId === activeRef.current?.id) {
+      // Unmount that person's app before their data is wiped, so nothing it
+      // writes on the way out brings the data back.
+      flushSync(() => setActive(null));
+      try { sessionStorage.removeItem(SESSION_KEY); } catch {}
+      setOverlay(PICK);
+    }
     // Refresh once the delete has really happened (it is async).
     deleteProfile(removedId)
       .catch((err) => {
@@ -132,11 +139,6 @@ export default function ProfileGate({ children }) {
         setError(err?.message || "Could not delete the profile");
       })
       .finally(refresh);
-    if (removedId === active?.id) {
-      try { sessionStorage.removeItem(SESSION_KEY); } catch {}
-      setActive(null);
-      setOverlay(PICK);
-    }
   };
 
   const ctx = useMemo(
