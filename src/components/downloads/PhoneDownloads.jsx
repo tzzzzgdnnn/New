@@ -240,10 +240,10 @@ export default function PhoneDownloads({
           <div className="pd-show-head__body">
             {shown.tmdbId ? (
               <button type="button" className="pd-page__title pd-show-head__title" onClick={openTitle(shown.episodes[0]) || undefined}>
-                {shown.name}
+                <span className="sp-clamp2">{shown.name}</span>
               </button>
             ) : (
-              <div className="pd-page__title pd-show-head__title">{shown.name}</div>
+              <div className="pd-page__title pd-show-head__title"><span className="sp-clamp2">{shown.name}</span></div>
             )}
             <div className="pd-page__summary">{showSummary(t)}</div>
             {showStateLine(t) && <div className="pd-show-head__states">{showStateLine(t)}</div>}

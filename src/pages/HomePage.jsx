@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import MediaCard from "../components/MediaCard";
-import TrendingCarousel from "../components/TrendingCarousel";
+import DesktopCarousel from "../components/TrendingCarousel";
 import { PlayIcon, StarIcon } from "../components/Icons";
 import { imgUrl, tmdbFetch } from "../utils/api";
 import { useRatings, getRatingForItem } from "../utils/useRatings";
@@ -8,6 +8,9 @@ import { isRestricted } from "../utils/ageRating";
 import { storage } from "../utils/storage";
 import { loadHomeLayout, loadHomeViewMode } from "../utils/homeLayout";
 import { IS_IOS } from "../platform/target";
+// Desktop-only rail: a constant null on iOS so the component (and its CSS
+// classes) tree-shake out of the phone bundle.
+const TrendingCarousel = IS_IOS ? () => null : DesktopCarousel;
 import HomeSections, { Billboard, PosterRail, WideRail } from "../platform/ios/HomeSections";
 import { HomeSkeleton } from "../platform/ios/Skeletons";
 import { useKidsFilter } from "../platform/ios/kids/useKidsFilter";

@@ -64,3 +64,21 @@ export function DetailSkeleton() {
     </div>
   );
 }
+
+/** Search results while a query loads: cards shaped like `.search-result`. */
+export function SearchSkeleton({ rows = 6 }) {
+  return (
+    <div className="sp-search-skel" role="status" aria-label="Searching" aria-busy="true">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="search-result sp-search-skel-card" aria-hidden="true">
+          <div className="sp-skel sp-search-skel-poster" />
+          <div className="search-result-info sp-skel-text">
+            <div className="sp-skel sp-skel-line sp-search-skel-title" />
+            <div className="sp-skel sp-skel-line sp-skel-short sp-search-skel-meta" />
+          </div>
+          <div className="sp-skel sp-search-skel-badge" />
+        </div>
+      ))}
+    </div>
+  );
+}

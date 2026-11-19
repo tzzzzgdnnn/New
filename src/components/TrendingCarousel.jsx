@@ -22,7 +22,7 @@ function visibilityRatio(el, scrollRoot) {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-const RatingBadge = memo(function RatingBadge({ cert, restricted }) {
+const RatingBadge = /* @__PURE__ */ memo(function RatingBadge({ cert, restricted }) {
   if (!cert) return null;
   return (
     <span
@@ -34,7 +34,7 @@ const RatingBadge = memo(function RatingBadge({ cert, restricted }) {
   );
 });
 
-const CarouselSlot = memo(function CarouselSlot({
+const CarouselSlot = /* @__PURE__ */ memo(function CarouselSlot({
   item,
   offset,
   onSelect,
