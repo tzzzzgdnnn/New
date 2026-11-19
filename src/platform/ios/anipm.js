@@ -22,13 +22,25 @@ async function nativeGet(url, headers) {
   return parse(res.data);
 }
 
-let http = nativeGet;
+// Web app: ani.pm's API has no CORS, so calls go through our relay (a
+// Cloudflare Worker, relay/worker.js). The video itself plays straight from
+// the CDN in Safari's own player.
+export const ANIPM_RELAY = import.meta.env?.VITE_ANIPM_RELAY || "";
+async function relayGet(url, headers, signal) {
+  const u = `${ANIPM_RELAY}/?u=${encodeURIComponent(url)}&r=${encodeURIComponent(headers?.Referer || "https://ani.pm/")}`;
+  const res = await fetch(u, { signal: signal || AbortSignal.timeout?.(8000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+const webRelay = !!(import.meta.env?.VITE_WEB && ANIPM_RELAY);
+
+let http = webRelay ? relayGet : nativeGet;
 /** Tests swap the HTTP client. */
-export const setAnipmHttp = (fn) => (http = fn || nativeGet);
+export const setAnipmHttp = (fn) => (http = fn || (webRelay ? relayGet : nativeGet));
 
 const nativeHttpAvailable = () => {
   try {
-    return http !== nativeGet || !!window.Capacitor?.isNativePlatform?.();
+    return http !== nativeGet || webRelay || !!window.Capacitor?.isNativePlatform?.();
   } catch {
     return false;
   }
@@ -125,3 +137,10 @@ export function anipmAvailability(ctx) {
 
 /** Forget every lookup (tests). */
 export const clearAnipmCache = () => cache.clear();
+
+/** Finished, still-fresh lookup for `ctx` (sync), or null. */
+export function cachedAnipm(ctx, now = Date.now()) {
+  const e = cache.get(anipmKey(ctx));
+  return fresh(e, now) && e.result?.ok ? e.result : null;
+}
+export const anipmWebReady = webRelay;

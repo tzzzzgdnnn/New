@@ -30,7 +30,7 @@ class UnwrapLoader extends Hls.DefaultConfig.loader {
  * Play `src` inside `box`. Calls onFail() if nothing plays within `timeoutMs`
  * or on a fatal error. Returns a stop() function.
  */
-export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 12000 } = {}) {
+export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 12000, nativeOnly = false } = {}) {
   const video = document.createElement("video");
   video.className = "sb-direct-video";
   video.controls = true;
@@ -70,13 +70,13 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     hls.attachMedia(video);
     video.play().catch(() => {});
   };
-  if (nativeHls && isIPhone) {
+  if (nativeHls && (isIPhone || nativeOnly)) {
     // Safari's own HLS (Apple's player, like the app): fastest start. If it
     // can't read this host's segments, hls.js takes over.
     video.src = src;
     video.addEventListener("error", () => {
       if (done || hls) return;
-      if (Hls.isSupported()) { video.removeAttribute("src"); video.load(); startHls(); }
+      if (Hls.isSupported() && !nativeOnly) { video.removeAttribute("src"); video.load(); startHls(); }
       else fail("video error");
     });
   } else if (Hls.isSupported()) {

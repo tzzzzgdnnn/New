@@ -437,13 +437,14 @@ const WEB_DIRECT_SOURCES = [
     label: "Cinejoy",
     tag: null,
     note: "Direct, no ads",
-    supportsAnime: false,
+    supportsAnime: true,
+    animeUrl: (id, ep, lang) => `https://cinejoy.invalid/anime/${id}/${ep}/${lang || "sub"}`,
     movieUrl: (id) => `https://cinejoy.invalid/movie/${id}`,
     tvUrl: (id, season, ep) => `https://cinejoy.invalid/tv/${id}/${season}/${ep}`,
   },
 ];
 export const PLAYER_SOURCES = import.meta.env?.VITE_WEB
-  ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id) && s.id !== "vidnest").sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"))]
+  ? [...WEB_DIRECT_SOURCES]
   : ALL_PLAYER_SOURCES;
 
 // Sources that require a transparent webRequest intercept to load properly

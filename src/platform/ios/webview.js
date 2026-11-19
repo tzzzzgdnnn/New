@@ -15,7 +15,7 @@ import { probeUrl } from "../../utils/servers/probe";
 import { isAutoPick, isAnipmPinned, recordLookup, serverStats } from "./autoServer";
 import { autoOrder, prefetchRanking } from "./autoRank";
 import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
-import { anipmCandidates, ANIPM_ID } from "./anipm";
+import { anipmCandidates, ANIPM_ID, cachedAnipm, prefetchAnipm, anipmWebReady } from "./anipm";
 import { movyCandidates, MOVY_ID } from "./movy";
 import { cinejoyCandidates, cachedCinejoy, prefetchCinejoy, CINEJOY_ID } from "./cinejoy";
 import { playDirect } from "../web/directPlayer";
@@ -456,7 +456,11 @@ function upgrade(wv) {
   // Falls back to the embed server if Cinejoy has nothing or it won't play.
   let stopDirect = null;
   let directFor = null;
-  // Cinejoy has nothing for this title: the next server's page for it.
+  // Nothing ad-free has this one: say so (never an ad/captcha embed).
+  const noStream = () => {
+    iframe.src = "about:blank";
+    showCard("Not available on the web yet. Try again later or use the app.", false);
+  };
   const embedFor = (url) => {
     const m = /cinejoy\.invalid\/(movie|tv)\/([^/?#]+)(?:\/(\d+)\/(\d+))?/.exec(url);
     if (!m) return url;
@@ -464,9 +468,52 @@ function upgrade(wv) {
     if (!next) return url;
     return m[1] === "movie" ? next.movieUrl(m[2]) : next.tvUrl(m[2], m[3] || 1, m[4] || 1);
   };
+  // Web app, anime: ani.pm's stream (API through our relay) in Apple's own
+  // player. Dub never silently plays Sub. Falls back to the embed server.
+  const tryWebAnipm = (url, ctx) => {
+    if (!anipmWebReady || !ctx.anilistId) { directFor = url; noStream(); return true; }
+    const wanted = ctx.dubMode === "dub" ? "dub" : "sub";
+    directFor = url;
+    iframe.src = "about:blank";
+    fire("dom-ready");
+    const fallback = () => {
+      if (directFor !== url) return;
+      noStream();
+    };
+    const start = (r) => {
+      hideCard();
+      log("playing", `ani.pm (${r.lang})`);
+      fire("did-finish-load");
+      stopDirect = playDirect(wv, r.source, {
+        startAt: ctx.startAt || 0,
+        nativeOnly: true,
+        onFail: (why) => {
+          if (directFor !== url) return;
+          diag("player", `web ani.pm failed: ${why}`);
+          stopDirect = null;
+          fallback();
+        },
+      });
+    };
+    const hit = cachedAnipm(ctx);
+    if (hit && hit.lang === wanted) {
+      start(hit);
+      return true;
+    }
+    showCard("Finding the stream…", false);
+    Promise.race([prefetchAnipm(ctx), new Promise((r) => setTimeout(() => r(null), 9000))])
+      .then((r) => {
+        if (directFor !== url) return;
+        if (!r?.ok || r.lang !== wanted) throw new Error("no stream");
+        start(r);
+      })
+      .catch(fallback);
+    return true;
+  };
   const tryWebDirect = (url) => {
     const ctx = currentCtx();
-    if (!ctx || ctx.isAnime || !ctx.tmdbId) return false;
+    if (ctx?.isAnime) return tryWebAnipm(url, ctx);
+    if (!ctx || !ctx.tmdbId) return false;
     const picked = readStored("playerSource");
     if (picked && picked !== CINEJOY_ID && !isAutoPick() && !/cinejoy\.invalid/.test(url)) return false;
     directFor = url;
@@ -484,7 +531,7 @@ function upgrade(wv) {
           if (directFor !== url) return;
           diag("player", `web direct failed: ${why}`);
           stopDirect = null;
-          loadUrl(embedFor(url), { webOnly: true });
+          noStream();
         },
       });
     };
@@ -501,7 +548,7 @@ function upgrade(wv) {
         start(r.source);
       })
       .catch(() => {
-        if (directFor === url) { hideCard(); loadUrl(embedFor(url), { webOnly: true }); }
+        if (directFor === url) noStream();
       });
     return true;
   };
