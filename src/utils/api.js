@@ -1,6 +1,7 @@
 import { isKidsProfileActive } from "./profileScope";
 import { filterKidSafeResults } from "./kidsFilter";
 import { storage } from "./storage";
+import { serverCatalog, groupedLabel } from "./servers/catalog";
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMG_BASE = "https://image.tmdb.org/t/p";
@@ -400,8 +401,9 @@ export const PLAYER_SOURCES = [
     animeTmdb: true, // carries anime under its TMDB id
     label: "Vidrift",
     tag: null,
-    note: "Multi Lang, Anime ✓", // Has Anime sub/dub and multi language support but not with anilistId
+    note: "Multi Lang, Anime ✓",
     supportsProgress: true,
+    supportsAnime: true, // AniList route; "?dub=1" starts on the English dub
     colorParam: "brandColor",
     langParam: "sub",
     params: {
@@ -411,6 +413,8 @@ export const PLAYER_SOURCES = [
     movieUrl: (id) => `https://embed.vidrift.net/embed/movie/${id}`,
     tvUrl: (id, season, ep) =>
       `https://embed.vidrift.net/embed/tv/${id}/${season}/${ep}`,
+    animeUrl: (anilistId, ep, lang) =>
+      `https://embed.vidrift.net/embed/anilist/${anilistId}/${ep}${lang === "dub" ? "?dub=1" : ""}`,
   },
   {
     id: "vidnest",
@@ -966,23 +970,14 @@ export const fetchEpisodeGroup = async (groupId, apiKey) => {
   return data;
 };
 
-// Native player server list. Anime titles list only the viewer's chosen
-// audio mode: anime-route servers appear once as "Vidnest · Sub" or
-// "Vidnest · Dub". In Dub mode the TMDB-route servers are left out because
-// they only carry the subbed version (unless no anime route exists at all).
-export const nativeServerList = (isAnime, dubMode = "sub") => {
-  const mode = dubMode === "dub" ? "dub" : "sub";
-  const suffix = mode === "dub" ? "Dub" : "Sub";
-  const usable = sourcesForContent(isAnime).filter((s) => !s.async);
-  if (!isAnime) return usable.map((s) => ({ id: s.id, label: s.label }));
-  const animeRoutes = usable.filter((s) => s.animeUrl);
-  const list = mode === "dub" && animeRoutes.length ? animeRoutes : usable;
-  return list.map((s) =>
-    s.animeUrl
-      ? { id: `${s.id}:${mode}`, label: `${s.label} · ${suffix}` }
-      : { id: s.id, label: s.label },
-  );
-};
+// Native player server list: every server for this kind of content. Anime
+// lists all of them under Sub and every anime-route server under Dub, each
+// labelled with its group ("Vidnest · Dub").
+export const nativeServerList = (isAnime) =>
+  serverCatalog(sourcesForContent(isAnime).filter((s) => !s.async), isAnime).map((e) => ({
+    id: e.key,
+    label: groupedLabel(e),
+  }));
 
 // Server list split by content type: anime titles get anime servers only,
 // movies/series get the regular servers only (anime-only ones hidden).

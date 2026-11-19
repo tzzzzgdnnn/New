@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import { IS_IOS } from "../target";
 import { storage, STORAGE_KEYS } from "../../utils/storage";
 import { PLAYER_SOURCES, sourcesForContent } from "../../utils/api";
+import { parseServerKey } from "../../utils/servers/catalog";
 
 export const normalizeDubMode = (mode) => (mode === "dub" ? "dub" : "sub");
 
@@ -44,10 +45,9 @@ export function useNativeServerSelect(handler) {
     const onSelect = (e) => {
       const raw = typeof e?.detail === "string" ? e.detail : null;
       if (!raw) return;
-      const m = raw.match(/^(.*):(sub|dub)$/);
-      const sourceId = m ? m[1] : raw;
+      const { sourceId, mode } = parseServerKey(raw);
       if (!PLAYER_SOURCES.some((s) => s.id === sourceId)) return;
-      ref.current?.({ sourceId, dubMode: m ? m[2] : null });
+      ref.current?.({ sourceId, dubMode: mode });
     };
     window.addEventListener("sb-select-server", onSelect);
     return () => window.removeEventListener("sb-select-server", onSelect);

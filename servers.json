@@ -78,7 +78,7 @@
       "mirrors": [] }
   ],
   "builtin": {
-    "_comment": "Overrides for the app's built-in sources by id: set enabled:false to hide one, or movie/tv templates to move it to a new domain.",
+    "_comment": "Overrides for the app's built-in sources by id: set enabled:false to hide one, movie/tv templates to move it to a new domain, or an anime template ({anilist}, {episode}, {lang} = sub|dub) to list it under Dub as well as Sub. Entries in servers[] take the same optional anime template.",
     "vidsrc": { "enabled": true },
     "vidfast": { "enabled": true },
     "vidlove": { "enabled": true },

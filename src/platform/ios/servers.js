@@ -20,7 +20,13 @@ const fill = (tpl, v) =>
     .replace(/\{tmdb\}/g, v.id)
     .replace(/\{imdb\}/g, v.id)
     .replace(/\{season\}/g, v.season ?? 1)
-    .replace(/\{episode\}/g, v.ep ?? 1);
+    .replace(/\{episode\}/g, v.ep ?? 1)
+    .replace(/\{anilist\}/g, v.id)
+    .replace(/\{lang\}/g, v.lang ?? "sub");
+// Optional "anime" template ({anilist}, {episode}, {lang}): lists the server
+// under both Sub and Dub for anime.
+const animeRoute = (tpl) =>
+  tpl ? { supportsAnime: true, animeUrl: (id, ep, lang) => fill(tpl, { id, ep, lang }) } : {};
 const originOf = (u) => {
   try {
     return new URL(u).origin;
@@ -42,7 +48,7 @@ export function applyServers(cfg) {
     const c = { ...s };
     if (o.movie) c.movieUrl = (id) => fill(o.movie, { id });
     if (o.tv) c.tvUrl = (id, season, ep) => fill(o.tv, { id, season, ep });
-    return c;
+    return Object.assign(c, animeRoute(o.anime));
   });
   const added = cfg.servers
     .filter((s) => s && s.enabled !== false && s.movie && s.id)
@@ -57,6 +63,7 @@ export function applyServers(cfg) {
       params: {},
       movieUrl: (id) => fill(s.movie, { id }),
       ...(s.tv ? { tvUrl: (id, season, ep) => fill(s.tv, { id, season, ep }) } : { movieOnly: true }),
+      ...animeRoute(s.anime),
     }));
   _mirrorMap = cfg.servers
     .filter((s) => s && s.movie && Array.isArray(s.mirrors) && s.mirrors.length)

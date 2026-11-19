@@ -8,6 +8,7 @@
 // stream and plays it in StreambertPlayer. The iframe is only the fallback.
 import { mirrorsFor } from "./servers";
 import { PLAYER_SOURCES, sourcesForContent, nativeServerList } from "../../utils/api";
+import { serverKey } from "../../utils/servers/catalog";
 import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
 
 const LOAD_TIMEOUT_MS = 8000;
@@ -34,15 +35,16 @@ const nativeAvailable = () => !!window.webkit?.messageHandlers?.sbResolve;
 
 /** Server list for the native server menu, built from the latest context. */
 function serverListFor(ctx) {
-  return nativeServerList(!!ctx.isAnime, dubModeOf(ctx));
+  return nativeServerList(!!ctx.isAnime);
 }
 
 /**
- * Id of the playing server as the native menu knows it: anime servers carry
- * the audio mode ("vidnest:dub"), everything else is the plain id.
+ * Id of the playing server as the native menu knows it: anime-route servers
+ * carry the audio mode ("vidnest:dub"), everything else is the plain id.
  */
 function menuId(sourceId, ctx) {
-  return ctx.isAnime && sourceId ? `${sourceId}:${dubModeOf(ctx)}` : sourceId;
+  const animeRoute = ctx.isAnime && PLAYER_SOURCES.find((s) => s.id === sourceId)?.animeUrl;
+  return sourceId ? serverKey(sourceId, animeRoute ? dubModeOf(ctx) : null) : sourceId;
 }
 
 // Tell the native player what is playing (title, type, episode) and which
