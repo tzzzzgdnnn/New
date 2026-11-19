@@ -1394,28 +1394,6 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private let rotateButton = UIButton(type: .system)
     private var landscapeVideoConstraints: [NSLayoutConstraint] = []
     private var portraitVideoConstraints: [NSLayoutConstraint] = []
-    /// Portrait box follows the video's own shape (4:3 anime gets a taller
-    /// box instead of a small picture inside a 16:9 one).
-    private lazy var portraitAspect: NSLayoutConstraint = {
-        let c = videoView.heightAnchor.constraint(equalTo: videoView.widthAnchor, multiplier: 9.0 / 16.0)
-        c.priority = .defaultHigh
-        return c
-    }()
-    private var portraitAspectRatio: CGFloat = 16.0 / 9.0
-    private func followVideoShape(_ size: CGSize) {
-        guard size.width > 0, size.height > 0 else { return }
-        let ratio = max(1.0, min(2.4, size.width / size.height))
-        guard abs(ratio - portraitAspectRatio) > 0.02 else { return }
-        portraitAspectRatio = ratio
-        let active = portraitAspect.isActive
-        if active { portraitAspect.isActive = false }
-        let c = videoView.heightAnchor.constraint(equalTo: videoView.widthAnchor, multiplier: 1.0 / ratio)
-        c.priority = .defaultHigh
-        if let i = portraitVideoConstraints.firstIndex(of: portraitAspect) { portraitVideoConstraints[i] = c }
-        portraitAspect = c
-        if active { c.isActive = true }
-        UIView.animate(withDuration: 0.2) { self.view.layoutIfNeeded() }
-    }
     private var portraitLayoutActive = false
     // Bottom bar layout: stacked in portrait, one row in landscape.
     private let bottomColumn = UIStackView()
@@ -1832,7 +1810,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             fullWidth,
             videoView.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor),
             videoView.centerYAnchor.constraint(equalTo: safe.centerYAnchor),
-            portraitAspect,
+            videoView.heightAnchor.constraint(equalTo: videoView.widthAnchor, multiplier: 9.0 / 16.0),
             videoView.heightAnchor.constraint(lessThanOrEqualTo: safe.heightAnchor),
         ]
         NSLayoutConstraint.activate(landscapeVideoConstraints)
@@ -3375,7 +3353,7 @@ extension StreambertPlayerViewController {
     func updateShownResolution(_ item: AVPlayerItem) {
         var h = 0
         let size = item.presentationSize
-        if size.height > 0 { h = Int(size.height.rounded()); followVideoShape(size) }
+        if size.height > 0 { h = Int(size.height.rounded()) }
         if h != shownVideoHeight {
             shownVideoHeight = h
             refreshQualityButton()
