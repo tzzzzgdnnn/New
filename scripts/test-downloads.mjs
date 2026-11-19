@@ -218,4 +218,20 @@ await t("events: removal forgets the record; finished downloads exist and play",
   assert.equal(await api.fileExists(rec.filePath), false);
 });
 
+await t("Downloads tab (phone): live native numbers, Finished in Local Files, no desktop controls", async () => {
+  const React = await import("react");
+  const { renderToString } = await import("react-dom/server.browser");
+  const { default: PhoneDownloads } = await import("../src/components/downloads/PhoneDownloads.jsx");
+  const live = d.toRecord({ id: "a", name: "Batman: Knightfall Part 1", status: "downloading", bytesDownloaded: 638 * 1024 ** 2,
+    totalBytes: Math.round((638 * 1024 ** 2 / 303) * 1586), progress: 19.1, fragmentsDone: 303, fragmentsTotal: 1586,
+    speedBps: 4.2 * 1024 ** 2, activeConnections: 8, subtitles: [] });
+  const done = d.toRecord({ id: "b", name: "Done", status: "completed", finalBytes: GB, subtitles: [{ lang: "en" }] });
+  const html = renderToString(React.createElement(PhoneDownloads, { downloads: [live, done], actions: {} }));
+  for (const text of ["Downloading", "638 MB of ≈3.3 GB", "303/1,586 fragments", "8 connections · 4 MB/s", "19.1%", "1 active · 1 finished", "Finished", "CC EN"])
+    assert.ok(html.includes(text), text);
+  assert.ok(html.indexOf("Local Files") < html.indexOf("Done"));
+  for (const text of ["Ctrl", "Untracked", "Sort by", "Folder", "SUB · SUB"]) assert.ok(!html.includes(text), text);
+  assert.ok(!html.includes("CC</span>")); // no chip when no subtitles were chosen
+});
+
 console.log(`\n${pass} download checks passed`);

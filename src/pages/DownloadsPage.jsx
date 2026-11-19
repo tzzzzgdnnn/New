@@ -1,10 +1,9 @@
-import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo, lazy, Suspense } from "react";
 import {
   DownloadIcon,
   TrashIcon,
   FolderIcon,
   PlayIcon,
-  PauseIcon,
   FilmIcon,
   WatchedIcon,
   SubtitlesIcon,
@@ -14,10 +13,7 @@ import SubtitleDownloaderModal from "../components/SubtitleDownloaderModal";
 import { imgUrl } from "../utils/api";
 import { IS_IOS } from "../platform/target";
 
-// Statuses shown as an active card. The iOS downloader queues, pauses, and
-// resumes a failed download where it stopped, so those stay active there.
-const IN_PROGRESS = new Set(IS_IOS ? ["downloading", "queued", "paused", "error"] : ["downloading"]);
-const isStopped = (dl) => dl.status === "paused" || dl.status === "error";
+const IN_PROGRESS = new Set(["downloading"]);
 
 const STATUS_CLASS = {
   downloading: "dl-status--downloading",
@@ -86,7 +82,39 @@ const SORT_OPTIONS = [
   { value: "type", label: "Type" },
 ];
 
-export default function DownloadsPage({
+// Phones get their own Downloads tab (no desktop toolbar, folder scan,
+// shortcuts or hover controls); the import is compiled out of desktop builds.
+const PhoneDownloads = IS_IOS ? lazy(() => import("../components/downloads/PhoneDownloads")) : null;
+
+const phoneActions = (onDeleteDownload) => ({
+  pause: (id) => window.electron.pauseDownload(id),
+  resume: (id) => window.electron.resumeDownload(id),
+  play: (d) => window.electron.openPath(d.filePath),
+  remove: async (d) => {
+    if (!confirm(`Delete "${d.name}"?`)) return;
+    await window.electron.deleteDownload({ id: d.id, filePath: d.filePath });
+    onDeleteDownload(d.id);
+  },
+});
+
+export default function DownloadsPage(props) {
+  const { onDeleteDownload } = props;
+  const actions = useMemo(() => (IS_IOS ? phoneActions(onDeleteDownload) : null), [onDeleteDownload]);
+  if (!IS_IOS) return <DesktopDownloadsPage {...props} />;
+  return (
+    <Suspense fallback={null}>
+      <PhoneDownloads
+        downloads={props.downloads}
+        actions={actions}
+        onSelect={props.onSelect}
+        highlightId={props.highlightId}
+        onClearHighlight={props.onClearHighlight}
+      />
+    </Suspense>
+  );
+}
+
+function DesktopDownloadsPage({
   downloads,
   onDeleteDownload,
   onHistory,
@@ -501,14 +529,6 @@ export default function DownloadsPage({
                 key={dl.id}
                 dl={dl}
                 onDelete={() => handleDelete(dl)}
-                onPauseResume={
-                  IS_IOS
-                    ? () =>
-                        isStopped(dl)
-                          ? window.electron.resumeDownload(dl.id)
-                          : window.electron.pauseDownload(dl.id)
-                    : null
-                }
                 onSelect={
                   dl.tmdbId && dl.mediaType
                     ? () =>
@@ -668,7 +688,7 @@ export default function DownloadsPage({
 }
 
 // ── Active download card ───────────────────────────────────────────────────────
-const ActiveCard = memo(function ActiveCard({ dl, onDelete, onSelect, onPauseResume }) {
+const ActiveCard = memo(function ActiveCard({ dl, onDelete, onSelect }) {
   const pct = dl.progress || 0;
   return (
     <div className="dl-card dl-card-active">
@@ -724,16 +744,6 @@ const ActiveCard = memo(function ActiveCard({ dl, onDelete, onSelect, onPauseRes
         </div>
         <div className="dl-card__right">
           <div className="dl-card__pct">{pct.toFixed(1)}%</div>
-          {onPauseResume && (
-            <button
-              className="icon-btn"
-              onClick={onPauseResume}
-              title={isStopped(dl) ? "Resume" : "Pause"}
-              aria-label={isStopped(dl) ? "Resume" : "Pause"}
-            >
-              {isStopped(dl) ? <PlayIcon /> : <PauseIcon />}
-            </button>
-          )}
           <button className="icon-btn" onClick={onDelete} title="Remove">
             <TrashIcon />
           </button>
