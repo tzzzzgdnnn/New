@@ -1,10 +1,13 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import stripDesktopCss from "./vite/strip-desktop-css.mjs";
+import pwa from "./vite/pwa.mjs";
 
 export default defineConfig(({ mode }) => {
   const isDist = process.env.ELECTRON_DIST === "1";
-  const isIOS = mode === "ios";
+  // "web" = the iPhone/Android UI as an installable web app (PWA).
+  const isWeb = mode === "web";
+  const isIOS = mode === "ios" || isWeb;
   // iOS (Capacitor) build: swap the entry for src/main.ios.jsx. Desktop unchanged.
   const iosEntry = {
     name: "streambert-ios-entry",
@@ -14,7 +17,7 @@ export default defineConfig(({ mode }) => {
     },
   };
   return {
-    plugins: isIOS ? [react(), iosEntry] : [react()],
+    plugins: isIOS ? [react(), iosEntry, ...(isWeb ? [pwa()] : [])] : [react()],
     base: "./",
     // iOS: drop desktop-only rules from the shared stylesheets. Desktop CSS
     // is left exactly as written.

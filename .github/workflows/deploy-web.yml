@@ -1,0 +1,25 @@
+name: Deploy web app (PWA)
+on:
+  workflow_dispatch:
+  push:
+    branches: [ipa-test-build]
+permissions:
+  contents: write
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx vite build --mode web --outDir dist-web && touch dist-web/.nojekyll
+      - name: Publish to gh-pages
+        run: |
+          cd dist-web
+          git init -q -b gh-pages
+          git add -A
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -qm "Web app ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" gh-pages

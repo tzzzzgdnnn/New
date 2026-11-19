@@ -13,6 +13,11 @@ import { installImageReadyMarker } from "./platform/ios/imageReady";
 import { installDiagnostics } from "./utils/diag";
 
 installDiagnostics();
+
+// Web install: keep the whole app on the phone (works if the site is down).
+if (import.meta.env.VITE_WEB && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
+}
 showLaunchSplash();
 installImageReadyMarker();
 
