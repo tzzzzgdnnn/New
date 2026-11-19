@@ -84,7 +84,9 @@ export function applyServers(cfg) {
       .sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"));
     PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct, ...rest, ...ok);
   } else {
-    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...added, ...builtins);
+    // iPhone app: Cinejoy (direct stream) stays listed first.
+    const direct = builtins.filter((s) => /\.invalid\//.test(s.movieUrl?.("1") || ""));
+    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct, ...added, ...builtins.filter((s) => !direct.includes(s)));
   }
   return true;
 }

@@ -444,7 +444,7 @@ const WEB_DIRECT_SOURCES = [
 ];
 export const PLAYER_SOURCES = import.meta.env?.VITE_WEB
   ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id) && !["vidnest", "hexa"].includes(s.id)).sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"))]
-  : ALL_PLAYER_SOURCES;
+  : [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES]; // iPhone app: Cinejoy direct listed first too
 
 // Sources that require a transparent webRequest intercept to load properly
 export const NEEDS_INTERCEPT = [];

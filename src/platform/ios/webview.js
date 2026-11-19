@@ -198,6 +198,11 @@ export function withMovy(ranked, movy) {
   if (!movy?.length) return ranked;
   const ids = new Set(movy.map((c) => c.id));
   const rest = ranked.filter((c) => !ids.has(c.id) && c.id !== MOVY_ID && c.id !== CINEJOY_ID);
+  // Cinejoy picked by hand: its direct stream plays first.
+  if (!isAutoPick() && readStored("playerSource") === CINEJOY_ID) {
+    const cj = movy.filter((c) => c.id === CINEJOY_ID);
+    if (cj.length) return [...cj, ...movy.filter((c) => c.id !== CINEJOY_ID), ...rest].slice(0, MAX_CANDIDATES + movy.length);
+  }
   if (!isAutoPick() && rest.length && readStored("playerSource")) {
     return [rest[0], ...movy, ...rest.slice(1)].slice(0, MAX_CANDIDATES + movy.length);
   }
@@ -212,7 +217,7 @@ function buildCandidateList(url, ctx) {
   const list = [];
   const seen = new Set();
   const add = (src, u) => {
-    if (!u || !/^https?:/.test(u) || seen.has(u) || list.length >= MAX_CANDIDATES) return;
+    if (!u || !/^https?:/.test(u) || /\.invalid\//.test(u) || seen.has(u) || list.length >= MAX_CANDIDATES) return;
     seen.add(u);
     const id = src ? menuId(src.id, ctx) : "current";
     const label = (src?.label || "Server") + (isAnime && src ? suffix : "");
