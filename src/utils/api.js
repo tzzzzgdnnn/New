@@ -342,7 +342,7 @@ export function saveTrendingCache(lang, movies, tv) {
 //                   (default Electron UA minus the "Electron/x.y.z" and app
 //                   tokens). Omit/false = Electron's untouched default UA.
 //
-export const PLAYER_SOURCES = [
+const ALL_PLAYER_SOURCES = [
   {
     id: "vidfast",
     animeTmdb: true, // carries anime under its TMDB id
@@ -425,6 +425,13 @@ export const PLAYER_SOURCES = [
     tvUrl: (_id, _season, _ep) => "https://hianime.at",
   },
 ];
+
+// Web app: every embed runs sandboxed (no pop-ups, no redirects, no new
+// tabs). Players that refuse to run sandboxed are left out there.
+export const NEEDS_UNSANDBOXED = new Set(["vidrift"]);
+export const PLAYER_SOURCES = import.meta.env?.VITE_WEB
+  ? ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id))
+  : ALL_PLAYER_SOURCES;
 
 // Sources that require a transparent webRequest intercept to load properly
 export const NEEDS_INTERCEPT = [];

@@ -320,11 +320,10 @@ function upgrade(wv) {
   if (wv.__sbUpgraded) return;
   wv.__sbUpgraded = true;
   const iframe = document.createElement("iframe");
-  // Web app: players such as vidrift refuse to run in a sandboxed frame
-  // ("Remove sandboxing to enable playback"), so the web build leaves it off.
-  if (!import.meta.env.VITE_WEB) {
-    iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-presentation");
-  }
+  // Ad blocking: no allow-popups / allow-top-navigation, so embeds can't open
+  // pop-ups, new tabs, or redirect the app. Servers that refuse a sandbox are
+  // dropped from the web build (NEEDS_UNSANDBOXED in api.js).
+  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-presentation");
   iframe.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media");
   iframe.setAttribute("allowfullscreen", "");
   iframe.setAttribute("playsinline", "");
