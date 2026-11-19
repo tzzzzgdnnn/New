@@ -40,7 +40,7 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   video.playsInline = !isIPhone;
   if (!isIPhone) video.setAttribute("playsinline", "");
   // iPhone: Apple's full-screen player only opens from a tap, so we wait for one.
-  video.autoplay = !isIPhone;
+  video.autoplay = true;
   video.preload = "auto";
   // Required for ManagedMediaSource (hls.js on iPhone, iOS 17.1+).
   video.disableRemotePlayback = true;
@@ -98,11 +98,13 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   // play() right now, inside the Play tap when the stream was already known,
   // so iPhone opens its own full-screen player; else on canplay; if the
   // browser still blocks it, one tap on the button.
-  if (!isIPhone) video.play().catch(() => {});
+  // Inside the Play tap (stream already known): start now; iPhone also opens
+  // Apple's full-screen player in the same tap. Android/desktop unchanged.
+  const tapPlay = video.play();
+  if (isIPhone) goFull();
   video.addEventListener("canplay", () => {
-    if (isIPhone) return;
     if (!video.paused) return;
-    video.play().then(() => !isIPhone && goFull()).catch(() => {
+    video.play().then(() => goFull()).catch(() => {
       // Autoplay blocked: one tap starts it, full screen.
       fullBtn.textContent = "▶  Play";
       fullBtn.style.display = "";
@@ -118,12 +120,14 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     goFull();
     p?.catch?.(() => { fullBtn.textContent = "▶  Play"; fullBtn.style.display = ""; });
   };
-  if (isIPhone) {
+  // Only if the browser refused to start without a fresh tap: one big Play button.
+  tapPlay?.catch?.(() => {
+    if (done || !video.paused) return;
     fullBtn.textContent = "▶  Play";
-    fullBtn.style.cssText += ";font-size:20px;padding:16px 34px";
+    if (isIPhone) fullBtn.style.cssText += ";font-size:20px;padding:16px 34px";
     fullBtn.style.display = "";
     clearTimeout(timer);
-  }
+  });
   box.appendChild(fullBtn);
   // iPhone: if it started inline (no tap left to use), try Apple's full-screen
   // player at once, and keep a big Full screen button up until it's on.
