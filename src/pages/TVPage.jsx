@@ -1864,6 +1864,7 @@ export default function TVPage({
       season: selectedSeason,
       episode: selectedEp?.episode_number ?? null,
       tmdbId: item.id,
+      year: Number(String(details?.first_air_date || item.first_air_date || "").slice(0, 4)) || null,
       tmdbSeason: playerEp?.season ?? selectedSeason,
       tmdbEpisode: playerEp?.episode ?? selectedEp?.episode_number ?? null,
       anilistId: anilistIdForSeason,

@@ -16,6 +16,7 @@ import { isAutoPick, isAnipmPinned, recordLookup, serverStats } from "./autoServ
 import { autoOrder, prefetchRanking } from "./autoRank";
 import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
 import { anipmCandidates, ANIPM_ID } from "./anipm";
+import { movyCandidates, MOVY_ID } from "./movy";
 import { parseServerKey } from "../../utils/servers/catalog";
 import { diag } from "../../utils/diag";
 
@@ -179,6 +180,19 @@ export function withAnipm(ranked, anipm) {
     return [rest[0], ...anipm, ...rest.slice(1)].slice(0, MAX_CANDIDATES + anipm.length);
   }
   return [...anipm, ...rest].slice(0, MAX_CANDIDATES + anipm.length);
+}
+
+/**
+ * Movy's direct stream leads for movies and series (it is the stream itself,
+ * no page to load), unless the viewer picked another server by hand.
+ */
+export function withMovy(ranked, movy) {
+  if (!movy?.length) return ranked;
+  const rest = ranked.filter((c) => c.id !== MOVY_ID);
+  if (!isAutoPick() && rest.length && readStored("playerSource")) {
+    return [rest[0], ...movy, ...rest.slice(1)].slice(0, MAX_CANDIDATES + movy.length);
+  }
+  return [...movy, ...rest].slice(0, MAX_CANDIDATES + movy.length);
 }
 
 function buildCandidateList(url, ctx) {
@@ -386,13 +400,14 @@ function upgrade(wv) {
       // Start on the fastest server: untested providers are probed at once,
       // within a short budget, while the Keychain read finishes.
       const tRank = Date.now();
-      const [subCtx, ranked, anipm] = await Promise.all([
+      const [subCtx, ranked, anipm, movy] = await Promise.all([
         subCtxReady,
         rankedCandidates(url, ctx, { signal: probing.signal }),
         ctx.isAnime ? anipmCandidates(ctx) : [],
+        ctx.isAnime ? [] : movyCandidates(ctx),
       ]);
       if (nativeToken !== token) return;
-      const candidates = withAnipm(playerOrder(ranked, ctx), anipm);
+      const candidates = withMovy(withAnipm(playerOrder(ranked, ctx), anipm), movy);
       diag(
         "player",
         `play: candidates in ${Date.now() - tRank} ms (tap→send ${Date.now() - lastNativeAt} ms): ` +

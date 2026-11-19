@@ -34,6 +34,8 @@ export function publishPlayerContext(ctx) {
   // Anime: look the episode up on ani.pm now, so Play starts on it at once.
   // (Dynamic import: keeps ani.pm and the native HTTP client out of desktop.)
   if (ctx?.isAnime && ctx.anilistId) import("./anipm").then((m) => m.prefetchAnipm(ctx)).catch(() => {});
+  // Movies and series: Movy's stream API, resolved now so Play is instant.
+  if (ctx && !ctx.isAnime && ctx.tmdbId) import("./movy").then((m) => m.prefetchMovy(ctx)).catch(() => {});
   // Measure the title's servers now (player Auto ranking), not on Play.
   import("./webview").then((m) => m.prefetchTitle(ctx)).catch(() => {});
 }

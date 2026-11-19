@@ -825,6 +825,7 @@ export default function MoviePage({
       season: null,
       episode: null,
       tmdbId: item.id,
+      year: Number(String(details?.release_date || item.release_date || "").slice(0, 4)) || null,
       anilistId: (isAnime && anilistData?.id) || null,
       dubMode,
       progressKey,
