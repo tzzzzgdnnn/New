@@ -157,6 +157,9 @@ function _releaseSlot() {
  *   (it then skips the shared in-flight request so aborting can't affect others)
  */
 export const tmdbFetch = async (path, apiKey, opts = {}) => {
+  // opts.kidsRaw: skip the Kids list filter. Only the Kids character catalog
+  // uses it, and it verifies the one title it keeps (kidsCatalog.js).
+  const view = (data) => (opts.kidsRaw ? data : forActiveProfile(path, data, apiKey));
   if (apiKey) _lastApiKey = apiKey;
   // Kids: search/discover never include adult titles and discover asks for
   // kid certifications; every title list is filtered before it is returned.
@@ -171,15 +174,15 @@ export const tmdbFetch = async (path, apiKey, opts = {}) => {
   }
   if (cached) {
     const age = Date.now() - cached.savedAt;
-    if (age < TMDB_CACHE_TTL) return forActiveProfile(path, cached.data, apiKey);
+    if (age < TMDB_CACHE_TTL) return view(cached.data);
     if (age < TMDB_STALE_MAX) {
       // Stale: answer now, refresh quietly for next time.
       _tmdbNetwork(localizedPath, apiKey, cacheKey).catch(() => {});
-      return forActiveProfile(path, cached.data, apiKey);
+      return view(cached.data);
     }
   }
-  if (opts.signal) return forActiveProfile(path, await _tmdbRequest(localizedPath, apiKey, cacheKey, opts.signal), apiKey);
-  return forActiveProfile(path, await _tmdbNetwork(localizedPath, apiKey, cacheKey), apiKey);
+  if (opts.signal) return view(await _tmdbRequest(localizedPath, apiKey, cacheKey, opts.signal));
+  return view(await _tmdbNetwork(localizedPath, apiKey, cacheKey));
 };
 
 /** Error with a `code` and a message fit to show the viewer. */

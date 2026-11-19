@@ -168,6 +168,8 @@ export const STORAGE_KEYS = {
   PLAYER_QUALITY: "playerQuality",
   PLAYER_SUBS_ON: "playerSubsOn",
   PLAYER_SUB_SCALE: "playerSubScale",
+  // iOS: false once the viewer picked a server by hand (Auto otherwise)
+  SERVER_AUTO_PICK: "serverAutoPick",
 };
 
 // ── Profiles ──────────────────────────────────────────────────────────────────
@@ -195,7 +197,12 @@ export const PROFILE_SCOPED_KEYS = new Set([
   STORAGE_KEYS.PLAYER_QUALITY,
   STORAGE_KEYS.PLAYER_SUBS_ON,
   STORAGE_KEYS.PLAYER_SUB_SCALE,
+  // Server choice (Auto, or the server picked by hand) is per person.
+  STORAGE_KEYS.PLAYER_SOURCE,
+  STORAGE_KEYS.SERVER_AUTO_PICK,
+  "serverPin",
   "searchHistory",
+  "kidsFavorites",
 ]);
 
 /**
@@ -210,7 +217,7 @@ export const PROFILE_SCOPED_PREFIXES = ["dlTime_", "sbDur_", "sbLastEp_"];
  * under their global name (platform/ios/webview.js). Writes also refresh that
  * global copy, which always mirrors the active profile.
  */
-export const NATIVE_MIRRORED_KEYS = new Set([STORAGE_KEYS.SUBTITLE_LANG]);
+export const NATIVE_MIRRORED_KEYS = new Set([STORAGE_KEYS.SUBTITLE_LANG, STORAGE_KEYS.PLAYER_SOURCE]);
 
 /** Whether a logical key holds per-person data. */
 export const isProfileScoped = (key) =>

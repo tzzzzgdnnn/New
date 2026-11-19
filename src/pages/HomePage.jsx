@@ -14,6 +14,8 @@ const TrendingCarousel = IS_IOS ? () => null : DesktopCarousel;
 import HomeSections, { Billboard, PosterRail, WideRail } from "../platform/ios/HomeSections";
 import { HomeSkeleton } from "../platform/ios/Skeletons";
 import { useKidsFilter } from "../platform/ios/kids/useKidsFilter";
+import KidsHome from "../platform/ios/kids/KidsHome";
+import { isKidsProfileActive } from "../utils/profileScope";
 
 /**
  * Extract up to `count` unique, recently watched items from the user's
@@ -39,7 +41,16 @@ function getRecentHistoryItems(history, count = 5) {
   return unique;
 }
 
-export default function HomePage({
+/**
+ * Kids profiles on the phone get their own Home (KidsHome.jsx): rows only
+ * from history, My List and favorites; no trending, Top 10 or theaters.
+ */
+export default function HomePage(props) {
+  if (IS_IOS && isKidsProfileActive()) return <KidsHome {...props} />;
+  return <StandardHome {...props} />;
+}
+
+function StandardHome({
   trending: trendingAll,
   trendingTV: trendingTVAll,
   loading,
