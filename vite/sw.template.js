@@ -36,6 +36,10 @@ self.addEventListener("fetch", (e) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
 
+  // Private IPA install page (get/<token>/): always straight from the site,
+  // never the cached app and never cached (the IPA is tens of MB).
+  if (url.origin === self.location.origin && url.pathname.includes("/get/")) return;
+
   // Downloaded shows: only ever from the phone (no internet needed).
   if (url.origin === self.location.origin && url.pathname.includes("/offline/")) {
     e.respondWith(caches.match(req.url, { ignoreSearch: true }).then((h) => h || new Response("Not downloaded", { status: 404 })));

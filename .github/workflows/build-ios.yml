@@ -6,9 +6,21 @@ on:
         description: "macOS runner label"
         default: "macos-15-intel"
   push:
-    branches: [main]
+    branches: [main, ipa-test-build]
     paths-ignore:
       - "servers.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Unlisted install page: https://tzzzzgdnnn.github.io/New/get/<token>/
+  # Only people with the link can find it (not linked anywhere on the site).
+  INSTALL_TOKEN: a3a158950610bf718216
 
 jobs:
   ios:
@@ -83,6 +95,12 @@ jobs:
           name: Super-Player-unsigned
           path: ${{ runner.temp }}/ipa/Super-Player.ipa
           if-no-files-found: error
+
+      - name: Publish private install page (SideInstaller one-tap)
+        if: github.ref == 'refs/heads/ipa-test-build'
+        run: sh scripts/publish-install-page.sh "$RUNNER_TEMP/ipa/Super-Player.ipa" "2.7.${{ github.run_number }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Upload build log on failure
         if: failure()
