@@ -7,6 +7,7 @@ import { PlayIcon } from "../../components/Icons";
 import { imgUrl, tmdbFetch } from "../../utils/api";
 import NOSTALGIA from "./nostalgia.json";
 import { isKidsProfileActive } from "../../utils/profileScope";
+import { SkeletonRail } from "./Skeletons";
 
 const tag = (type) => (r) => (r.results || []).map((i) => ({ ...i, media_type: type }));
 
@@ -482,8 +483,12 @@ export default function HomeSections({ apiKey, offline, onSelect, watched, onMar
     HOME_SECTIONS.forEach((s) =>
       s
         .load(apiKey)
-        .then((items) => alive && setData((d) => ({ ...d, [s.id]: items })))
-        .catch(() => {}),
+        .catch((err) => {
+          // An empty row hides itself instead of shimmering forever.
+          console.warn(`[home] ${s.id} row failed`, err);
+          return [];
+        })
+        .then((items) => alive && setData((d) => ({ ...d, [s.id]: items }))),
     );
     return () => {
       alive = false;
@@ -492,9 +497,13 @@ export default function HomeSections({ apiKey, offline, onSelect, watched, onMar
   const common = { onSelect, watched, onMarkWatched, onMarkUnwatched };
   return (
     <>
-      {HOME_SECTIONS.map((s) => (
-        <PosterRail key={s.id} title={s.title} items={data[s.id]} {...common} />
-      ))}
+      {HOME_SECTIONS.map((s) =>
+        s.id in data ? (
+          <PosterRail key={s.id} title={s.title} items={data[s.id]} {...common} />
+        ) : (
+          <SkeletonRail key={s.id} />
+        ),
+      )}
       <Nostalgia rows={nostalgia} onSelect={onSelect} common={common} />
     </>
   );

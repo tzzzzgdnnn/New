@@ -1,0 +1,180 @@
+/* iOS premium polish: launch splash, one type scale and an 8-pt spacing grid,
+   frosted chrome, shimmer skeletons, rounded posters with press feedback and
+   200–300 ms page/modal motion. Loaded after ios.css, iOS build only. */
+
+html.sb-ios {
+  /* 8-pt spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 16px;
+  --sp-4: 24px;
+  --sp-5: 32px;
+  --sp-6: 48px;
+  /* Type scale */
+  --fs-caption: 12px;
+  --fs-footnote: 13px;
+  --fs-body: 15px;
+  --fs-headline: 17px;
+  --fs-title3: 20px;
+  --fs-title2: 22px;
+  --fs-title1: 28px;
+  --fs-display: 34px;
+  /* Surfaces */
+  --poster-radius: 12px;
+  --poster-shadow: 0 2px 6px rgba(0, 0, 0, .35), 0 12px 28px rgba(0, 0, 0, .45);
+  --chrome-bg: rgba(12, 12, 14, .68);
+  --chrome-blur: saturate(180%) blur(28px);
+  --hairline: rgba(255, 255, 255, .08);
+  --focus-ring: 0 0 0 2px #0a0a0a, 0 0 0 4px rgba(255, 255, 255, .85);
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --dur-page: 260ms;
+  --dur-modal: 220ms;
+  --skel-base: #1a1a1c;
+  --skel-hi: #2a2a2d;
+  background: #000;
+}
+html.sb-ios body { background: var(--bg); font-feature-settings: "kern"; -webkit-font-smoothing: antialiased; }
+
+/* ── Launch splash ──────────────────────────────────────────────────────── */
+.sp-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  transition: opacity 280ms ease;
+}
+.sp-splash.is-leaving { opacity: 0; pointer-events: none; }
+.sp-splash-icon {
+  width: 112px;
+  height: 112px;
+  border-radius: 26px;
+  box-shadow: 0 20px 60px rgba(229, 9, 20, .35);
+  animation: spSplashIn 520ms var(--ease-out, ease-out) both;
+}
+@keyframes spSplashIn {
+  from { opacity: 0; transform: scale(.82); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* ── Frosted chrome (top bar + bottom tab bar), safe areas respected ───── */
+html.sb-ios .sp-topbar,
+html.sb-ios body::before {
+  background: var(--chrome-bg);
+  -webkit-backdrop-filter: var(--chrome-blur);
+  backdrop-filter: var(--chrome-blur);
+}
+html.sb-ios .sp-topbar { border-bottom: .5px solid var(--hairline); }
+@media (max-width: 760px) and (orientation: portrait) {
+  html.sb-ios .sidebar {
+    background: var(--chrome-bg);
+    -webkit-backdrop-filter: var(--chrome-blur);
+    backdrop-filter: var(--chrome-blur);
+    border-top: .5px solid var(--hairline);
+  }
+  html.sb-ios .sidebar-btn { transition: color .2s ease, transform .15s ease; }
+  html.sb-ios .sidebar-btn:active { transform: scale(.9); }
+  /* The tab's color and underline mark it; no desktop outline box. */
+  html.sb-ios .sidebar-btn.active { box-shadow: none; }
+}
+
+/* ── Type scale + spacing ───────────────────────────────────────────────── */
+html.sb-ios .section-title {
+  font-size: var(--fs-title2);
+  letter-spacing: .6px;
+  margin-bottom: var(--sp-2);
+}
+html.sb-ios .sb-row-sub { font-size: var(--fs-footnote); margin: calc(var(--sp-1) * -1) 0 var(--sp-2); }
+html.sb-ios .sb-row-section { padding-top: var(--sp-2); padding-bottom: var(--sp-2); }
+html.sb-ios .sb-row { gap: var(--sp-2); padding-bottom: var(--sp-2); }
+html.sb-ios .sb-wide-title { font-size: var(--fs-footnote); margin-top: var(--sp-2); }
+html.sb-ios .sb-wide-meta { font-size: var(--fs-caption); }
+html.sb-ios .card-title { font-size: var(--fs-footnote); }
+@media (max-width: 760px) and (orientation: portrait) {
+  html.sb-ios .section { padding: var(--sp-2) var(--sp-3); }
+  html.sb-ios .section-title { font-size: var(--fs-title2); }
+  html.sb-ios .sb-row { margin: 0 calc(var(--sp-3) * -1); padding-left: var(--sp-3); padding-right: var(--sp-3); scroll-padding-left: var(--sp-3); }
+}
+
+/* ── Posters: rounded, soft shadow, press-scale ─────────────────────────── */
+html.sb-ios .card { border-radius: var(--poster-radius); border: 0; transition: transform .18s var(--ease-out); }
+html.sb-ios .card-poster,
+html.sb-ios .sb-row-item .card-poster {
+  border-radius: var(--poster-radius);
+  box-shadow: var(--poster-shadow);
+}
+html.sb-ios .sb-wide-img,
+html.sb-ios .sb-tape { border-radius: var(--poster-radius); box-shadow: var(--poster-shadow); }
+html.sb-ios .card:active,
+html.sb-ios .sb-wide-item:active,
+html.sb-ios .sb-tape:active,
+html.sb-ios .episode-card:active { transform: scale(.97); transition-duration: .1s; }
+html.sb-ios .sb-wide-item,
+html.sb-ios .sb-tape,
+html.sb-ios .episode-card { transition: transform .18s var(--ease-out); }
+
+/* Images shimmer until they arrive (the img paints over the background). */
+html.sb-ios .card-poster,
+html.sb-ios .sb-wide-img,
+html.sb-ios .sb-tape,
+html.sb-ios .episode-thumb {
+  background: linear-gradient(100deg, var(--skel-base) 30%, var(--skel-hi) 50%, var(--skel-base) 70%) 0 0 / 300% 100%;
+  animation: spShimmerBg 1.4s linear infinite;
+}
+html.sb-ios .card-poster.sp-img-ready,
+html.sb-ios .sb-wide-img.sp-img-ready,
+html.sb-ios .sb-tape.sp-img-ready,
+html.sb-ios .episode-thumb.sp-img-ready { animation: none; background: var(--skel-base); }
+
+/* ── Skeletons ──────────────────────────────────────────────────────────── */
+.sp-skel {
+  border-radius: var(--poster-radius, 12px);
+  background: linear-gradient(100deg, var(--skel-base) 30%, var(--skel-hi) 50%, var(--skel-base) 70%) 0 0 / 300% 100%;
+  animation: spShimmerBg 1.4s linear infinite;
+}
+.sp-skel-title { width: 40%; max-width: 220px; height: 20px; border-radius: 6px; margin-bottom: var(--sp-3); }
+.sp-skel-poster { aspect-ratio: 2 / 3; width: 100%; }
+.sp-skel-wide { aspect-ratio: 16 / 9; width: 100%; }
+.sp-skel-bill { height: min(70vh, 560px); border-radius: 0; margin-bottom: var(--sp-3); }
+@keyframes spShimmerBg { from { background-position: 100% 0; } to { background-position: -50% 0; } }
+
+/* ── Motion: pages and modals ───────────────────────────────────────────── */
+html.sb-ios .main > div { animation: spPageIn var(--dur-page) var(--ease-out) both; }
+html.sb-ios .modal-overlay { animation: spOverlayIn var(--dur-modal) ease-out both; }
+html.sb-ios .modal-overlay > div { animation: spModalIn var(--dur-modal) var(--ease-out) both; }
+html.sb-ios .search-box { border-radius: 14px; border-color: var(--hairline); }
+@keyframes spPageIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes spOverlayIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes spModalIn { from { opacity: 0; transform: translateY(16px) scale(.98); } to { opacity: 1; transform: none; } }
+
+/* ── Buttons, focus and active states ───────────────────────────────────── */
+html.sb-ios .btn,
+html.sb-ios .sb-btn-play,
+html.sb-ios .sb-btn-info,
+html.sb-ios .sb-chip { transition: transform .15s var(--ease-out), opacity .15s ease, background .2s ease; }
+html.sb-ios .btn:active,
+html.sb-ios .sb-btn-play:active,
+html.sb-ios .sb-btn-info:active,
+html.sb-ios .sb-chip:active { transform: scale(.97); opacity: .88; }
+html.sb-ios .sb-btn-play,
+html.sb-ios .sb-btn-info { border-radius: 8px; min-height: 44px; }
+html.sb-ios :focus { outline: none; }
+html.sb-ios :focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 10px; }
+html.sb-ios .gamepad-focused { outline: 2px solid rgba(255, 255, 255, .9) !important; outline-offset: 3px; }
+html.sb-ios .card.gamepad-focused { outline: none !important; transform: scale(1.03); }
+html.sb-ios .card.gamepad-focused .card-poster { box-shadow: var(--focus-ring), var(--poster-shadow); }
+html.sb-ios .card:focus-visible .card-poster { box-shadow: var(--focus-ring), var(--poster-shadow); }
+
+@media (prefers-reduced-motion: reduce) {
+  html.sb-ios .main > div,
+  html.sb-ios .modal-overlay,
+  html.sb-ios .modal-overlay > div,
+  .sp-splash-icon { animation: none; }
+  html.sb-ios .card-poster,
+  html.sb-ios .sb-wide-img,
+  html.sb-ios .sb-tape,
+  html.sb-ios .episode-thumb,
+  .sp-skel { animation-duration: 3s; }
+}

@@ -9,6 +9,7 @@ import { storage } from "../utils/storage";
 import { loadHomeLayout, loadHomeViewMode } from "../utils/homeLayout";
 import { IS_IOS } from "../platform/target";
 import HomeSections, { Billboard, PosterRail, RankRail, WideRail } from "../platform/ios/HomeSections";
+import { HomeSkeleton } from "../platform/ios/Skeletons";
 
 /**
  * Extract up to `count` unique, recently watched items from the user's
@@ -241,11 +242,13 @@ export default function HomePage({
         </div>
       )}
 
-      {!offline && loading && (
+      {!offline && loading && (IS_IOS ? (
+        <HomeSkeleton />
+      ) : (
         <div className="loader">
           <div className="spinner" />
         </div>
-      )}
+      ))}
 
       {/* ── Hero (always first) ── */}
       {IS_IOS && !loading && (

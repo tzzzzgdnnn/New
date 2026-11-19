@@ -27,6 +27,7 @@ export default function WhoIsWatching({ profiles, activeId, managing, canManage,
     <div className="sp-who" role="dialog" aria-modal="true" aria-labelledby="sp-who-title">
       <div className="sp-who-bar">
         {onClose ? <button className="sp-text-btn" onClick={onClose}>Close</button> : <span />}
+        <span />
         {canManage ? (
           <button className="sp-text-btn" onClick={onToggleManage}>{managing ? "Done" : "Edit"}</button>
         ) : (
