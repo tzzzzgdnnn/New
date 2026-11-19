@@ -3,9 +3,9 @@
 import { avatarImageUrl, gradientBackground, isGradientAvatar } from "./avatars";
 
 /**
- * @param {{avatar: string, name?: string, size?: number, round?: boolean, className?: string}} props
+ * @param {{avatar: string, name?: string, size?: number, round?: boolean, className?: string, lazy?: boolean, onError?: () => void}} props
  */
-export default function ProfileAvatar({ avatar, name = "", size = 96, round = false, className = "" }) {
+export default function ProfileAvatar({ avatar, name = "", size = 96, round = false, className = "", lazy = false, onError }) {
   const url = avatarImageUrl(avatar, size > 120 ? "w342" : "w185");
   const style = {
     width: size,
@@ -16,7 +16,9 @@ export default function ProfileAvatar({ avatar, name = "", size = 96, round = fa
   };
   return (
     <span className={`sp-avatar ${className}`} style={style} aria-hidden="true">
-      {url ? <img src={url} alt="" draggable="false" /> : <span className="sp-avatar-initial">{name.trim().charAt(0).toUpperCase()}</span>}
+      {url ? (
+        <img src={url} alt="" draggable="false" decoding="async" loading={lazy ? "lazy" : undefined} onError={onError} />
+      ) : <span className="sp-avatar-initial">{name.trim().charAt(0).toUpperCase()}</span>}
     </span>
   );
 }

@@ -44,7 +44,7 @@ export default function WhoIsWatching({ profiles, activeId, managing, canManage,
               onClick={() => (managing ? onEdit(p) : onPick(p))}
             >
               <span className="sp-who-avatar">
-                <ProfileAvatar avatar={p.avatar} name={p.name} size={104} />
+                <ProfileAvatar avatar={p.avatar} name={p.name} size={112} />
                 {managing && (
                   <span className="sp-who-edit">
                     <PencilIcon />

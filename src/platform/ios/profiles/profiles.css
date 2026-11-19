@@ -24,7 +24,7 @@
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12);
   background: #1c1c1e;
 }
-.sp-avatar img { width: 100%; height: 100%; object-fit: cover; object-position: center; display: block; }
+.sp-avatar img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 18%; display: block; }
 .sp-avatar-initial { line-height: 1; text-shadow: 0 2px 10px rgba(0, 0, 0, .35); }
 
 /* ── Shared overlay chrome ──────────────────────────────────────────────── */
@@ -79,10 +79,11 @@
   color: var(--sp-secondary);
   animation: spPopIn .35s var(--sp-ease) both;
 }
-.sp-who-avatar { position: relative; display: block; border-radius: 16px; transition: transform .15s ease, box-shadow .2s ease; }
+.sp-who-avatar { position: relative; display: block; border-radius: 18px; transition: transform .15s ease; }
 .sp-who-tile:active .sp-who-avatar { transform: scale(.95); }
-.sp-who-tile.is-active .sp-who-avatar { box-shadow: 0 0 0 3px #fff; }
-.sp-who-name { display: inline-flex; align-items: center; gap: 4px; font: 500 15px -apple-system, system-ui, sans-serif; color: #e5e5ea; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-who-tile.is-active .sp-who-avatar { box-shadow: 0 0 0 3px var(--sp-sheet-bg), 0 0 0 5.5px #fff; }
+.sp-who-avatar .sp-avatar { box-shadow: 0 10px 28px rgba(0, 0, 0, .5), inset 0 0 0 1px rgba(255, 255, 255, .1); }
+.sp-who-name { display: inline-flex; align-items: center; gap: 5px; font: 500 16px -apple-system, system-ui, sans-serif; color: #e5e5ea; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-who-edit { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border-radius: 14px; background: rgba(0, 0, 0, .55); color: #fff; }
 .sp-who-add-box {
   width: 104px;
@@ -214,14 +215,7 @@
 .sp-btn.is-danger { background: #ff453a; }
 
 /* ── Avatar picker ──────────────────────────────────────────────────────── */
-.sp-ap-row { margin-bottom: 24px; }
-.sp-ap-head { margin: 0 0 12px; font: 600 17px -apple-system, system-ui, sans-serif; color: #fff; }
-.sp-ap-strip { display: flex; gap: 12px; overflow-x: auto; margin: 0 -16px; padding: 4px 16px 8px; scroll-snap-type: x proximity; scrollbar-width: none; }
-.sp-ap-strip::-webkit-scrollbar { display: none; }
-.sp-ap-item { flex: 0 0 auto; padding: 0; border: 0; border-radius: 50%; background: none; scroll-snap-align: start; transition: transform .15s ease; }
-.sp-ap-item:active { transform: scale(.94); }
-.sp-ap-item.is-on .sp-avatar { box-shadow: 0 0 0 3px var(--sp-sheet-bg), 0 0 0 5px #fff; }
-
+/* Avatar picker: rounded-square character tiles, names under, light grid. */
 .sp-ap-preview { display: flex; justify-content: center; margin: 4px 0 16px; }
 .sp-ap-search {
   display: block;
@@ -238,17 +232,26 @@
   -webkit-appearance: none;
 }
 .sp-ap-search::placeholder { color: rgba(235, 235, 245, .6); }
-.sp-ap-head { margin: 32px 0 4px; font: 700 22px -apple-system, system-ui, sans-serif; letter-spacing: -.3px; color: #fff; }
-.sp-ap-kicker { margin: 16px 0 8px; font: 700 12px -apple-system, system-ui, sans-serif; letter-spacing: 1.6px; text-transform: uppercase; color: var(--sp-tint); }
-.sp-ap-title { margin: 0 0 8px; font: 600 15px -apple-system, system-ui, sans-serif; color: #e5e5ea; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sp-ap-row .sp-avatar { box-shadow: 0 4px 14px rgba(0, 0, 0, .45), inset 0 0 0 1px rgba(255, 255, 255, .1); }
-.sp-ap-skeleton { flex: 0 0 76px; width: 76px; height: 76px; border-radius: 50%; background: #1c1c1e; animation: spSkelPulse 1.2s ease-in-out infinite alternate; }
+.sp-ap-channel { margin-top: 28px; }
+.sp-ap-head { margin: 0 0 12px; font: 700 22px -apple-system, system-ui, sans-serif; letter-spacing: -.3px; color: #fff; }
+.sp-ap-row { margin-bottom: 18px; content-visibility: auto; contain-intrinsic-size: auto 140px; }
+.sp-ap-title { margin: 0 0 8px; font: 600 13px -apple-system, system-ui, sans-serif; letter-spacing: .4px; text-transform: uppercase; color: var(--sp-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-ap-strip { display: flex; gap: 12px; overflow-x: auto; margin: 0 -16px; padding: 4px 16px 6px; scroll-snap-type: x proximity; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+.sp-ap-strip::-webkit-scrollbar { display: none; }
+.sp-ap-item { flex: 0 0 84px; display: flex; flex-direction: column; align-items: center; gap: 6px; width: 84px; padding: 0; border: 0; background: none; color: inherit; scroll-snap-align: start; contain: layout paint; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.sp-ap-item.is-wide { flex-basis: 168px; width: 168px; }
+/* Same frame for every portrait: square, same face scale (top-weighted crop),
+   one cohesive backdrop behind transparent or plain-background art. */
+.sp-ap-frame { position: relative; display: block; width: 84px; height: 84px; overflow: hidden; border-radius: 20px; background: radial-gradient(120% 120% at 50% 0%, #2c2c30 0%, #141416 70%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
+.sp-ap-item.is-wide .sp-ap-frame { width: 168px; height: 94px; border-radius: 16px; }
+.sp-ap-frame img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 18%; display: block; }
+.sp-ap-item.is-wide .sp-ap-frame img { object-position: 50% 40%; }
+.sp-ap-item .sp-avatar { border-radius: 20px !important; }
+.sp-ap-item:active .sp-ap-frame, .sp-ap-item:active .sp-avatar { opacity: .7; }
+.sp-ap-item.is-on .sp-ap-frame, .sp-ap-item.is-on .sp-avatar { box-shadow: 0 0 0 2.5px var(--sp-sheet-bg), 0 0 0 4.5px #fff; }
+.sp-ap-name { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 500 12px -apple-system, system-ui, sans-serif; color: #e5e5ea; }
 .sp-ap-empty { padding: 24px 0; font: 400 15px -apple-system, system-ui, sans-serif; color: var(--sp-secondary); text-align: center; }
-@keyframes spSkelPulse { from { opacity: .55; } to { opacity: 1; } }
-/* Picker performance: rows off screen skip layout and paint entirely. */
-.sp-ap-row { content-visibility: auto; contain-intrinsic-size: auto 120px; }
-.sp-ap-strip { -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
-.sp-ap-item { contain: layout paint; }
+.sp-ap-credit { margin: 24px 0 8px; text-align: center; font: 400 11px -apple-system, system-ui, sans-serif; color: var(--sp-tertiary, rgba(235, 235, 245, .3)); }
 
 /* ── Top bar ────────────────────────────────────────────────────────────── */
 .sp-topbar {

@@ -1,173 +1,86 @@
-// Full-screen avatar chooser: signature gradients, then character art from
-// the Nostalgia titles (one row per title), this week's trending titles and a
-// show search. Returns the chosen avatar string (gradient id or image path).
-import { useEffect, useRef, useState } from "react";
+// Full-screen avatar chooser: signature gradients, then official character
+// art from the Nostalgia lineup (Toonami, Nickelodeon, Nick Jr., Cartoon
+// Network, Boomerang, Disney Channel, Disney XD, Disney Animation, Pixar,
+// DreamWorks, PBS Kids), one row per show, and a Groups section with each
+// show's cast together. The catalog is bundled (characters.json, built and
+// URL-verified by scripts/build-avatar-characters.py), so nothing is fetched
+// before the grid can draw. Returns the chosen avatar string.
+import { memo, useCallback, useDeferredValue, useMemo, useState } from "react";
 import ProfileAvatar from "./ProfileAvatar";
 import { DEFAULT_AVATARS } from "./avatars";
-import {
-  MIN_ROW_AVATARS,
-  getTmdbToken,
-  loadTitleAvatars,
-  loadTrending,
-  nostalgiaChannels,
-  searchTitles,
-} from "./avatarCatalog";
+import CATALOG from "./characters.json";
 
-const AVATAR_SIZE = 76;
-const LAZY_ROOT_MARGIN = "600px 0px";
-const SEARCH_DEBOUNCE_MS = 350;
-const SKELETON_COUNT = 6;
+const TILE = 84;
+const MIN_ROW = 3;
 
-const logLoadError = (what) => (err) => console.warn(`[avatars] ${what} failed`, err);
+const norm = (s) => s.toLowerCase().normalize("NFKD").replace(/[^\w ]+/g, "");
 
-function AvatarButton({ avatar, label, selected, onPick }) {
+/** Drops images that fail to load; rows that fall below MIN_ROW hide. */
+function useLoaded() {
+  const [failed, setFailed] = useState(() => new Set());
+  const fail = useCallback((u) => setFailed((f) => (f.has(u) ? f : new Set(f).add(u))), []);
+  return [failed, fail];
+}
+
+const Tile = memo(function Tile({ avatar, label, selected, onPick, onFail, wide }) {
   return (
-    <button className={"sp-ap-item" + (selected ? " is-on" : "")} onClick={() => onPick(avatar)} aria-label={label}>
-      <ProfileAvatar avatar={avatar} size={AVATAR_SIZE} round />
+    <button
+      type="button"
+      className={"sp-ap-item" + (wide ? " is-wide" : "") + (selected ? " is-on" : "")}
+      onClick={() => onPick(avatar)}
+      aria-label={label}
+      aria-pressed={selected}
+    >
+      <span className="sp-ap-frame">
+        <img src={avatar} alt="" loading="lazy" decoding="async" draggable="false" onError={() => onFail(avatar)} />
+      </span>
+      <span className="sp-ap-name">{label}</span>
     </button>
   );
-}
+});
 
-function SkeletonStrip() {
+function Row({ title, items, value, onPick, failed, onFail, wide }) {
+  const shown = items.filter((i) => !failed.has(i.img));
+  if (shown.length < (wide ? 1 : MIN_ROW)) return null;
   return (
-    <div className="sp-ap-strip" aria-hidden="true">
-      {Array.from({ length: SKELETON_COUNT }, (_, i) => (
-        <span key={i} className="sp-ap-skeleton" />
-      ))}
-    </div>
-  );
-}
-
-/** Loads once the row is near the viewport, so long lists stay cheap. */
-function useNearViewport() {
-  const ref = useRef(null);
-  const [near, setNear] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || near) return undefined;
-    const io = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && setNear(true), {
-      rootMargin: LAZY_ROOT_MARGIN,
-    });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [near]);
-  return [ref, near];
-}
-
-/**
- * One title's row of avatars. Hidden when the title has too few images, or
- * when `animatedOnly` and the title is live action.
- */
-function TitleRow({ title, apiKey, animatedOnly, value, onPick }) {
-  const [ref, near] = useNearViewport();
-  const [row, setRow] = useState(null);
-  useEffect(() => {
-    if (!near || !apiKey) return undefined;
-    let alive = true;
-    loadTitleAvatars(title, apiKey)
-      .then((r) => alive && setRow(r))
-      .catch((err) => {
-        logLoadError(`${title.type} ${title.id}`)(err);
-        if (alive) setRow({ images: [] });
-      });
-    return () => {
-      alive = false;
-    };
-  }, [near, apiKey, title]);
-
-  if (row && (row.images.length < MIN_ROW_AVATARS || (animatedOnly && !row.animated))) return null;
-  return (
-    <section ref={ref} className="sp-ap-row">
-      <h3 className="sp-ap-title">{row?.name || title.name}</h3>
-      {row ? (
-        <div className="sp-ap-strip">
-          {row.images.map((path) => (
-            <AvatarButton key={path} avatar={path} label={row.name} selected={path === value} onPick={onPick} />
-          ))}
-        </div>
-      ) : (
-        <SkeletonStrip />
-      )}
+    <section className="sp-ap-row">
+      <h3 className="sp-ap-title">{title}</h3>
+      <div className={"sp-ap-strip" + (wide ? " is-wide" : "")}>
+        {shown.map((i) => (
+          <Tile key={i.img} avatar={i.img} label={i.name} selected={i.img === value} onPick={onPick} onFail={onFail} wide={wide} />
+        ))}
+      </div>
     </section>
   );
 }
-
-function TrendingRows({ apiKey, value, onPick }) {
-  const [rows, setRows] = useState(null);
-  useEffect(() => {
-    if (!apiKey) return undefined;
-    let alive = true;
-    loadTrending(apiKey)
-      .then((r) => alive && setRows(r))
-      .catch((err) => {
-        logLoadError("trending")(err);
-        if (alive) setRows([]);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [apiKey]);
-  if (!rows) return <SkeletonStrip />;
-  return rows
-    .filter((r) => r.items.length)
-    .map((r) => (
-      <section key={r.id} className="sp-ap-row">
-        <h3 className="sp-ap-title">{r.title}</h3>
-        <div className="sp-ap-strip">
-          {r.items.map((t) => (
-            <AvatarButton key={`${t.type}_${t.id}`} avatar={t.image} label={t.name} selected={t.image === value} onPick={onPick} />
-          ))}
-        </div>
-      </section>
-    ));
-}
-
-function SearchResults({ query, apiKey, value, onPick }) {
-  const [titles, setTitles] = useState(null);
-  useEffect(() => {
-    if (!apiKey) return undefined;
-    let alive = true;
-    setTitles(null);
-    const t = setTimeout(() => {
-      searchTitles(query, apiKey)
-        .then((r) => alive && setTitles(r))
-        .catch((err) => {
-          logLoadError("search")(err);
-          if (alive) setTitles([]);
-        });
-    }, SEARCH_DEBOUNCE_MS);
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [query, apiKey]);
-  if (!titles) return <SkeletonStrip />;
-  if (!titles.length) return <div className="sp-ap-empty">No shows found for “{query}”.</div>;
-  return titles.map((t) => (
-    <TitleRow key={`${t.type}_${t.id}`} title={t} apiKey={apiKey} animatedOnly={false} value={value} onPick={onPick} />
-  ));
-}
-
-const CHANNELS = nostalgiaChannels();
 
 /**
  * @param {{value: string, name: string, onPick: (avatar: string) => void, onClose: () => void}} props
  */
 export default function AvatarPicker({ value, name, onPick, onClose }) {
-  const [apiKey, setApiKey] = useState(null);
   const [query, setQuery] = useState("");
+  const q = norm(useDeferredValue(query).trim());
+  const [failed, onFail] = useLoaded();
 
-  useEffect(() => {
-    let alive = true;
-    getTmdbToken()
-      .then((k) => alive && setApiKey(k))
-      .catch(logLoadError("token"));
-    return () => {
-      alive = false;
-    };
-  }, []);
+  const channels = useMemo(() => {
+    if (!q) return CATALOG.channels;
+    return CATALOG.channels
+      .map((g) => ({
+        ...g,
+        shows: g.shows
+          .map((s) =>
+            norm(s.show).includes(q) || norm(g.channel).includes(q)
+              ? s
+              : { ...s, characters: s.characters.filter((c) => norm(c.name).includes(q)), group: null },
+          )
+          .filter((s) => s.characters.length || s.group),
+      }))
+      .filter((g) => g.shows.length);
+  }, [q]);
 
-  const searching = query.trim().length > 0;
+  const groups = channels
+    .map((g) => ({ channel: g.channel, items: g.shows.filter((s) => s.group).map((s) => ({ name: s.show, img: s.group })) }))
+    .filter((g) => g.items.length);
 
   return (
     <div className="sp-sheet sp-avatar-picker" role="dialog" aria-modal="true" aria-label="Choose an avatar">
@@ -178,49 +91,52 @@ export default function AvatarPicker({ value, name, onPick, onClose }) {
       </div>
       <div className="sp-sheet-body">
         <div className="sp-ap-preview">
-          <ProfileAvatar avatar={value} name={name} size={88} />
+          <ProfileAvatar avatar={value} name={name} size={96} />
         </div>
         <input
           className="sp-ap-search"
           type="search"
           value={query}
-          placeholder="Search a show"
+          placeholder="Search characters or shows"
           autoComplete="off"
           enterKeyHint="search"
           onChange={(e) => setQuery(e.target.value)}
         />
 
-        <section className="sp-ap-row">
-          <h3 className="sp-ap-title">Signature</h3>
-          <div className="sp-ap-strip">
-            {DEFAULT_AVATARS.map((a) => (
-              <button key={a.id} className={"sp-ap-item" + (a.id === value ? " is-on" : "")} onClick={() => onPick(a.id)} aria-label="Gradient avatar">
-                <ProfileAvatar avatar={a.id} name={name} size={AVATAR_SIZE} round />
-              </button>
+        {!q && (
+          <section className="sp-ap-row">
+            <h3 className="sp-ap-title">Signature</h3>
+            <div className="sp-ap-strip">
+              {DEFAULT_AVATARS.map((a) => (
+                <button key={a.id} className={"sp-ap-item" + (a.id === value ? " is-on" : "")} onClick={() => onPick(a.id)} aria-label="Gradient avatar">
+                  <ProfileAvatar avatar={a.id} name={name} size={TILE} />
+                  <span className="sp-ap-name">&nbsp;</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {channels.map((g) => (
+          <div key={g.channel} className="sp-ap-channel">
+            <h2 className="sp-ap-head">{g.channel}</h2>
+            {g.shows.map((s) => (
+              <Row key={s.tvmaze} title={s.show} items={s.characters} value={value} onPick={onPick} failed={failed} onFail={onFail} />
             ))}
           </div>
-        </section>
+        ))}
 
-        {searching ? (
-          <>
-            <h2 className="sp-ap-head">Results</h2>
-            <SearchResults query={query} apiKey={apiKey} value={value} onPick={onPick} />
-          </>
-        ) : (
-          <>
-            <h2 className="sp-ap-head">Nostalgia</h2>
-            {CHANNELS.map((g) => (
-              <div key={g.channel} className="sp-ap-channel">
-                <div className="sp-ap-kicker">{g.channel}</div>
-                {g.titles.map((t) => (
-                  <TitleRow key={`${t.type}_${t.id}`} title={t} apiKey={apiKey} animatedOnly value={value} onPick={onPick} />
-                ))}
-              </div>
+        {groups.length > 0 && (
+          <div className="sp-ap-channel">
+            <h2 className="sp-ap-head">Groups</h2>
+            {groups.map((g) => (
+              <Row key={g.channel} title={g.channel} items={g.items} value={value} onPick={onPick} failed={failed} onFail={onFail} wide />
             ))}
-            <h2 className="sp-ap-head">Trending This Week</h2>
-            <TrendingRows apiKey={apiKey} value={value} onPick={onPick} />
-          </>
+          </div>
         )}
+
+        {!channels.length && <div className="sp-ap-empty">No characters found for “{query}”.</div>}
+        <div className="sp-ap-credit">Character art via TVMaze</div>
       </div>
     </div>
   );
