@@ -113,7 +113,7 @@ export default function ProfileGate({ children }) {
           managing={overlay === MANAGE}
           canManage={!active?.kids}
           onPick={(p) => unlockThen(p, enter)}
-          onEdit={(p) => unlockThen(p, setEditing)}
+          onEdit={(p) => (p.pin ? setPinTarget({ profile: p, then: setEditing }) : setEditing(p))}
           onAdd={() => setEditing("new")}
           onToggleManage={() => setOverlay(overlay === MANAGE ? PICK : MANAGE)}
           onClose={active ? () => setOverlay(null) : undefined}
