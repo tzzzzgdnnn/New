@@ -68,14 +68,16 @@ struct DLJob: Codable {
     var finalBytes: Int64?
     /// MP4: leading parts already appended to video.mp4, and its length then.
     var joinedParts: Int?
+    /// estBytes is the stream's exact size (MP4 Content-Length / byte ranges).
+    var exactSize: Bool?
     var joinedBytes: Int64?
 }
 
 final class DownloadManager: NSObject, URLSessionDownloadDelegate {
     static let shared = DownloadManager()
     static let sessionId = "superplayer.downloads"
-    /// Upper bound of fragments in flight; the live number adapts between
-    /// DLMath.Concurrency.minimum and .maximum per download.
+    /// Fragments in flight at most (8); the live number backs off from it on
+    /// errors and throttling (DLMath.Concurrency).
     static let connectionsPerJob = DLMath.Concurrency.maximum
     /// One download at a time gets all connections; the rest wait in queue.
     static let maxActiveJobs = 1
@@ -94,6 +96,7 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
     private var meters: [String: DLMath.SpeedMeter] = [:]
     private var received: [String: Int64] = [:]  // bytes received this run (speed only)
     private var concurrency: [String: DLMath.Concurrency] = [:]
+    private var shownProgress: [String: Double] = [:]  // keeps the reported % monotonic
     private var dirty = Set<String>()
     /// Tasks from a previous launch are reattached before anything is scheduled.
     private var attached = false
@@ -102,6 +105,8 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
 
     private lazy var session: URLSession = {
         let cfg = URLSessionConfiguration.background(withIdentifier: Self.sessionId)
+        // One session for every fragment: connections stay open (keep-alive)
+        // and are reused, up to the most fragments ever fetched at once.
         cfg.httpMaximumConnectionsPerHost = Self.connectionsPerJob
         cfg.isDiscretionary = false
         cfg.sessionSendsLaunchEvents = true
@@ -261,7 +266,9 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
                                 headers: r.headers, units: all, status: .queued, playFile: playFile,
                                 estBytes: exactBytes > 0 ? exactBytes : r.estBytes, meta: r.meta, subtitles: subs,
                                 createdAt: Date().timeIntervalSince1970 * 1000)
-                self.jobs[job.id] = job
+                var added = job
+                added.exactSize = exactBytes > 0 ? true : nil
+                self.jobs[job.id] = added
                 sbLog("download \(job.id) \"\(job.name)\" \(job.kind) \(all.count) units, \(all.filter { $0.isFragment }.count) fragments, estimate \(job.estBytes) bytes")
                 self.save(now: true)
                 self.dirty.insert(job.id)
@@ -574,6 +581,7 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
         meters[id] = nil
         received[id] = nil
         concurrency[id] = nil
+        shownProgress[id] = nil
         dirty.remove(id)
         save(now: true)
         onEvent?(["id": id, "removed": true])
@@ -616,7 +624,7 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
         let dir = folder(job)
         // Lowest indices first, so fragments finish (and MP4 parts append) in order.
         for (i, u) in job.units.enumerated() where !u.done && running[i] == nil {
-            if running.count >= limit { break }
+            if DLMath.requestsToStart(inFlight: running.count, limit: limit, waiting: 1) == 0 { break }
             if let t = notBefore["\(id)|\(i)"], t > now { continue }
             guard let url = URL(string: u.url) else { fail(id, "Bad segment address"); return }
             var req = URLRequest(url: url)
@@ -914,28 +922,37 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
 
     /// Everything the page shows about a download. The page renders these
     /// numbers as they are; nothing is estimated or kept on the web side.
+    /// Bytes, fragments and percent agree: the percent is fragments written
+    /// (or exact bytes when the size is known), the bytes are what those
+    /// fragments hold, and the total is bytes / fragmentsDone × fragmentsTotal.
     private func payload(_ j: DLJob) -> [String: Any] {
         let finished = j.status == .completed
+        let exact = (j.exactSize ?? false) && j.estBytes > 0 ? j.estBytes : nil
         let fragments = j.units.filter { $0.isFragment }
         let fragmentsDone = fragments.filter { $0.done }.count
         let fragmentBytesDone = fragments.reduce(Int64(0)) { $0 + ($1.done ? $1.bytes : 0) }
         let otherBytesDone = j.units.reduce(Int64(0)) { $0 + (!$1.isFragment && $1.done ? $1.bytes : 0) }
-        let have = finished ? (j.finalBytes ?? bytes(j)) : bytes(j)
-        let total = DLMath.expectedTotal(fragmentBytesDone: fragmentBytesDone, fragmentsDone: fragmentsDone,
+        // Bytes written to disk: whole finished units only, never in-flight parts.
+        let have: Int64 = finished ? (j.finalBytes ?? 0) : fragmentBytesDone + otherBytesDone
+        let total = exact.map { max($0, have) } ?? DLMath.expectedTotal(fragmentBytesDone: fragmentBytesDone, fragmentsDone: fragmentsDone,
                                          fragmentsTotal: fragments.count, otherBytesDone: otherBytesDone,
                                          estimate: j.estBytes, bytesDownloaded: have,
                                          finalBytes: finished ? j.finalBytes : nil)
-        let pct = DLMath.progress(bytesDownloaded: have, expectedTotal: total, fragmentsDone: fragmentsDone,
-                                  fragmentsTotal: fragments.count, finished: finished)
+        let pct = DLMath.progress(fragmentsDone: fragmentsDone, fragmentsTotal: fragments.count, bytesDownloaded: have,
+                                  exactTotal: exact, finished: finished, previous: shownProgress[j.id] ?? 0)
+        shownProgress[j.id] = pct
         let speed = j.status == .downloading ? (meters[j.id]?.bytesPerSecond ?? 0) : 0
-        let eta = speed > 1 && total > have ? Double(total - have) / speed : -1
+        let eta = speed > 1 && total > bytes(j) ? Double(total - bytes(j)) / speed : -1
         return [
             "id": j.id, "name": j.name, "status": j.status.rawValue,
             "progress": pct, "bytesDownloaded": have, "totalBytes": total,
-            "totalIsFinal": finished, "estimateBytes": j.estBytes,
+            "totalIsFinal": finished,
+            // Exact: the stream's stated size, or every fragment is in (sum of their sizes).
+            "totalIsExact": finished || exact != nil || (fragments.count > 0 && fragmentsDone == fragments.count),
             "speedBps": speed, "etaSec": eta,
             "fragmentsDone": fragmentsDone, "fragmentsTotal": fragments.count,
-            "connections": j.status == .downloading ? (inflight[j.id]?.count ?? 0) : 0,
+            // Real URLSession tasks fetching fragments right now (at most 8).
+            "activeConnections": j.status == .downloading ? (inflight[j.id]?.count ?? 0) : 0,
             "finalBytes": j.finalBytes ?? 0, "error": j.error ?? "", "meta": j.meta,
             "subtitles": j.subtitles, "createdAt": j.createdAt, "completedAt": j.completedAt ?? 0,
         ]

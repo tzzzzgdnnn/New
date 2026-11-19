@@ -77,25 +77,29 @@ check("expected total: never below what is downloaded; real size once finished")
     return t == 9 * MB && f == 777
 }
 
-check("progress: bytes of the expected total, consistent with the shown numbers") {
+check("true progress: fragments written / total, agreeing with bytes and the refined total") {
+    let p = DLMath.progress(fragmentsDone: 303, fragmentsTotal: 1586, bytesDownloaded: 638 * MB,
+                            exactTotal: nil, finished: false)
     let total = DLMath.expectedTotal(fragmentBytesDone: 638 * MB, fragmentsDone: 303, fragmentsTotal: 1586,
                                      otherBytesDone: 0, estimate: 637 * MB, bytesDownloaded: 638 * MB)
-    let p = DLMath.progress(bytesDownloaded: 638 * MB, expectedTotal: total, fragmentsDone: 303,
-                            fragmentsTotal: 1586, finished: false)
-    return abs(p - 303.0 / 1586 * 100) < 0.01
+    let bytesPct = Double(638 * MB) / Double(total) * 100
+    return abs(p - 303.0 / 1586 * 100) < 1e-9 && abs(p - bytesPct) < 0.001
 }
 
-check("progress: bigger-than-expected fragments never show 100% early") {
-    let p = DLMath.progress(bytesDownloaded: 900 * MB, expectedTotal: 900 * MB, fragmentsDone: 0,
-                            fragmentsTotal: 1586, finished: false)
-    let nearly = DLMath.progress(bytesDownloaded: 10, expectedTotal: 10, fragmentsDone: 1586,
-                                 fragmentsTotal: 1586, finished: false)
-    let none = DLMath.progress(bytesDownloaded: 0, expectedTotal: 0, fragmentsDone: 0, fragmentsTotal: 0, finished: false)
-    return p == 99.0 && nearly == 99.9 && none == 0
+check("true progress: an estimate never moves it; exact sizes use bytes") {
+    let a = DLMath.progress(fragmentsDone: 10, fragmentsTotal: 100, bytesDownloaded: 999 * MB, exactTotal: nil, finished: false)
+    let b = DLMath.progress(fragmentsDone: 0, fragmentsTotal: 1, bytesDownloaded: 25, exactTotal: 100, finished: false)
+    return a == 10 && b == 25
 }
 
-check("progress: 100 only when finished") {
-    DLMath.progress(bytesDownloaded: 1, expectedTotal: 100, fragmentsDone: 1, fragmentsTotal: 100, finished: true) == 100
+check("true progress: monotonic, below 100 until finished and verified, then 100") {
+    // A fragment refetched after verification lowers fragmentsDone: the % holds.
+    let held = DLMath.progress(fragmentsDone: 40, fragmentsTotal: 100, bytesDownloaded: 0, exactTotal: nil,
+                               finished: false, previous: 41)
+    let allWritten = DLMath.progress(fragmentsDone: 100, fragmentsTotal: 100, bytesDownloaded: 0, exactTotal: nil, finished: false)
+    let overExact = DLMath.progress(fragmentsDone: 0, fragmentsTotal: 1, bytesDownloaded: 200, exactTotal: 100, finished: false)
+    let done = DLMath.progress(fragmentsDone: 1, fragmentsTotal: 100, bytesDownloaded: 0, exactTotal: nil, finished: true)
+    return held == 41 && allWritten == 99.9 && overExact == 99.9 && done == 100
 }
 
 check("finished check: every fragment done and on disk at full size") {
@@ -122,13 +126,33 @@ check("retries: throttling waits longest, refusals fail at once, backoff grows w
         && DLMath.backoff(attempt: 0, throttled: true, retryAfter: 120) == 60
 }
 
-check("concurrency adapts between 4 and 8") {
+check("concurrency: 8 and never more; backs off on errors and throttling, recovers to 8") {
     var c = DLMath.Concurrency()
-    for _ in 0..<200 { c.succeeded() }
-    let top = c.limit
+    let start = c.limit
+    for _ in 0..<500 { c.succeeded() }
+    let capped = c.limit
     c.throttled(); let afterThrottle = c.limit
-    c.throttled(); c.failed()
-    return top == 8 && afterThrottle == 4 && c.limit == 4
+    c.failed(); c.throttled(); c.throttled()
+    let floor = c.limit
+    for _ in 0..<500 { c.succeeded() }
+    return start == 8 && capped == 8 && afterThrottle == 4 && floor == 2 && c.limit == 8
+}
+
+check("in-flight requests: never above 8, refilled as fragments finish") {
+    var inFlight = 0, waiting = 1586, finished = 0, peak = 0
+    var c = DLMath.Concurrency()
+    var stayedFull = true
+    while finished < 1586 {
+        let n = DLMath.requestsToStart(inFlight: inFlight, limit: c.limit, waiting: waiting)
+        inFlight += n; waiting -= n
+        peak = max(peak, inFlight)
+        if waiting > 0 && inFlight < c.limit { stayedFull = false }
+        let done = min(inFlight, 3)            // some finish (out of order doesn't matter here)
+        inFlight -= done; finished += done
+        for _ in 0..<done { c.succeeded() }
+        if finished == 300 { c.throttled() }   // backs off, then recovers
+    }
+    return peak == 8 && stayedFull && DLMath.requestsToStart(inFlight: 8, limit: 12, waiting: 50) == 0
 }
 
 check("speed: bytes received in the window, not bytes on disk") {

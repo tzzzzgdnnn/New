@@ -96,23 +96,22 @@ enum DLMath {
         return max(total, bytesDownloaded)
     }
 
-    /// Progress in percent: bytes downloaded of the expected total (the same
-    /// two numbers the page shows), falling back to the fragment ratio when
-    /// there is no total yet. 100 only when finished; until every fragment is
-    /// written it stays below 100 even if the bytes say otherwise.
-    static func progress(bytesDownloaded: Int64, expectedTotal: Int64,
-                         fragmentsDone: Int, fragmentsTotal: Int, finished: Bool) -> Double {
+    /// True progress in percent, never derived from an estimate:
+    /// - bytes downloaded / exact total when every byte is known up front
+    ///   (MP4 Content-Length, byte-range playlists),
+    /// - else fragments written / fragments total.
+    /// Monotonic (never below `previous`), below 100 until `finished`
+    /// (every fragment written and verified), 100 only then.
+    static func progress(fragmentsDone: Int, fragmentsTotal: Int, bytesDownloaded: Int64,
+                         exactTotal: Int64?, finished: Bool, previous: Double = 0) -> Double {
         if finished { return 100 }
-        var pct: Double
-        if expectedTotal > 0 {
-            pct = Double(bytesDownloaded) / Double(expectedTotal) * 100
+        var pct: Double = 0
+        if let exact = exactTotal, exact > 0 {
+            pct = Double(bytesDownloaded) / Double(exact) * 100
         } else if fragmentsTotal > 0 {
             pct = Double(fragmentsDone) / Double(fragmentsTotal) * 100
-        } else {
-            pct = 0
         }
-        let allWritten = fragmentsTotal > 0 && fragmentsDone >= fragmentsTotal
-        return min(max(pct, 0), allWritten ? 99.9 : 99.0)
+        return min(max(pct, previous, 0), 99.9)
     }
 
     /// A unit as far as finishing is concerned: done, its expected file on
@@ -161,14 +160,14 @@ enum DLMath {
 
     // MARK: Concurrency
 
-    /// Fragments fetched at once for the active download: starts at 6,
-    /// grows by one (up to 8) after a run of clean fragments, halves toward
-    /// 4 when the server throttles, drops by one on other failures.
-    struct Concurrency: Codable, Equatable {
-        static let minimum = 4
+    /// Fragments fetched at once for the active download: 8 (also the
+    /// hard cap); halves (to at least 2) when the server throttles, drops by
+    /// one on other failures, and climbs back one at a time after a run of
+    /// clean fragments.
+    struct Concurrency: Equatable {
+        static let minimum = 2
         static let maximum = 8
-        static let initial = 6
-        var limit = Concurrency.initial
+        var limit = Concurrency.maximum
         var streak = 0
 
         mutating func succeeded() {
@@ -177,6 +176,12 @@ enum DLMath {
         }
         mutating func throttled() { limit = max(Self.minimum, limit / 2); streak = 0 }
         mutating func failed() { limit = max(Self.minimum, limit - 1); streak = 0 }
+    }
+
+    /// Real requests to start now: enough to bring the in-flight count up
+    /// to the limit (never above the hard cap), no more than are waiting.
+    static func requestsToStart(inFlight: Int, limit: Int, waiting: Int) -> Int {
+        max(0, min(min(limit, Concurrency.maximum) - inFlight, waiting))
     }
 
     // MARK: Speed
