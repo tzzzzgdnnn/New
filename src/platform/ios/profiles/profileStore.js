@@ -57,6 +57,16 @@ function newProfileId() {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// A stored PIN that can't be read back as 4 digits (corrupt or hand-edited
+// data) must never hard-lock a profile: it is treated as no PIN, with a warning.
+function safePin(p) {
+  const raw = p?.pin;
+  if (raw == null || raw === "") return null;
+  const pin = normalizePin(raw);
+  if (!pin) console.warn(`[profiles] Ignoring invalid stored PIN for profile ${p.id}; profile is unlocked`);
+  return pin;
+}
+
 function normalize(p, index) {
   return {
     id: String(p.id),
@@ -65,7 +75,7 @@ function normalize(p, index) {
     kids: !!p.kids,
     // A PIN is a lock against other people in the household, not a secret
     // that leaves the device, so it is kept as typed.
-    pin: normalizePin(p.pin),
+    pin: safePin(p),
   };
 }
 

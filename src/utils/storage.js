@@ -238,19 +238,21 @@ export function formatBytes(bytes) {
 //   "subdlApiKey" - SubDL API key
 //   "wyzieApiKey" - Wyzie API key
 
-const _isElectronSecure =
+// Checked on each call, not at module load, so the iOS shim (which installs
+// window.electron) can never be missed by import order.
+const _isSecureAvailable = () =>
   typeof window !== "undefined" && !!window.electron?.secureGet;
 
 export const secureStorage = {
   /** Read an encrypted value. Returns null if not set. */
   async get(key) {
-    if (!_isElectronSecure) return null;
+    if (!_isSecureAvailable()) return null;
     return window.electron.secureGet(key);
   },
 
   /** Write an encrypted value. Pass null/empty to delete. */
   async set(key, value) {
-    if (!_isElectronSecure) return;
+    if (!_isSecureAvailable()) return;
     return window.electron.secureSet(key, value ?? "");
   },
 };
