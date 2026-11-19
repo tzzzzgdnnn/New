@@ -15,10 +15,39 @@ export default class ErrorBoundary extends Component {
     console.error("[ErrorBoundary]", error, info);
   }
 
+  // A page-level boundary clears itself when the user navigates elsewhere,
+  // so one broken page never leaves the whole app stuck on the error screen.
+  componentDidUpdate(prevProps) {
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false, error: null });
+    }
+  }
+
   render() {
     if (!this.state.hasError) return this.props.children;
 
     const { error } = this.state;
+
+    if (this.props.inline) {
+      return (
+        <div className="sp-error" role="alert">
+          <div className="sp-error-icon" aria-hidden="true">!</div>
+          <div className="sp-error-title">This page hit a snag</div>
+          <div className="sp-error-text">
+            Your library and settings are safe. Try again, or pick another tab.
+          </div>
+          {error?.message && <pre className="sp-error-detail">{error.message}</pre>}
+          <div className="sp-error-actions">
+            <button onClick={() => this.setState({ hasError: false, error: null })}>
+              Try Again
+            </button>
+            <button className="is-primary" onClick={() => window.location.reload()}>
+              Reload
+            </button>
+          </div>
+        </div>
+      );
+    }
 
     return (
       <div

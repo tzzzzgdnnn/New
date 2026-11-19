@@ -48,6 +48,17 @@ const TVPage = lazy(() => import("./pages/TVPage"));
 const LibraryPage = lazy(() => import("./pages/LibraryPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const DownloadsPage = lazy(() => import("./pages/DownloadsPage"));
+
+// iOS: a crash inside one page shows an inline error under the tab bar and
+// clears on navigation, instead of covering the whole app. Desktop keeps the
+// single app-wide boundary.
+const PageBoundary = IS_IOS
+  ? ({ resetKey, children }) => (
+      <ErrorBoundary inline resetKey={resetKey}>
+        {children}
+      </ErrorBoundary>
+    )
+  : ({ children }) => children;
 import {
   checkForUpdatesWithFallback,
   DEFAULT_UPDATE_SOURCE,
@@ -1077,18 +1088,25 @@ export default function App() {
           )}
           <Suspense
             fallback={
-              <div
-                style={{
-                  color: "var(--text2)",
-                  padding: 48,
-                  textAlign: "center",
-                  fontSize: 15,
-                }}
-              >
-                Laden…
-              </div>
+              IS_IOS ? (
+                <div className="sp-page-loading" role="status" aria-label="Loading">
+                  <span />
+                </div>
+              ) : (
+                <div
+                  style={{
+                    color: "var(--text2)",
+                    padding: 48,
+                    textAlign: "center",
+                    fontSize: 15,
+                  }}
+                >
+                  Loading…
+                </div>
+              )
             }
           >
+            <PageBoundary resetKey={`${page}:${selected?.id ?? ""}`}>
             {page === "home" && (
               <HomePage
                 trending={trending}
@@ -1197,6 +1215,7 @@ export default function App() {
                 }
               />
             )}
+            </PageBoundary>
           </Suspense>
         </div>
 
