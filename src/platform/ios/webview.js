@@ -471,14 +471,15 @@ function upgrade(wv) {
   // Web app, anime: ani.pm's stream (API through our relay) in Apple's own
   // player. Dub never silently plays Sub. Falls back to the embed server.
   const tryWebAnipm = (url, ctx) => {
-    if (!anipmWebReady || !ctx.anilistId) { directFor = url; noStream(); return true; }
+    if (!anipmWebReady || !ctx.anilistId) return false;
     const wanted = ctx.dubMode === "dub" ? "dub" : "sub";
     directFor = url;
     iframe.src = "about:blank";
     fire("dom-ready");
     const fallback = () => {
       if (directFor !== url) return;
-      noStream();
+      hideCard();
+      loadUrl(url, { webOnly: true });
     };
     const start = (r) => {
       hideCard();
@@ -531,7 +532,7 @@ function upgrade(wv) {
           if (directFor !== url) return;
           diag("player", `web direct failed: ${why}`);
           stopDirect = null;
-          noStream();
+          loadUrl(embedFor(url), { webOnly: true });
         },
       });
     };
@@ -548,7 +549,7 @@ function upgrade(wv) {
         start(r.source);
       })
       .catch(() => {
-        if (directFor === url) noStream();
+        if (directFor === url) { hideCard(); loadUrl(embedFor(url), { webOnly: true }); }
       });
     return true;
   };

@@ -75,10 +75,14 @@ export function applyServers(cfg) {
   if (import.meta.env?.VITE_WEB) {
     // Web app: Cinejoy direct always first; servers that show a "verify you're
     // human" wall or refuse to run sandboxed never appear.
-    // Web app: no embed sites at all (they carry ads and captcha walls).
-    // Only Cinejoy (movies/TV) and ani.pm (anime), both played by Apple's player.
+    // Cinejoy direct first (ad-free); embed servers back as fallbacks, minus
+    // any that show a captcha wall. Vidrift first for anime.
+    const ok = added.filter((s) => !WEB_BLOCKED.has(s.id));
     const direct = builtins.filter((s) => /\.invalid\//.test(s.movieUrl?.("1") || ""));
-    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct);
+    const rest = builtins
+      .filter((s) => !direct.includes(s) && !WEB_BLOCKED.has(s.id))
+      .sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"));
+    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct, ...rest, ...ok);
   } else {
     PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...added, ...builtins);
   }
