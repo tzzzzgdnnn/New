@@ -5,7 +5,7 @@
 // show's cast together. The catalog is bundled (characters.json, built and
 // URL-verified by scripts/build-avatar-characters.py), so nothing is fetched
 // before the grid can draw. Returns the chosen avatar string.
-import { memo, useCallback, useDeferredValue, useMemo, useState } from "react";
+import { useRef, memo, useCallback, useDeferredValue, useMemo, useState } from "react";
 import ProfileAvatar from "./ProfileAvatar";
 import { DEFAULT_AVATARS } from "./avatars";
 import CATALOG from "./characters.json";
@@ -57,7 +57,28 @@ function Row({ title, items, value, onPick, failed, onFail, wide }) {
 /**
  * @param {{value: string, name: string, onPick: (avatar: string) => void, onClose: () => void}} props
  */
+// Web only (not the APK or IPA): use your own photo. Center-cropped to a
+// 256 px square JPEG (~20 KB) and kept with the profile, so it is in backups.
+const CUSTOM_PHOTOS = !!(import.meta.env.VITE_WEB && !import.meta.env.VITE_ANDROID);
+function photoToAvatar(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const side = Math.min(img.naturalWidth, img.naturalHeight);
+      const c = document.createElement("canvas");
+      c.width = c.height = 256;
+      c.getContext("2d").drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, 256, 256);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL("image/jpeg", 0.85));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That photo couldn't be opened.")); };
+    img.src = url;
+  });
+}
+
 export default function AvatarPicker({ value, name, onPick, onClose }) {
+  const photoRef = useRef(null);
   const [query, setQuery] = useState("");
   const q = norm(useDeferredValue(query).trim());
   const [failed, onFail] = useLoaded();
@@ -107,6 +128,18 @@ export default function AvatarPicker({ value, name, onPick, onClose }) {
           <section className="sp-ap-row">
             <h3 className="sp-ap-title">Signature</h3>
             <div className="sp-ap-strip">
+              {CUSTOM_PHOTOS && (
+                <button className="sp-ap-item" onClick={() => photoRef.current?.click()} aria-label="Choose your own photo">
+                  <span className="sp-avatar" style={{ width: TILE, height: TILE, borderRadius: Math.round(TILE * 0.14), display: "grid", placeItems: "center", background: "#1c1c1e", border: "1.5px dashed #555", color: "#ddd", fontSize: Math.round(TILE * 0.4) }}>+</span>
+                  <span className="sp-ap-name">Your Photo</span>
+                  <input ref={photoRef} type="file" accept="image/*" hidden onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!f) return;
+                    try { onPick(await photoToAvatar(f)); } catch (err) { alert(err.message); }
+                  }} />
+                </button>
+              )}
               {DEFAULT_AVATARS.map((a) => (
                 <button key={a.id} className={"sp-ap-item" + (a.id === value ? " is-on" : "")} onClick={() => onPick(a.id)} aria-label="Gradient avatar">
                   <ProfileAvatar avatar={a.id} name={name} size={TILE} />
