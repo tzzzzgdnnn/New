@@ -14,6 +14,9 @@ import { probeAndRank } from "../../utils/servers/ranking";
 import { probeUrl } from "../../utils/servers/probe";
 import { isAutoPick, recordLookup, serverStats } from "./autoServer";
 import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
+import { anipmCandidates, ANIPM_ID } from "./anipm";
+import { parseServerKey } from "../../utils/servers/catalog";
+import { diag } from "../../utils/diag";
 
 const LOAD_TIMEOUT_MS = 8000;
 const MAX_CANDIDATES = 10;
@@ -155,6 +158,19 @@ function pinnedFor(ctx) {
 function rankedCandidates(url, ctx, { signal, exclude = [] } = {}) {
   const list = buildCandidateList(url, ctx).filter((c) => !exclude.includes(c.id));
   return probeAndRank(list, { stats: serverStats, probe: probeUrl, pinned: pinnedFor(ctx), signal });
+}
+
+/**
+ * ani.pm is the main anime server: its candidates lead, unless the viewer
+ * picked another server by hand (then that one stays first).
+ */
+export function withAnipm(ranked, anipm) {
+  if (!anipm?.length) return ranked;
+  const rest = ranked.filter((c) => parseServerKey(c.id).sourceId !== ANIPM_ID);
+  if (!isAutoPick() && rest.length && readStored("playerSource")) {
+    return [rest[0], ...anipm, ...rest.slice(1)].slice(0, MAX_CANDIDATES + anipm.length);
+  }
+  return [...anipm, ...rest].slice(0, MAX_CANDIDATES + anipm.length);
 }
 
 function buildCandidateList(url, ctx) {
@@ -309,6 +325,7 @@ function upgrade(wv) {
     pending.set(token, (r) => {
       if (nativeFor !== url || nativeToken !== token) return;
       if (sent) recordLookup(r, sent.candidates, Date.now() - sent.at);
+      if (sent) diag("player", `play: ${r.ok ? `stream from ${r.server}` : "no stream"} ${Date.now() - sent.at} ms after send`);
       if (r.ok) {
         log("playing", r.server);
         rememberLastGood(currentCtx(), r.server);
@@ -338,11 +355,19 @@ function upgrade(wv) {
       const ctx = currentCtx();
       // Start on the fastest server: untested providers are probed at once,
       // within a short budget, while the Keychain read finishes.
-      const [subCtx, candidates] = await Promise.all([
+      const tRank = Date.now();
+      const [subCtx, ranked, anipm] = await Promise.all([
         subCtxReady,
         rankedCandidates(url, ctx, { signal: probing.signal }),
+        ctx.isAnime ? anipmCandidates(ctx) : [],
       ]);
       if (nativeToken !== token) return;
+      const candidates = withAnipm(ranked, anipm);
+      diag(
+        "player",
+        `play: candidates in ${Date.now() - tRank} ms (tap→send ${Date.now() - lastNativeAt} ms): ` +
+          candidates.slice(0, 4).map((c) => c.id).join(", "),
+      );
       const startAt = getResumeSeconds(ctx.progressKey);
       log("resolve", candidates.map((c) => `${c.id} ${c.url}`));
       sent = { candidates, at: Date.now() };
