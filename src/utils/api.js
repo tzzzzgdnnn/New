@@ -428,7 +428,7 @@ const ALL_PLAYER_SOURCES = [
 
 // Web app: every embed runs sandboxed (no pop-ups, no redirects, no new
 // tabs). Players that refuse to run sandboxed are left out there.
-export const NEEDS_UNSANDBOXED = new Set(["vidrift"]);
+export const NEEDS_UNSANDBOXED = new Set([]);
 // Web app: Cinejoy's direct stream (played in-page by hls.js, no embed, no
 // ads) is the first server. Its URL is only a key; webview.js intercepts it.
 const WEB_DIRECT_SOURCES = [

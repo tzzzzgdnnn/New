@@ -324,7 +324,9 @@ function upgrade(wv) {
   // Ad blocking: no allow-popups / allow-top-navigation, so embeds can't open
   // pop-ups, new tabs, or redirect the app. Servers that refuse a sandbox are
   // dropped from the web build (NEEDS_UNSANDBOXED in api.js).
-  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-presentation");
+  // No sandbox: players detect it and refuse to play ("disable sandbox").
+  iframe.removeAttribute("sandbox");
+  iframe.setAttribute("referrerpolicy", "origin");
   iframe.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media");
   iframe.setAttribute("allowfullscreen", "");
   iframe.setAttribute("playsinline", "");

@@ -15,7 +15,7 @@ const FETCH_TIMEOUT_MS = 2500;
 const BUILTIN = PLAYER_SOURCES.slice();
 // Web app only: Hexa shows a "Verification Required" captcha; Vidrift refuses
 // to play sandboxed.
-const WEB_BLOCKED = new Set(["hexa", "vidrift"]);
+const WEB_BLOCKED = new Set(["hexa"]);
 let _mirrorMap = []; // [{ origin, mirrors: [origin...] }]
 
 const fill = (tpl, v) =>
