@@ -27,8 +27,7 @@ html.sb-ios .main > .sps { animation: none; }
 
 /* ── Navigation bar + large title ───────────────────────────────────────── */
 .sps-nav {
-  position: sticky;
-  top: var(--sps-nav-top);
+  position: relative;
   z-index: 20;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -375,3 +374,8 @@ html.sb-ios .main > .sps { animation: none; }
   .sps-page.is-push, .sps-page.is-pop, .sps-sheet, .sps-sheet-scrim { animation: none; }
 }
 body.no-anim .sps-page, body.no-anim .sps-sheet, body.no-anim .sps-sheet-scrim { animation: none !important; }
+
+/* Nav bar scrolls with the page: no floating title or bar. */
+.sps-nav.is-collapsed { background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.sps-nav.is-collapsed::after { opacity: 0; }
+.sps-nav.is-collapsed .sps-nav-title, .sps-nav-title { opacity: 0 !important; }
