@@ -449,8 +449,46 @@ function upgrade(wv) {
     if (!isBlank(u)) playNative(u);
   });
 
+  // Web app: Cinejoy's stream plays in-page (no embed, no ads, fast start).
+  // Falls back to the embed server if Cinejoy has nothing or it won't play.
+  let stopDirect = null;
+  let directFor = null;
+  const tryWebDirect = (url) => {
+    const ctx = currentCtx();
+    if (!ctx || ctx.isAnime || !ctx.tmdbId) return false;
+    if (readStored("playerSource") && readStored("playerSource") !== CINEJOY_ID && !isAutoPick()) return false;
+    directFor = url;
+    iframe.src = "about:blank";
+    showCard("Loading…", false);
+    fire("dom-ready");
+    Promise.all([cinejoyCandidates(ctx, { waitMs: 6000 }), import("../web/directPlayer")])
+      .then(([cands, m]) => {
+        if (directFor !== url) return;
+        if (!cands.length) throw new Error("no stream");
+        hideCard();
+        log("playing", "Cinejoy (direct)");
+        fire("did-finish-load");
+        stopDirect = m.playDirect(wv, cands[0].url.replace(/#sb-direct$/, ""), {
+          startAt: ctx.startAt || 0,
+          onFail: (why) => {
+            if (directFor !== url) return;
+            diag("player", `web direct failed: ${why}`);
+            stopDirect = null;
+            loadUrl(url, { webOnly: true });
+          },
+        });
+      })
+      .catch(() => {
+        if (directFor === url) { hideCard(); loadUrl(url, { webOnly: true }); }
+      });
+    return true;
+  };
+
   const loadUrl = (url, { webOnly = false } = {}) => {
     stopWeb();
+    stopDirect?.();
+    stopDirect = null;
+    if (!webOnly) directFor = null;
     if (!webOnly && !isBlank(url) && nativeAvailable()) {
       playNative(url);
       return;
@@ -461,6 +499,7 @@ function upgrade(wv) {
       iframe.src = "about:blank";
       return;
     }
+    if (import.meta.env.VITE_WEB && !webOnly && tryWebDirect(url)) return;
     // No load event in time: the next mirror takes over, else the page hears
     // did-fail-load and fails over to another server.
     webFallback = createFallback([url, ...mirrorsFor(url)], {

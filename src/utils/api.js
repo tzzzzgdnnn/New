@@ -429,8 +429,21 @@ const ALL_PLAYER_SOURCES = [
 // Web app: every embed runs sandboxed (no pop-ups, no redirects, no new
 // tabs). Players that refuse to run sandboxed are left out there.
 export const NEEDS_UNSANDBOXED = new Set(["vidrift"]);
+// Web app: Cinejoy's direct stream (played in-page by hls.js, no embed, no
+// ads) is the first server. Its URL is only a key; webview.js intercepts it.
+const WEB_DIRECT_SOURCES = [
+  {
+    id: "cinejoy-direct",
+    label: "Cinejoy",
+    tag: null,
+    note: "Direct, no ads",
+    supportsAnime: false,
+    movieUrl: (id) => `https://cinejoy.invalid/movie/${id}`,
+    tvUrl: (id, season, ep) => `https://cinejoy.invalid/tv/${id}/${season}/${ep}`,
+  },
+];
 export const PLAYER_SOURCES = import.meta.env?.VITE_WEB
-  ? ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id))
+  ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id))]
   : ALL_PLAYER_SOURCES;
 
 // Sources that require a transparent webRequest intercept to load properly
