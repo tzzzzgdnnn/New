@@ -2,6 +2,7 @@
 // grey search field, "Recommended" landscape rows while empty, and a
 // 3-column poster grid while typing.
 import { useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { tmdbFetch, imgUrl, describeTmdbError } from "../utils/api";
 import { storage } from "../utils/storage";
 import { useKidsFilter } from "../platform/ios/kids/useKidsFilter";
@@ -86,11 +87,11 @@ export default function MobileSearch({ apiKey, onSelect, onClose, offline }) {
 
   const typing = query.trim().length > 0;
 
-  return (
+  // Portal to <body> so the app's top bar can never sit over this screen.
+  return createPortal(
     <div className="nfs">
-      <div className="nfs-top">
-        <button className="nfs-back" onClick={onClose} aria-label="Back"><Back /></button>
-      </div>
+      <div className="nfs-bar">
+      <button className="nfs-back" onClick={onClose} aria-label="Back"><Back /></button>
       <div className="nfs-field">
         <Mag />
         <input
@@ -104,6 +105,8 @@ export default function MobileSearch({ apiKey, onSelect, onClose, offline }) {
           onKeyDown={(e) => { if (e.key === "Enter" && query.trim()) { remember(query); run(query); inputRef.current?.blur(); } if (e.key === "Escape") onClose(); }}
         />
         {query && <button className="nfs-clear" onClick={() => { setQuery(""); inputRef.current?.focus(); }} aria-label="Clear"><X /></button>}
+      </div>
+      <button className="nfs-cancel" onClick={onClose}>Cancel</button>
       </div>
 
       <div className="nfs-body" onTouchStart={() => inputRef.current?.blur()}>
@@ -158,6 +161,7 @@ export default function MobileSearch({ apiKey, onSelect, onClose, offline }) {
           </>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

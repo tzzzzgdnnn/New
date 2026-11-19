@@ -1,9 +1,9 @@
-.nfs{position:fixed;inset:0;z-index:2000;background:#000;color:#fff;display:flex;flex-direction:column;
+.nfs{position:fixed;inset:0;z-index:2147483000;background:#000;color:#fff;display:flex;flex-direction:column;
   padding-top:env(safe-area-inset-top);font-family:inherit;animation:nfs-in .22s cubic-bezier(.2,.8,.2,1)}
 @keyframes nfs-in{from{opacity:0;transform:translate3d(0,12px,0)}to{opacity:1;transform:none}}
-.nfs-top{height:48px;display:flex;align-items:center;padding:0 6px}
+.nfs-bar{display:flex;align-items:center;gap:4px;padding:8px 8px 10px 2px}
 .nfs-back{background:none;border:0;color:#fff;width:44px;height:44px;display:grid;place-items:center;padding:0}
-.nfs-field{margin:0 12px 10px;height:40px;border-radius:6px;background:#2a2a2a;display:flex;align-items:center;gap:8px;padding:0 10px;color:#a3a3a3}
+.nfs-field{flex:1;min-width:0;margin:0;height:40px;border-radius:6px;background:#2a2a2a;display:flex;align-items:center;gap:8px;padding:0 10px;color:#a3a3a3}
 .nfs-field input{flex:1;min-width:0;height:100%;background:none;border:0;outline:0;color:#fff;font-size:16px;-webkit-appearance:none;appearance:none}
 .nfs-field input::placeholder{color:#8c8c8c}
 .nfs-field input::-webkit-search-cancel-button{display:none}
@@ -28,3 +28,4 @@
 .nfs-msg{padding:28px 24px;text-align:center;color:#b3b3b3;font-size:15px;line-height:1.5}
 .nfs-msg b{color:#fff;font-size:17px}
 .nfs-retry{margin-top:12px;background:#fff;color:#000;border:0;border-radius:4px;padding:8px 18px;font-weight:600}
+.nfs-cancel{background:none;border:0;color:#fff;font-size:16px;font-weight:500;padding:8px 6px 8px 10px;flex:none}
