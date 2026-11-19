@@ -11,6 +11,7 @@ import { showLaunchSplash } from "./platform/ios/splash";
 import { installImageReadyMarker } from "./platform/ios/imageReady";
 
 import { installDiagnostics } from "./utils/diag";
+import { keepData } from "./platform/web/keepData";
 
 installDiagnostics();
 
@@ -19,6 +20,9 @@ installDiagnostics();
 // offline), installed before the app asks whether downloads are available.
 if (import.meta.env.VITE_WEB) {
   document.documentElement.classList.add("sb-web");
+  // Never lose profiles, PINs or progress: persistent storage + IndexedDB
+  // backup, restored (then reloaded) if the browser ever empties localStorage.
+  keepData().then((restored) => restored && location.reload());
   // Cinejoy (direct, no ads) becomes the default server once on the web app.
   try {
     if (!localStorage.getItem("sbWebCinejoyDefault")) {
