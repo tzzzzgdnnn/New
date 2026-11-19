@@ -108,10 +108,20 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   const fullBtn = document.createElement("button");
   fullBtn.textContent = "⛶  Full screen";
   fullBtn.style.cssText = "position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;padding:12px 22px;border-radius:24px;border:0;background:rgba(229,9,20,.92);color:#fff;font-size:16px;font-weight:600;display:none";
-  fullBtn.onclick = () => { fullBtn.style.display = "none"; video.play().catch(() => {}); goFull(); };
+  fullBtn.onclick = () => { fullBtn.style.display = "none"; goFull(); video.play().catch(() => {}); };
   box.appendChild(fullBtn);
+  // iPhone: if it started inline (no tap left to use), try Apple's full-screen
+  // player at once, and keep a big Full screen button up until it's on.
+  video.addEventListener("playing", () => {
+    if (!isIPhone || video.webkitDisplayingFullscreen) return;
+    goFull();
+    setTimeout(() => {
+      if (!done && !video.webkitDisplayingFullscreen) { fullBtn.textContent = "⛶  Full screen"; fullBtn.style.display = ""; }
+    }, 400);
+  });
+  video.addEventListener("webkitbeginfullscreen", () => (fullBtn.style.display = "none"));
   // Back from full screen on iPhone: offer it again, keep playing inline.
-  video.addEventListener("webkitendfullscreen", () => { fullBtn.textContent = "⛶  Full screen"; fullBtn.style.display = ""; setTimeout(() => (fullBtn.style.display = "none"), 3000); });
+  video.addEventListener("webkitendfullscreen", () => { fullBtn.textContent = "⛶  Full screen"; fullBtn.style.display = ""; });
   // Double-tap left/right: back/forward 10 s (like the app's player).
   let lastTap = 0;
   video.addEventListener("touchend", (e) => {
