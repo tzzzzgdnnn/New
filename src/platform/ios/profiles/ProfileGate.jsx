@@ -1,7 +1,7 @@
 // Launch gate for iOS: "Who's watching?" until a profile is chosen, then the
 // app for that profile. Switching remounts the app so every screen re-reads
 // the new profile's history, lists, progress and settings.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ProfileContext } from "./ProfileContext";
 import WhoIsWatching from "./WhoIsWatching";
 import ProfileEditor from "./ProfileEditor";
@@ -22,6 +22,7 @@ import "./profiles.css";
 // Overlay states: the picker, the picker in manage mode, or none.
 const PICK = "pick";
 const MANAGE = "manage";
+const SESSION_KEY = "sp_session_profile";
 
 export default function ProfileGate({ children }) {
   // null until the list (and its PINs) is reconciled with the Keychain, so a
@@ -34,7 +35,21 @@ export default function ProfileGate({ children }) {
         console.warn("[profiles] load failed", err);
         return ensureProfiles();
       })
-      .then((list) => alive && setProfiles(list));
+      .then((list) => {
+        if (!alive) return;
+        setProfiles(list);
+        // A reload or WebView back-navigation inside this session goes
+        // straight back into the profile already entered, not the picker.
+        try {
+          const sid = sessionStorage.getItem(SESSION_KEY);
+          const p = sid && list.find((x) => x.id === sid);
+          if (p) {
+            activateProfile(p);
+            setActive(p);
+            setOverlay(null);
+          }
+        } catch {}
+      });
     return () => {
       alive = false;
     };
@@ -46,10 +61,18 @@ export default function ProfileGate({ children }) {
 
   const refresh = () => setProfiles(listProfiles());
 
+  const enteredAt = useRef(0);
   const enter = useCallback((profile) => {
     activateProfile(profile);
+    try { sessionStorage.setItem(SESSION_KEY, profile.id); } catch {}
+    enteredAt.current = Date.now();
     setActive(profile);
     setOverlay(null);
+  }, []);
+  // Ignore the picker being reopened by a stray tap right after entering.
+  const openPicker = useCallback(() => {
+    if (Date.now() - enteredAt.current < 800) return;
+    setOverlay(PICK);
   }, []);
 
   // Locked profiles ask for their PIN, except the one already in use.
@@ -80,6 +103,7 @@ export default function ProfileGate({ children }) {
     setEditing(null);
     refresh();
     if (removedId === active?.id) {
+      try { sessionStorage.removeItem(SESSION_KEY); } catch {}
       setActive(null);
       setOverlay(PICK);
     }
@@ -89,10 +113,10 @@ export default function ProfileGate({ children }) {
     () =>
       active && {
         profile: active,
-        openSwitcher: () => setOverlay(PICK),
+        openSwitcher: openPicker,
         openManager: () => setOverlay(MANAGE),
       },
-    [active],
+    [active, openPicker],
   );
 
   if (!profiles) return null; // a few ms behind the launch splash
