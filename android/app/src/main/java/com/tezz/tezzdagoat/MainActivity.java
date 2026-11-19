@@ -46,7 +46,7 @@ public class MainActivity extends BridgeActivity {
                 fullCallback = callback;
                 ((FrameLayout) getWindow().getDecorView()).addView(view,
                         new FrameLayout.LayoutParams(-1, -1));
-                setImmersive(true);
+                setPlayerFullscreen(true);
             }
 
             @Override
@@ -56,7 +56,7 @@ public class MainActivity extends BridgeActivity {
                 fullView = null;
                 if (fullCallback != null) fullCallback.onCustomViewHidden();
                 fullCallback = null;
-                setImmersive(false);
+                setPlayerFullscreen(false);
             }
         });
 
@@ -70,7 +70,7 @@ public class MainActivity extends BridgeActivity {
         });
     }
 
-    private void setImmersive(boolean on) {
+    private void setPlayerFullscreen(boolean on) {
         WindowInsetsControllerCompat c =
                 WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
         if (on) {
