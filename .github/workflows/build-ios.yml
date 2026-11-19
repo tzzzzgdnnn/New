@@ -1,6 +1,10 @@
 name: Build iOS (unsigned IPA)
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: "macOS runner label"
+        default: "macos-latest"
   push:
     branches: [main]
     paths-ignore:
@@ -8,7 +12,7 @@ on:
 
 jobs:
   ios:
-    runs-on: macos-latest
+    runs-on: ${{ inputs.runner || 'macos-latest' }}
     timeout-minutes: 45
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
