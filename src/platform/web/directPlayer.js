@@ -7,6 +7,59 @@
 // moves that player on screen and calls play() inside the tap, so iPhone and
 // Android start at once, with no playlist or first-segment wait.
 import Hls from "hls.js";
+import { registerPlugin } from "@capacitor/core";
+
+// Android app: the built-in player (PlayerActivity, ExoPlayer), like the
+// iPhone app's native player. Undefined in every other build.
+const SbPlayer = import.meta.env.VITE_ANDROID ? registerPlugin("SbPlayer") : null;
+
+function playAndroid(box, src, { startAt = 0, onFail, onTime, referer = "" }) {
+  let done = false;
+  const subs = [];
+  let lastPos = startAt;
+  const cleanup = () => {
+    done = true;
+    subs.forEach((h) => h?.remove?.());
+  };
+  // Back on the title page: a button to jump back into the player.
+  const btn = document.createElement("button");
+  btn.textContent = "▶  Play";
+  btn.style.cssText =
+    "position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;padding:16px 34px;border-radius:28px;border:0;background:rgba(229,9,20,.92);color:#fff;font-size:20px;font-weight:600";
+  const open = (at) => SbPlayer.play({ url: src, startAt: at, referer }).catch(() => { cleanup(); btn.remove(); onFail?.("plugin"); });
+  btn.onclick = () => {
+    if (done) return;
+    btn.textContent = "Resume";
+    open(lastPos);
+  };
+  const black = document.createElement("div");
+  black.style.cssText = "position:absolute;inset:0;background:#000;z-index:3";
+  box.appendChild(black);
+  box.appendChild(btn);
+  Promise.all([
+    SbPlayer.addListener("progress", (e) => { if (!done && e.pos > 0) { lastPos = e.pos; onTime?.(e.pos, e.dur); } }),
+    SbPlayer.addListener("closed", (e) => { if (!done && e.pos > 0) { lastPos = e.pos; onTime?.(e.pos, e.dur); } btn.textContent = "▶  Resume"; }),
+    SbPlayer.addListener("failed", (e) => {
+      if (done) return;
+      cleanup();
+      black.remove();
+      btn.remove();
+      onFail?.(e?.why || "native error");
+    }),
+  ]).then((hs) => {
+    subs.push(...hs);
+    if (done) return cleanup();
+    open(startAt);
+  });
+  return () => {
+    if (done) return;
+    if (lastPos > 0) onTime?.(lastPos, 0);
+    cleanup();
+    black.remove();
+    btn.remove();
+    SbPlayer.stop().catch(() => {});
+  };
+}
 
 function unwrap(buf) {
   const b = new Uint8Array(buf);
@@ -99,6 +152,7 @@ function dropWarm() {
 
 /** Load `src` into a hidden player now, so playDirect(src) starts at once. */
 export function prewarmDirect(src, { startAt = 0, nativeOnly = false } = {}) {
+  if (SbPlayer) return; // Android: the built-in player starts fast on its own
   if (!src || typeof document === "undefined" || !document.body) return;
   if (warm && warm.src === src && !warm.dead && Date.now() - warm.at < WARM_MAX_AGE_MS) return;
   dropWarm();
@@ -166,7 +220,8 @@ export function forceFullscreen(el) {
  * or on a fatal error. onTime(position, duration) reports progress every few
  * seconds, on pause, at the end and on stop. Returns a stop() function.
  */
-export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 12000, nativeOnly = false } = {}) {
+export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 12000, nativeOnly = false, referer = "" } = {}) {
+  if (SbPlayer) return playAndroid(box, src, { startAt, onFail, onTime, referer });
   const w = takeWarm(src, nativeOnly);
   const video = w ? w.video : makeVideo();
   const isIPhone = isIPhoneUA();

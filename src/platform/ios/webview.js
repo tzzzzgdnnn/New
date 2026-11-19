@@ -508,6 +508,7 @@ function upgrade(wv) {
         startAt: webStartAt(ctx),
         onTime: webProgress(ctx),
         nativeOnly: true,
+        referer: "https://ani.pm/",
         onFail: (why) => {
           if (directFor !== url) return;
           diag("player", `web ani.pm failed: ${why}`);
@@ -627,7 +628,9 @@ function upgrade(wv) {
       iframe.src = "about:blank";
       return;
     }
-    if (import.meta.env.VITE_WEB && !webOnly && !/iPhone|iPod/.test(navigator.userAgent)) forceFullscreen(wv);
+    // Android app: direct streams open the built-in full-screen player, so
+    // only the embed fallback puts the web view itself full screen.
+    if (import.meta.env.VITE_WEB && !/iPhone|iPod/.test(navigator.userAgent) && (import.meta.env.VITE_ANDROID ? webOnly : !webOnly)) forceFullscreen(wv);
     if (import.meta.env.VITE_WEB && !webOnly && tryWebDirect(url)) return;
     // No load event in time: the next mirror takes over, else the page hears
     // did-fail-load and fails over to another server.
