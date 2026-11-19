@@ -1,5 +1,5 @@
-// iOS home: Netflix-style rails (poster rows, Top 10 with big rank numbers,
-// wide Continue Watching cards) plus genre sections and a curated
+// iOS home: Netflix-style rails (poster rows and wide Continue Watching
+// cards) plus genre sections and a curated
 // Nostalgia block. Rendered only in the iOS build.
 import { prefetchDetails } from "../../utils/prefetch";
 import { useEffect, useRef, useState } from "react";
@@ -71,23 +71,6 @@ export function PosterRail({ title, sub, items, onSelect, watched, onMarkWatched
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-export function RankRail({ title, items, onSelect, watched }) {
-  if (!items?.length) return null;
-  return (
-    <div className="section sb-row-section">
-      <RowTitle title={title} />
-      <div className="sb-row">
-        {items.slice(0, 10).map((item, i) => (
-          <div className="sb-rank-item" key={`${item.media_type}_${item.id}`}>
-            <div className="sb-rank-num">{i + 1}</div>
-            <MediaCard item={item} onClick={() => onSelect(item)} progress={0} watched={watched} />
-          </div>
-        ))}
       </div>
     </div>
   );

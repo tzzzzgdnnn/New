@@ -16,7 +16,7 @@ import { ACCENT_PRESETS, applyAccentColor } from "../../../utils/appearance";
 import { SUBTITLE_LANGUAGES } from "../../../utils/subtitles";
 import { RATING_COUNTRIES } from "../../../utils/ageRating";
 import { DEFAULT_INVIDIOUS_BASE } from "../../../components/TrailerModal";
-import { HOME_ROWS, loadHomeLayout, saveHomeLayout } from "../../../utils/homeLayout";
+import { HOME_ROWS, IOS_HIDDEN_HOME_ROWS, loadHomeLayout, saveHomeLayout } from "../../../utils/homeLayout";
 import { collectBackupData, restoreBackupData } from "../../../utils/backup";
 import { AGE_LIMIT_OPTIONS, TMDB_LANGUAGES } from "../../../utils/settingsOptions";
 import { version as APP_VERSION } from "../../../../package.json";
@@ -472,17 +472,22 @@ function HomeScreenPage() {
     setLayout({ order: nextOrder, visible: nextVisible });
     saveHomeLayout(nextOrder, nextVisible);
   };
+  // Rows the phone never shows stay in the saved order (desktop keeps its
+  // own layout) but are not listed here.
+  const shown = order.filter((id) => !IOS_HIDDEN_HOME_ROWS.includes(id));
   const move = (i, d) => {
     const j = i + d;
-    if (j < 0 || j >= order.length) return;
+    if (j < 0 || j >= shown.length) return;
+    const a = order.indexOf(shown[i]);
+    const b = order.indexOf(shown[j]);
     const next = [...order];
-    [next[i], next[j]] = [next[j], next[i]];
+    [next[a], next[b]] = [next[b], next[a]];
     update(next, visible);
   };
   const label = (id) => HOME_ROWS.find((r) => r.id === id)?.label || id;
   return (
     <Group header="Rows" footer="Turn rows on or off and use the arrows to reorder them.">
-      {order.map((id, i) => (
+      {shown.map((id, i) => (
         <Row
           key={id}
           label={label(id)}
@@ -491,7 +496,7 @@ function HomeScreenPage() {
               <button type="button" aria-label={`Move ${label(id)} up`} disabled={i === 0} onClick={() => move(i, -1)}>
                 <svg viewBox="0 0 24 24"><path d="m6 14 6-6 6 6" /></svg>
               </button>
-              <button type="button" aria-label={`Move ${label(id)} down`} disabled={i === order.length - 1} onClick={() => move(i, 1)}>
+              <button type="button" aria-label={`Move ${label(id)} down`} disabled={i === shown.length - 1} onClick={() => move(i, 1)}>
                 <svg viewBox="0 0 24 24"><path d="m6 10 6 6 6-6" /></svg>
               </button>
               <input
