@@ -7,6 +7,13 @@ import { version as APP_VERSION } from "../../../package.json";
 import "./ios.css";
 import { SecureStorage } from "@aparajita/capacitor-secure-storage";
 import { iosDownloadApi, recordFromEvent } from "./downloads";
+import { isKidsProfileActive } from "../../utils/profileScope";
+import { isAnimeRatingAllowed } from "./kids/kidsFilter";
+
+// HiAnime results carry MAL-style ratings; Kids allows G/PG only and never a
+// title-search match it cannot verify.
+const kidsHiAnimeBlocked = (args) =>
+  isAnimeRatingAllowed(args?.rating) ? "HiAnime is not available on iOS yet" : "HiAnime is off on Kids profiles";
 
 const noop = () => {};
 const resolved = (v) => () => Promise.resolve(v);
@@ -64,7 +71,14 @@ window.electron = {
   },
 
   // HiAnime needs the desktop main-process resolver (CORS + Referer). TODO iOS.
-  resolveHiAnime: resolved({ ok: false, error: "HiAnime is not available on iOS yet" }),
+  // Kids profiles never resolve by HiAnime title search: it can match a
+  // different (unrated or adult) show than the verified TMDB title.
+  resolveHiAnime: (args) =>
+    Promise.resolve(
+      isKidsProfileActive()
+        ? { ok: false, error: kidsHiAnimeBlocked(args) }
+        : { ok: false, error: "HiAnime is not available on iOS yet" },
+    ),
   setPlayerVideo: resolved({ playerUrl: "about:blank" }),
   onHiAnimeProgress: () => noop,
   debugHiAnime: resolved({ error: "disabled" }),

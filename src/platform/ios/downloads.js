@@ -9,6 +9,9 @@ import { diag } from "../../utils/diag";
 import {
   applyMeasurements,
   dedupeSubtitleTracks,
+  downloadKey,
+  downloadMeta,
+  episodeDownloadName,
   measureItems,
   qualityOptions,
   sameQuality,
@@ -125,15 +128,8 @@ async function restartElsewhere(id) {
 async function startJob(args) {
   const { probe, option } = args;
   const id = `dl${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; // unique even for two starts in one ms
-  const meta = {
-    mediaId: args.mediaId,
-    mediaType: args.mediaType,
-    season: args.season ?? null,
-    episode: args.episode ?? null,
-    posterPath: args.posterPath || null,
-    tmdbId: args.tmdbId || args.mediaId || null,
-    quality: option?.name || option?.label || null,
-  };
+  // Episodes carry show id/name and numeric season/episode for grouping.
+  const meta = downloadMeta(args, probe.ctx || {});
   const res = await call("start", {
     id,
     name: args.name,
@@ -158,17 +154,50 @@ async function startJob(args) {
   return { ok: true, id, record };
 }
 
+// A job that cannot start moves on to the next server.
+async function startWithFallback(args) {
+  const res = await startJob(args);
+  if (res.ok) return res;
+  const next = await nextServer(args);
+  return next ? startWithFallback({ ...args, ...next }) : res;
+}
+
+// Starts in flight, by title/episode key, so a double tap starts one job.
+const starting = new Map();
+
+// The job already downloading (or downloaded) for this title/episode, if any.
+// A failed job does not count: starting again is how it gets retried.
+async function existingJob(key) {
+  try {
+    for (const e of await call("list")) {
+      const r = toRecord(e);
+      if (r.status !== "error" && downloadKey(r) === key) return rememberRecord(r);
+    }
+  } catch {}
+  return null;
+}
+
 /** window.electron download API, iOS edition. */
 export const iosDownloadApi = {
   checkDownloader: async () => ({ ok: !!native(), token: "ios" }),
   // args: the desktop runDownload args plus { probe, option } from the iOS
-  // picker. A job that cannot start moves on to the next server.
+  // picker. Starting a title/episode that already has a job returns that
+  // job ({ duplicate: true }) instead of queueing it twice.
   runDownload: async (args) => {
     if (!args.probe?.streamUrl) return { ok: false, error: "No stream found" };
-    const res = await startJob(args);
-    if (res.ok) return res;
-    const next = await nextServer(args);
-    return next ? iosDownloadApi.runDownload({ ...args, ...next }) : res;
+    const key = downloadKey({ ...downloadMeta(args, args.probe.ctx || {}), name: args.name });
+    if (!key) return startWithFallback(args);
+    if (starting.has(key)) return starting.get(key);
+    const run = (async () => {
+      const existing = await existingJob(key);
+      if (existing) {
+        diag("download", `"${args.name}" is already a download (${existing.id}); not starting it twice`);
+        return { ok: true, id: existing.id, record: existing, duplicate: true };
+      }
+      return startWithFallback(args);
+    })().finally(() => starting.delete(key));
+    starting.set(key, run);
+    return run;
   },
   getDownloads: async () => {
     try {
@@ -223,5 +252,88 @@ export const iosDownloadApi = {
     return { ok: true };
   },
 };
+
+/**
+ * Queue several episodes of one show at one quality (the episode picker's
+ * batch). Each episode gets its own stream (same servers as Play) at the
+ * same tier when it has it, and the subtitle languages chosen once. An
+ * episode that already has a job is skipped, never queued twice. All of them
+ * carry the show's id and name, so they land in one show group.
+ * `first` reuses the probe the picker already made for that episode.
+ * Returns { ok, started: [id], records, skipped: [ep], failed: [{ ...ep, error }] }.
+ */
+export async function downloadEpisodes({
+  show, // { tmdbId, name, posterPath, anilistId }
+  episodes = [], // [{ season, episode, tmdbSeason?, tmdbEpisode?, ctx? }]
+  option,
+  subtitleLangs = [],
+  first = null, // { season, episode, probe }
+  ctx = downloadContext(),
+  probe = probeDownload,
+  onProgress,
+}) {
+  const started = [];
+  const records = [];
+  const skipped = [];
+  const failed = [];
+  const langs = new Set(subtitleLangs);
+  for (const [i, ep] of episodes.entries()) {
+    onProgress?.({ done: i, total: episodes.length, episode: ep });
+    const season = Number(ep.season);
+    const episode = Number(ep.episode);
+    const args = {
+      name: episodeDownloadName(show.name, season, episode),
+      showName: show.name,
+      mediaId: show.tmdbId,
+      tmdbId: show.tmdbId,
+      anilistId: show.anilistId ?? null,
+      mediaType: "tv",
+      season,
+      episode,
+      posterPath: show.posterPath || null,
+    };
+    const key = downloadKey({ ...downloadMeta(args), name: args.name });
+    if (key && (await existingJob(key))) {
+      skipped.push(ep);
+      continue;
+    }
+    const reuse = first && Number(first.season) === season && Number(first.episode) === episode;
+    let found = reuse ? first.probe : null;
+    if (!found) {
+      try {
+        found = await probe({
+          ctx: {
+            ...ctx,
+            ...(ep.ctx || {}),
+            season,
+            episode,
+            tmdbSeason: ep.tmdbSeason ?? season,
+            tmdbEpisode: ep.tmdbEpisode ?? episode,
+          },
+        });
+      } catch (e) {
+        found = { ok: false, error: e?.message || "Download lookup failed" };
+      }
+    }
+    if (!found?.ok) {
+      failed.push({ ...ep, error: found?.error || "No downloadable stream found" });
+      continue;
+    }
+    let pick = sameQuality(found.options || [], option);
+    if (pick && !reuse) pick = (await measureOptions(found, [pick]))[0] || pick;
+    const subtitles = (found.subtitles || [])
+      .filter((t) => langs.has(t.code || t.lang))
+      .map((t) => ({ url: t.url, lang: t.code || t.lang }));
+    const res = await iosDownloadApi.runDownload({ ...args, probe: found, option: pick, subtitles });
+    if (res.ok && res.duplicate) skipped.push(ep);
+    else if (res.ok) {
+      started.push(res.id);
+      if (res.record) records.push(res.record);
+    }
+    else failed.push({ ...ep, error: res.error || "Could not start" });
+  }
+  onProgress?.({ done: episodes.length, total: episodes.length, episode: null });
+  return { ok: failed.length === 0, started, records, skipped, failed };
+}
 
 export { currentAudioMode };

@@ -4,7 +4,7 @@ on:
     inputs:
       runner:
         description: "macOS runner label"
-        default: "macos-latest"
+        default: "macos-15-intel"
   push:
     branches: [main]
     paths-ignore:
@@ -12,7 +12,7 @@ on:
 
 jobs:
   ios:
-    runs-on: ${{ inputs.runner || 'macos-latest' }}
+    runs-on: ${{ inputs.runner || 'macos-15-intel' }}
     timeout-minutes: 45
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
@@ -31,6 +31,17 @@ jobs:
 
       - name: Install deps
         run: npm ci --no-audit --no-fund
+
+      - name: Cache Xcode build (DerivedData + Swift packages)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/DerivedData
+            ${{ runner.temp }}/SourcePackages
+          key: xcode-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ios/App/App.xcodeproj/project.pbxproj', 'ios/App/CapApp-SPM/Package.swift', 'package-lock.json') }}-${{ hashFiles('ios/App/App/**/*.swift') }}
+          restore-keys: |
+            xcode-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ios/App/App.xcodeproj/project.pbxproj', 'ios/App/CapApp-SPM/Package.swift', 'package-lock.json') }}-
+            xcode-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build web (iOS mode)
         # TMDB token is built in via .env.ios
@@ -51,6 +62,9 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
             -skipPackagePluginValidation \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             MARKETING_VERSION=2.7.${{ github.run_number }} \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \

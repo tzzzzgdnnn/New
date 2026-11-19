@@ -269,3 +269,28 @@ enum DLMath {
     }
 }
 
+
+// MARK: - Player tap policy
+//
+// What a single tap on the native player does to its controls. Pure, so it
+// is checked off-device next to the download math (scripts/DownloadMathTests.swift).
+// A tap on hidden (or fading) controls always shows them at once; a tap right
+// after they appeared keeps them (it is the viewer reaching for Pause, or the
+// second tap of a double-tap); only a tap on settled controls hides them, and
+// that hide waits out the double-tap window so a double-tap seek can cancel it.
+
+enum PlayerTap {
+    enum Action: Equatable { case show, keep, hideAfterDoubleTapWindow, cancelPendingHide }
+
+    /// Taps this soon after the controls appeared never hide them.
+    static let justShownWindow: TimeInterval = 0.6
+    /// How long a hide waits for a possible second tap (double-tap seek).
+    static let doubleTapWindow: TimeInterval = 0.3
+
+    static func singleTap(controlsShown: Bool, sinceShown: TimeInterval, hidePending: Bool) -> Action {
+        if hidePending { return .cancelPendingHide }       // second tap of a double-tap
+        if !controlsShown { return .show }                  // hidden or mid-fade: always show
+        if sinceShown < justShownWindow { return .keep }    // just appeared: don't toggle off
+        return .hideAfterDoubleTapWindow
+    }
+}

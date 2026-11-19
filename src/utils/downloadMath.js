@@ -296,3 +296,241 @@ export function downloadsSummary(records = []) {
   const finished = records.length - active;
   return `${active ? `${active} active` : "No active downloads"} · ${finished} finished`;
 }
+
+// ── Shows: episodes of one show grouped into one card ────────────────────
+
+const toNum = (v) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+
+/** "Show (2020) S01 E02" / "Show S1E2" -> { season: 1, episode: 2 }, else nulls. */
+export function parseEpisodeTag(name) {
+  const m = String(name || "").match(/\bS(\d{1,3})\s*E(\d{1,4})\s*$/i);
+  return m ? { season: Number(m[1]), episode: Number(m[2]) } : { season: null, episode: null };
+}
+
+/** Show title from an episode name: "Show (2020) S01 E02" -> "Show". */
+export const showTitleFromName = (name) =>
+  String(name || "")
+    .replace(/\s*\bS\d{1,3}\s*E\d{1,4}\s*$/i, "")
+    .replace(/\s*\(\d{4}\)\s*$/, "")
+    .trim();
+
+const normTitle = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+/** A record (or start args) is an episode when it is TV or names a season and episode. */
+export const isEpisode = (r) => r?.mediaType === "tv";
+
+/** Season and episode numbers of an episode record, from its meta or its name. */
+export function episodeNumbers(r) {
+  const season = toNum(r?.season);
+  const episode = toNum(r?.episode);
+  if (season != null && episode != null) return { season, episode };
+  const parsed = parseEpisodeTag(r?.name);
+  return { season: season ?? parsed.season, episode: episode ?? parsed.episode };
+}
+
+/** Show name of an episode record. */
+export const showNameOf = (r) => r?.showName || showTitleFromName(r?.name) || r?.name || "";
+
+/**
+ * Which show an episode belongs to: its TMDB show id, else its AniList id
+ * (anime), else its normalized show title. null for movies.
+ */
+export function showKeyOf(r) {
+  if (!isEpisode(r)) return null;
+  const tmdb = r.tmdbId ?? r.mediaId;
+  if (tmdb != null && tmdb !== "") return `tv:${tmdb}`;
+  if (r.anilistId != null && r.anilistId !== "") return `anime:${r.anilistId}`;
+  const t = normTitle(showNameOf(r));
+  return t ? `title:${t}` : null;
+}
+
+/** Identity of one title/episode, for "already downloading" checks. null when unknown. */
+export function downloadKey(r) {
+  if (isEpisode(r)) {
+    const show = showKeyOf(r);
+    const { season, episode } = episodeNumbers(r);
+    return show && season != null && episode != null ? `${show}:s${season}e${episode}` : null;
+  }
+  const id = r?.tmdbId ?? r?.mediaId;
+  return id != null && id !== "" ? `movie:${id}` : null;
+}
+
+/**
+ * Meta stored on a native job when it starts. Episodes always carry the show
+ * id, show name and numeric season/episode (parsed from the name when the
+ * caller left them out), so the Downloads tab can group them by show.
+ */
+export function downloadMeta(args = {}, ctx = {}) {
+  const meta = {
+    mediaId: args.mediaId ?? null,
+    mediaType: args.mediaType,
+    season: toNum(args.season),
+    episode: toNum(args.episode),
+    posterPath: args.posterPath || null,
+    tmdbId: args.tmdbId || args.mediaId || null,
+    quality: args.option?.name || args.option?.label || null,
+  };
+  if (meta.mediaType === "tv") {
+    const { season, episode } = episodeNumbers({ ...meta, name: args.name });
+    meta.season = season;
+    meta.episode = episode;
+    meta.showName = args.showName || ctx.title || showTitleFromName(args.name) || null;
+    const anilistId = args.anilistId ?? ctx.anilistId ?? null;
+    if (anilistId != null) meta.anilistId = anilistId;
+  }
+  return meta;
+}
+
+const byEpisode = (a, b) => {
+  const x = episodeNumbers(a);
+  const y = episodeNumbers(b);
+  return (x.season ?? 1e9) - (y.season ?? 1e9) || (x.episode ?? 1e9) - (y.episode ?? 1e9) || String(a.id).localeCompare(String(b.id));
+};
+
+/** Episodes sorted by season, then episode. */
+export const sortEpisodes = (episodes = []) => [...episodes].sort(byEpisode);
+
+/** Totals for a show's episodes: sizes, combined progress and speed, state counts. */
+export function showTotals(episodes = []) {
+  const counts = { queued: 0, downloading: 0, paused: 0, error: 0, completed: 0 };
+  let bytes = 0;
+  let activeBytes = 0;
+  let activeTotal = 0;
+  let speedBps = 0;
+  const active = episodes.filter(isActiveDownload);
+  for (const e of episodes) {
+    counts[e.status] = (counts[e.status] || 0) + 1;
+    bytes += e.status === "completed" ? Number(e.bytesDownloaded) || 0 : Math.max(Number(e.totalBytes) || 0, Number(e.bytesDownloaded) || 0);
+  }
+  for (const e of active) {
+    activeBytes += Number(e.bytesDownloaded) || 0;
+    activeTotal += Number(e.totalBytes) || 0;
+    speedBps += Number(e.speedBps) || 0;
+  }
+  const progress = !active.length
+    ? 100
+    : activeTotal > 0
+      ? Math.min(99.9, (activeBytes / activeTotal) * 100)
+      : active.reduce((n, e) => n + (Number(e.progress) || 0), 0) / active.length;
+  return {
+    count: episodes.length,
+    bytes,
+    size: formatBytes(bytes),
+    counts,
+    activeCount: active.length,
+    progress,
+    speedBps,
+    speed: speedBps > 0 ? `${formatBytes(speedBps)}/s` : "",
+  };
+}
+
+/** "3 episodes · 2.1 GB" */
+export const showSummary = (t) => `${t.count} episode${t.count === 1 ? "" : "s"}${t.size ? ` · ${t.size}` : ""}`;
+
+/** "1 downloading · 2 waiting · 3 finished" (only the states present). */
+export function showStateLine(t) {
+  const c = t.counts;
+  return [
+    [c.downloading, "downloading"],
+    [c.queued, "waiting"],
+    [c.paused, "paused"],
+    [c.error, "failed"],
+    [c.completed, "finished"],
+  ]
+    .filter(([n]) => n > 0)
+    .map(([n, s]) => `${n} ${s}`)
+    .join(" · ");
+}
+
+/**
+ * Downloads as the Downloads tab lists them: movies (and anything without a
+ * show) stay single { kind: "item", record }; every episode of one show is
+ * one { kind: "show", key, name, posterPath, tmdbId, mediaType, episodes,
+ * totals } with its episodes in season/episode order. Entries keep the order
+ * their first record has in `records`. A show with no episodes left is gone.
+ */
+export function groupDownloads(records = []) {
+  const out = [];
+  const shows = new Map();
+  for (const r of records) {
+    const key = showKeyOf(r);
+    if (!key) {
+      out.push({ kind: "item", key: `item:${r.id}`, record: r });
+      continue;
+    }
+    let g = shows.get(key);
+    if (!g) {
+      g = { kind: "show", key, name: showNameOf(r), posterPath: r.posterPath || null, tmdbId: r.tmdbId ?? r.mediaId ?? null, mediaType: "tv", episodes: [] };
+      shows.set(key, g);
+      out.push(g);
+    }
+    if (!g.posterPath && r.posterPath) g.posterPath = r.posterPath;
+    g.episodes.push(r);
+  }
+  for (const g of shows.values()) {
+    g.episodes = sortEpisodes(g.episodes);
+    g.totals = showTotals(g.episodes);
+  }
+  return out;
+}
+
+/** Episode label inside a show: "S1 E2", or the record's name when unnumbered. */
+export function episodeLabel(r) {
+  const { season, episode } = episodeNumbers(r);
+  return season != null && episode != null ? `S${season} E${episode}` : r?.name || "";
+}
+
+// ── Picking episodes to download ──────────────────────────────────────────
+
+/**
+ * Episodes of one season as the episode picker lists them: each
+ * { season, episode, name, runtime, download } where `download` is the job
+ * this episode already has (anything but a failed one), so the picker shows
+ * it ticked off and disabled.
+ */
+export function episodeChoices({ season, episodes = [], downloads = [], showKey }) {
+  const have = new Map();
+  for (const r of downloads) {
+    if (r.status === "error" || showKeyOf(r) !== showKey) continue;
+    const n = episodeNumbers(r);
+    if (n.season === Number(season)) have.set(n.episode, r);
+  }
+  return episodes
+    .map((e) => {
+      const episode = toNum(e.episode_number ?? e.episode);
+      return {
+        season: Number(season),
+        episode,
+        name: e.name || `Episode ${episode}`,
+        runtime: toNum(e.runtime) || 0,
+        // Episode-group seasons map to a real TMDB season/episode for servers.
+        tmdbSeason: toNum(e._tmdbSeason),
+        tmdbEpisode: toNum(e._tmdbAbsolute),
+        download: have.get(episode) || null,
+      };
+    })
+    .filter((e) => e.episode != null);
+}
+
+/**
+ * Estimated bytes for a set of episodes, from one measured episode
+ * (`sample`: { bytes, runtime }): scaled by runtime when both runtimes are
+ * known, else one sample per episode. 0 when nothing is measured.
+ */
+export function batchEstimate(selected = [], sample = null) {
+  if (!(sample?.bytes > 0)) return 0;
+  return selected.reduce(
+    (n, e) => n + (sample.runtime > 0 && e.runtime > 0 ? (sample.bytes * e.runtime) / sample.runtime : sample.bytes),
+    0,
+  );
+}
+
+/** "Breaking Bad S01 E04", the name an episode download gets. */
+export const episodeDownloadName = (show, season, episode) =>
+  `${show} S${String(season).padStart(2, "0")} E${String(episode).padStart(2, "0")}`;

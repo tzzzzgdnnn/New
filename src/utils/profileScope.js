@@ -10,6 +10,14 @@ let activeProfile = null; // { id: string, kids: boolean } | null
  */
 export function setActiveProfileScope(profile) {
   activeProfile = profile ? { id: String(profile.id), kids: !!profile.kids } : null;
+  // Theme hook: Kids profiles get the sky-blue look (kids.css).
+  try {
+    const root = typeof document !== "undefined" ? document.documentElement : null;
+    if (root) {
+      if (activeProfile?.kids) root.setAttribute("data-profile", "kids");
+      else root.removeAttribute("data-profile");
+    }
+  } catch {}
 }
 
 /** Id of the active profile, or null when none is active (desktop). */

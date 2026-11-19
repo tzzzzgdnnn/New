@@ -274,7 +274,6 @@ html.sb-ios .sb-wide-bar div {
   background: linear-gradient(90deg, var(--sp-accent) 0%, var(--sp-accent-warm) 100%);
   box-shadow: 0 0 8px var(--sp-accent-glow);
 }
-html.sb-ios .sb-rank-num { -webkit-text-stroke-color: var(--sp-accent); }
 html.sb-ios .hero-type,
 html.sb-ios .sb-nostalgia-kicker { color: var(--sp-accent-2); }
 html.sb-ios ::selection { background: var(--sp-accent-soft); }
@@ -401,4 +400,15 @@ body.no-anim .sp-img-ready > img { animation: none !important; }
   html.sb-ios .empty-state,
   .sp-error,
   html.sb-ios .sp-tab.is-active svg { animation: none; }
+}
+
+/* Episodes header: "Download Episodes" opens the multi-episode picker. */
+html.sb-ios .sb-episodes-download {
+  min-height: 44px;
+  margin: 0 0 12px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
 }

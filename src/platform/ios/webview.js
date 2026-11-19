@@ -12,8 +12,12 @@ import { serverKey } from "../../utils/servers/catalog";
 import { createFallback } from "../../utils/servers/fallback";
 import { probeAndRank } from "../../utils/servers/ranking";
 import { probeUrl } from "../../utils/servers/probe";
-import { isAutoPick, recordLookup, serverStats } from "./autoServer";
+import { isAutoPick, isAnipmPinned, recordLookup, serverStats } from "./autoServer";
+import { autoOrder, prefetchRanking } from "./autoRank";
 import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
+import { anipmCandidates, ANIPM_ID } from "./anipm";
+import { parseServerKey } from "../../utils/servers/catalog";
+import { diag } from "../../utils/diag";
 
 const LOAD_TIMEOUT_MS = 8000;
 const MAX_CANDIDATES = 10;
@@ -39,7 +43,14 @@ const nativeAvailable = () => !!window.webkit?.messageHandlers?.sbResolve;
 
 /** Server list for the native server menu, built from the latest context. */
 function serverListFor(ctx) {
-  return nativeServerList(!!ctx.isAnime);
+  const list = nativeServerList(!!ctx.isAnime);
+  if (!ctx.isAnime) return list;
+  // ani.pm leads the native menu for anime (Sub and Dub entries).
+  return [
+    { id: `${ANIPM_ID}:sub`, label: "ani.pm · Sub" },
+    { id: `${ANIPM_ID}:dub`, label: "ani.pm · Dub" },
+    ...list,
+  ];
 }
 
 /**
@@ -157,6 +168,19 @@ function rankedCandidates(url, ctx, { signal, exclude = [] } = {}) {
   return probeAndRank(list, { stats: serverStats, probe: probeUrl, pinned: pinnedFor(ctx), signal });
 }
 
+/**
+ * ani.pm is the main anime server: its candidates lead, unless the viewer
+ * picked another server by hand (then that one stays first).
+ */
+export function withAnipm(ranked, anipm) {
+  if (!anipm?.length) return ranked;
+  const rest = ranked.filter((c) => parseServerKey(c.id).sourceId !== ANIPM_ID);
+  if (!isAutoPick() && !isAnipmPinned() && rest.length && readStored("playerSource")) {
+    return [rest[0], ...anipm, ...rest.slice(1)].slice(0, MAX_CANDIDATES + anipm.length);
+  }
+  return [...anipm, ...rest].slice(0, MAX_CANDIDATES + anipm.length);
+}
+
 function buildCandidateList(url, ctx) {
   const isAnime = !!ctx.isAnime;
   const mode = dubModeOf(ctx);
@@ -206,6 +230,28 @@ function buildCandidateList(url, ctx) {
     if (!animeRoute(s)) add(s, tmdbUrl(s, ctx));
   }
   return list;
+}
+
+/**
+ * Player Auto order: in Auto, servers measured on this network (speed, then
+ * ping) lead, the last server that played this title first; a server picked
+ * by hand keeps the probe order with that server first. ani.pm is put in
+ * front afterwards (withAnipm). Player only: downloads never use this.
+ */
+export function playerOrder(ranked, ctx) {
+  if (!isAutoPick()) return ranked;
+  return autoOrder(ranked, { pinned: readLastGood()[titleKey(ctx)] || null });
+}
+
+/**
+ * Title page opened: measure its play servers now (parallel, ~2 s, cached
+ * per session/network), so Play starts on the fastest one without waiting.
+ */
+export function prefetchTitle(ctx) {
+  if (!ctx?.tmdbId) return Promise.resolve(null);
+  const list = buildCandidateList(null, ctx);
+  const key = `${titleKey(ctx)}:${ctx.season ?? ""}:${ctx.episode ?? ""}`;
+  return prefetchRanking(list, { key }).catch(() => null);
 }
 
 /**
@@ -309,6 +355,7 @@ function upgrade(wv) {
     pending.set(token, (r) => {
       if (nativeFor !== url || nativeToken !== token) return;
       if (sent) recordLookup(r, sent.candidates, Date.now() - sent.at);
+      if (sent) diag("player", `play: ${r.ok ? `stream from ${r.server}` : "no stream"} ${Date.now() - sent.at} ms after send`);
       if (r.ok) {
         log("playing", r.server);
         rememberLastGood(currentCtx(), r.server);
@@ -338,11 +385,19 @@ function upgrade(wv) {
       const ctx = currentCtx();
       // Start on the fastest server: untested providers are probed at once,
       // within a short budget, while the Keychain read finishes.
-      const [subCtx, candidates] = await Promise.all([
+      const tRank = Date.now();
+      const [subCtx, ranked, anipm] = await Promise.all([
         subCtxReady,
         rankedCandidates(url, ctx, { signal: probing.signal }),
+        ctx.isAnime ? anipmCandidates(ctx) : [],
       ]);
       if (nativeToken !== token) return;
+      const candidates = withAnipm(playerOrder(ranked, ctx), anipm);
+      diag(
+        "player",
+        `play: candidates in ${Date.now() - tRank} ms (tap→send ${Date.now() - lastNativeAt} ms): ` +
+          candidates.slice(0, 4).map((c) => c.id).join(", "),
+      );
       const startAt = getResumeSeconds(ctx.progressKey);
       log("resolve", candidates.map((c) => `${c.id} ${c.url}`));
       sent = { candidates, at: Date.now() };

@@ -15,6 +15,7 @@ globalThis.location = { pathname: "/index.html" };
 // Fake native DownloadManager: a queue where one job runs at a time.
 const jobs = [];
 const sent = [];
+let created = 0;
 window.webkit = {
   messageHandlers: {
     sbDiag: { postMessage: async () => true },
@@ -24,12 +25,15 @@ window.webkit = {
         const job = jobs.find((j) => j.id === m.id);
         switch (m.op) {
           case "start":
-            jobs.push({ id: m.id, name: m.name, status: jobs.some((j) => j.status === "downloading") ? "queued" : "downloading", meta: m.meta, bytesDownloaded: 0, totalBytes: m.estBytes, subtitles: m.subtitles });
+            // createdAt from a counter, not the clock: two starts in one ms
+            // must still list in a fixed order.
+            jobs.push({ id: m.id, name: m.name, status: jobs.some((j) => j.status === "downloading") ? "queued" : "downloading", meta: m.meta, bytesDownloaded: 0, totalBytes: m.estBytes, subtitles: m.subtitles, createdAt: ++created });
             return { ok: true, id: m.id };
           case "pause": if (["queued", "downloading"].includes(job?.status)) job.status = "paused"; return true;
           case "resume": if (["paused", "error"].includes(job?.status)) job.status = "queued"; return true;
           case "remove": jobs.splice(jobs.indexOf(job), 1); return true;
-          case "list": return jobs.map((j) => ({ ...j }));
+          // Newest first, like DownloadManager.list().
+          case "list": return [...jobs].sort((a, b) => b.createdAt - a.createdAt).map((j) => ({ ...j }));
           case "play": return job?.status === "completed";
           case "measure": return m.items.map((it) => (it.url === "u/broken" ? { bytes: 0, method: "unknown" } : { bytes: it.url.length * GB, durationSec: 3600, method: it.kind === "mp4" ? "exact" : "sampled" }));
           default: throw new Error("unknown op " + m.op);
@@ -187,15 +191,20 @@ await t("queue: second download waits; pause and resume go to the native job", a
   assert.equal(sent.filter((x) => x.op === "start")[1].subtitles.length, 0); // none chosen, none sent
   assert.equal(first.record.status, "downloading"); // the native job, not a made-up record
 
-  let list = await api.getDownloads();
-  assert.deepEqual(list.map((r) => r.status), ["downloading", "queued"]);
+  // Statuses are read by id: the list's order is the native side's
+  // (newest first), not the order the downloads were started in.
+  const statuses = async () => Object.fromEntries((await api.getDownloads()).map((r) => [r.id, r.status]));
+  assert.deepEqual(await statuses(), { [first.id]: "downloading", [second.id]: "queued" });
+  assert.deepEqual((await api.getDownloads()).map((r) => r.id), [second.id, first.id]); // newest first
   await api.pauseDownload(second.id);
   await api.pauseDownload(first.id);
-  list = await api.getDownloads();
-  assert.deepEqual(list.map((r) => r.status), ["paused", "paused"]);
+  assert.deepEqual(await statuses(), { [first.id]: "paused", [second.id]: "paused" });
   await api.resumeDownload(first.id);
-  list = await api.getDownloads();
-  assert.equal(list[0].status, "queued");
+  assert.deepEqual(await statuses(), { [first.id]: "queued", [second.id]: "paused" });
+  // Pausing twice or resuming twice changes nothing.
+  await api.pauseDownload(second.id);
+  await api.resumeDownload(first.id);
+  assert.deepEqual(await statuses(), { [first.id]: "queued", [second.id]: "paused" });
   assert.equal(await api.fileExists(d.DL_SCHEME + first.id), false);
 });
 
