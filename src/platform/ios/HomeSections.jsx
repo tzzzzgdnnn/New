@@ -2,7 +2,7 @@
 // wide Continue Watching cards) plus genre sections and a curated
 // Nostalgia block. Rendered only in the iOS build.
 import { prefetchDetails } from "../../utils/prefetch";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import MediaCard from "../../components/MediaCard";
 import { PlayIcon, InfoIcon, BookmarkIcon, BookmarkFillIcon } from "../../components/Icons";
 import { imgUrl, tmdbFetch } from "../../utils/api";
@@ -10,6 +10,7 @@ import NOSTALGIA from "./nostalgia.json";
 import HORROR from "./horror.json";
 import { isKidsProfileActive } from "../../utils/profileScope";
 import { SkeletonRail } from "./Skeletons";
+import { useKidsFilter } from "./kids/useKidsFilter";
 
 const tag = (type) => (r) => (r.results || []).map((i) => ({ ...i, media_type: type }));
 
@@ -45,10 +46,8 @@ const ratingOf = (ratingsMap, item) =>
   ratingsMap?.[`${item.media_type === "tv" ? "tv" : "movie"}_${item.id}`] || {};
 
 export function PosterRail({ title, sub, items, onSelect, watched, onMarkWatched, onMarkUnwatched, ratingsMap }) {
-  // Kids profiles never see restricted titles, not even as a locked card.
-  const visible = isKidsProfileActive()
-    ? (items || []).filter((item) => !ratingOf(ratingsMap, item).restricted)
-    : items;
+  // Kids profiles see only verified kid-rated titles, never a locked card.
+  const visible = useKidsFilter(items);
   if (!visible?.length) return null;
   return (
     <div className="section sb-row-section">
@@ -76,7 +75,8 @@ export function PosterRail({ title, sub, items, onSelect, watched, onMarkWatched
   );
 }
 
-export function RankRail({ title, items, onSelect, watched }) {
+export function RankRail({ title, items: all, onSelect, watched }) {
+  const items = useKidsFilter(all);
   if (!items?.length) return null;
   return (
     <div className="section sb-row-section">
@@ -93,7 +93,8 @@ export function RankRail({ title, items, onSelect, watched }) {
   );
 }
 
-export function WideRail({ title, items, progress, onSelect }) {
+export function WideRail({ title, items: all, progress, onSelect }) {
+  const items = useKidsFilter(all);
   if (!items?.length) return null;
   return (
     <div className="section sb-row-section">
@@ -330,7 +331,9 @@ function useLogo(item, apiKey) {
   return logo;
 }
 
-export function Billboard({ items, apiKey, onSelect, isSaved, onToggleSave, kicker = "Trending Now" }) {
+export function Billboard({ items: all, apiKey, onSelect, isSaved, onToggleSave, kicker = "Trending Now" }) {
+  // Kids: only verified titles (Play starts films straight away).
+  const items = useKidsFilter(all, apiKey);
   const list = (items || []).filter((i) => i.backdrop_path).slice(0, 6);
   const [idx, setIdx] = useState(0);
   const touchX = useRef(null);
@@ -436,7 +439,8 @@ const CHANNELS = [
   { id: "n-movies", name: "Movie Night", short: "Movies", color: "#b8860b", accent: "#fff" },
 ];
 
-function WideBackdropRail({ items, onSelect, badge }) {
+function WideBackdropRail({ items: all, onSelect, badge }) {
+  const items = useKidsFilter(all);
   const list = (items || []).filter((i) => i.backdrop_path);
   if (!list.length) return null;
   return (
@@ -456,7 +460,7 @@ function WideBackdropRail({ items, onSelect, badge }) {
 
 function Nostalgia({ rows, onSelect, common }) {
   const [ch, setCh] = useState(CHANNELS[0].id);
-  const all = Object.values(rows).flat();
+  const all = useKidsFilter(useMemo(() => Object.values(rows).flat(), [rows]));
   // Featured throwback: changes daily, picked from everything loaded.
   const pool = all.filter((i) => i.backdrop_path);
   const feat = pool.length ? pool[Math.floor(Date.now() / 864e5) % pool.length] : null;

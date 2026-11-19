@@ -10,6 +10,7 @@ import { loadHomeLayout, loadHomeViewMode } from "../utils/homeLayout";
 import { IS_IOS } from "../platform/target";
 import HomeSections, { Billboard, PosterRail, RankRail, WideRail } from "../platform/ios/HomeSections";
 import { HomeSkeleton } from "../platform/ios/Skeletons";
+import { useKidsFilter } from "../platform/ios/kids/useKidsFilter";
 
 /**
  * Extract up to `count` unique, recently watched items from the user's
@@ -36,12 +37,12 @@ function getRecentHistoryItems(history, count = 5) {
 }
 
 export default function HomePage({
-  trending,
-  trendingTV,
+  trending: trendingAll,
+  trendingTV: trendingTVAll,
   loading,
   onSelect,
   progress,
-  inProgress,
+  inProgress: inProgressAll,
   offline,
   onRetry,
   watched,
@@ -52,6 +53,10 @@ export default function HomePage({
   isSaved,
   onToggleSave,
 }) {
+  // Kids: every list on Home only holds verified kid-rated titles.
+  const trending = useKidsFilter(trendingAll, apiKey, "movie");
+  const trendingTV = useKidsFilter(trendingTVAll, apiKey, "tv");
+  const inProgress = useKidsFilter(inProgressAll, apiKey);
   const hero = trending[0];
 
   const [recommendedItems, setRecommendedItems] = useState([]);

@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 OUT="node_modules/.cache/sp-tests"
 mkdir -p "$OUT"
 node -e "require.resolve('happy-dom')" 2>/dev/null || npm install --no-save --no-audit --no-fund happy-dom@20 >/dev/null
-for t in test-nav test-profiles test-search test-diag test-servers test-downloads; do
+for t in test-nav test-profiles test-search test-diag test-servers test-downloads test-kids; do
   npx esbuild "scripts/$t.mjs" --bundle --platform=node --format=esm \
     --loader:.json=json --loader:.js=jsx --loader:.css=empty --jsx=automatic \
     --define:import.meta.env='{"VITE_TARGET":"ios","VITE_TMDB_TOKEN":""}' \

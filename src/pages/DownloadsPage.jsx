@@ -1,3 +1,4 @@
+import { useKidsFilter } from "../platform/ios/kids/useKidsFilter";
 import { useState, useEffect, useRef, useCallback, useMemo, memo, lazy, Suspense } from "react";
 import {
   DownloadIcon,
@@ -100,11 +101,14 @@ const phoneActions = (onDeleteDownload) => ({
 export default function DownloadsPage(props) {
   const { onDeleteDownload } = props;
   const actions = useMemo(() => (IS_IOS ? phoneActions(onDeleteDownload) : null), [onDeleteDownload]);
+  // Downloads are device-wide: a Kids profile only sees (and can only play)
+  // verified kid-rated ones; downloads without a TMDB id are hidden.
+  const downloads = useKidsFilter(props.downloads);
   if (!IS_IOS) return <DesktopDownloadsPage {...props} />;
   return (
     <Suspense fallback={null}>
       <PhoneDownloads
-        downloads={props.downloads}
+        downloads={downloads}
         actions={actions}
         onSelect={props.onSelect}
         highlightId={props.highlightId}
