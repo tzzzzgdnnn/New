@@ -107,6 +107,18 @@ export function installDiagnostics() {
       localStorage.setItem(WEB_OPEN_KEY, "1");
     } catch {}
     const rec = window.__sbRecovered;
+    // A reset of any kind (WebContent kill, page died while visible): copy the
+    // last actions before it next to the launch line so the cause is easy to
+    // see even when the log is long.
+    if (rec || prevOpen === "1") {
+      const before = loadMirror()
+        .filter((l) => /\[(nav|profile|error|crash|console|app|native|player)\]/.test(l))
+        .slice(-15);
+      if (before.length) {
+        diag("reset", `--- app reset detected; last ${before.length} events before it ---`);
+        before.forEach((l) => diag("reset", `before: ${l}`));
+      }
+    }
     diag(
       "app",
       `web launch ${location.pathname} ua=${navigator.userAgent.match(/OS [\d_]+/)?.[0] || "?"}`,

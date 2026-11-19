@@ -1,9 +1,12 @@
-import { Component } from "react";
+import { Component, Fragment } from "react";
+import { diag } from "../utils/diag";
+import { reloadApp } from "../utils/navHistory";
 
 export default class ErrorBoundary extends Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, attempt: 0 };
+    this.retry = () => this.setState((s) => ({ hasError: false, error: null, attempt: s.attempt + 1 }));
   }
 
   static getDerivedStateFromError(error) {
@@ -11,7 +14,9 @@ export default class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, info) {
-    // Could send to a logging service here
+    // Into the diagnostics log with the component stack (top frames).
+    diag("crash", `${this.props.inline ? "page" : "app"} boundary:`, error,
+      `| components: ${(info?.componentStack || "").trim().split("\n").slice(0, 6).map((l) => l.trim()).join(" < ")}`);
     console.error("[ErrorBoundary]", error, info);
   }
 
@@ -19,12 +24,14 @@ export default class ErrorBoundary extends Component {
   // so one broken page never leaves the whole app stuck on the error screen.
   componentDidUpdate(prevProps) {
     if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
-      this.setState({ hasError: false, error: null });
+      this.setState((s) => ({ hasError: false, error: null, attempt: s.attempt + 1 }));
     }
   }
 
   render() {
-    if (!this.state.hasError) return this.props.children;
+    // The key changes on every retry, so the failed subtree is rebuilt from
+    // scratch instead of re-rendering whatever state led to the error.
+    if (!this.state.hasError) return <Fragment key={this.state.attempt}>{this.props.children}</Fragment>;
 
     const { error } = this.state;
 
@@ -34,14 +41,14 @@ export default class ErrorBoundary extends Component {
           <div className="sp-error-icon" aria-hidden="true">!</div>
           <div className="sp-error-title">This page hit a snag</div>
           <div className="sp-error-text">
-            Your library and settings are safe. Try again, or pick another tab.
+            Try again, or pick another tab. Details are in Settings › Diagnostics log.
           </div>
           {error?.message && <pre className="sp-error-detail">{error.message}</pre>}
           <div className="sp-error-actions">
-            <button onClick={() => this.setState({ hasError: false, error: null })}>
+            <button onClick={this.retry}>
               Try Again
             </button>
-            <button className="is-primary" onClick={() => window.location.reload()}>
+            <button className="is-primary" onClick={() => reloadApp("page error boundary")}>
               Reload
             </button>
           </div>
@@ -100,8 +107,8 @@ export default class ErrorBoundary extends Component {
             maxWidth: 500,
           }}
         >
-          An unexpected error occurred in this section. Your data is safe, you
-          can try reloading the app.
+          An unexpected error occurred in this section. Try again or reload
+          the app.
         </div>
 
         {error && (
@@ -125,7 +132,7 @@ export default class ErrorBoundary extends Component {
 
         <div style={{ display: "flex", gap: 12 }}>
           <button
-            onClick={() => this.setState({ hasError: false, error: null })}
+            onClick={this.retry}
             style={{
               background: "var(--surface, #1a1a1a)",
               border: "1px solid var(--border, rgba(255,255,255,0.1))",
@@ -140,7 +147,7 @@ export default class ErrorBoundary extends Component {
             Try Again
           </button>
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => reloadApp("app error boundary")}
             style={{
               background: "rgba(229,9,20,0.85)",
               border: "none",

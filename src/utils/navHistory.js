@@ -82,8 +82,48 @@ export function loadNavState(profileId, { now = Date.now(), store = globalThis.l
   }
 }
 
-/** True when this page load is the native side's reload after a WebContent crash. */
-export const isRecoveryBoot = () => typeof window !== "undefined" && !!window.__sbRecovered;
+const RELOAD_FLAG = "sb_reload_restore";
+const RELOAD_FLAG_MAX_AGE_MS = 30 * 1000;
+
+/**
+ * True when this page load should return to where the viewer was: the native
+ * side's reload after a WebContent kill, or an in-app reload (reloadApp).
+ */
+export function isRecoveryBoot() {
+  if (typeof window === "undefined") return false;
+  if (window.__sbRecovered) return true;
+  try {
+    const at = Number(sessionStorage.getItem(RELOAD_FLAG) || localStorage.getItem(RELOAD_FLAG));
+    return at > 0 && Date.now() - at < RELOAD_FLAG_MAX_AGE_MS;
+  } catch {
+    return false;
+  }
+}
+
+/** Forget the in-app reload flag once the app has restored itself. */
+export function clearReloadFlag() {
+  try {
+    sessionStorage.removeItem(RELOAD_FLAG);
+    localStorage.removeItem(RELOAD_FLAG);
+  } catch {}
+}
+
+/**
+ * Reload the web app but come back to the same profile and screen (used by
+ * Retry/Reload buttons; a bare location.reload() dropped the viewer on the
+ * profile picker / start page).
+ */
+export function reloadApp(reason = "reload") {
+  try {
+    const now = String(Date.now());
+    sessionStorage.setItem(RELOAD_FLAG, now);
+    localStorage.setItem(RELOAD_FLAG, now);
+  } catch {}
+  try {
+    window.dispatchEvent(new CustomEvent("sb-native-diag", { detail: { type: "app-reload", reason } }));
+  } catch {}
+  window.location.reload();
+}
 
 // ── Nested back handlers ─────────────────────────────────────────────────
 // A screen with its own inner navigation (Settings sub-pages) registers a

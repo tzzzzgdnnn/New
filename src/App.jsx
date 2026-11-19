@@ -43,6 +43,8 @@ import {
   pushNav,
   popNav,
   runBackHandlers,
+  reloadApp,
+  clearReloadFlag,
 } from "./utils/navHistory";
 import { diag } from "./utils/diag";
 import { getActiveProfileId } from "./utils/profileScope";
@@ -802,7 +804,8 @@ export default function App() {
   }, [navigateBack]);
 
   useEffect(() => {
-    if (recovered) diag("nav", `restored ${recovered.page} with ${recovered.stack.length} back steps after WebContent reload`);
+    if (recovered) diag("nav", `restored ${recovered.page} with ${recovered.stack.length} back steps after reload`);
+    clearReloadFlag();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1178,9 +1181,10 @@ export default function App() {
               </span>
               <button
                 className="api-status-btn"
-                onClick={() =>
-                  setApiKeyStatus("checking") || window.location.reload()
-                }
+                onClick={() => {
+                  setApiKeyStatus("checking");
+                  reloadApp("TMDB unreachable banner Retry");
+                }}
               >
                 Retry
               </button>

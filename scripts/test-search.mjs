@@ -169,6 +169,32 @@ await t("results are capped at 12 and people are dropped", async () => {
   m.root.unmount();
 });
 
-console.log(`\n${pass} search tests passed`);
+await t("ErrorBoundary Try Again rebuilds the failed subtree", async () => {
+  const { default: ErrorBoundary } = await import("../src/components/ErrorBoundary.jsx");
+  let shouldThrow = true;
+  let mounts = 0;
+  function Flaky() {
+    React.useEffect(() => { mounts++; }, []);
+    if (shouldThrow) throw new Error("page exploded");
+    return React.createElement("div", { className: "fine" }, "page ok");
+  }
+  document.body.innerHTML = "";
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const origErr = console.error; console.error = () => {};
+  await act(async () => root.render(React.createElement(ErrorBoundary, { inline: true, resetKey: "a" }, React.createElement(Flaky))));
+  console.error = origErr;
+  assert.ok(host.textContent.includes("page exploded"));
+  assert.ok(!/data is safe|settings are safe/i.test(host.textContent));
+  shouldThrow = false;
+  const retry = [...host.querySelectorAll("button")].find((b) => b.textContent.includes("Try Again"));
+  await act(async () => retry.dispatchEvent(new win.MouseEvent("click", { bubbles: true })));
+  assert.ok(host.querySelector(".fine"), "subtree not rebuilt");
+  assert.equal(mounts, 1);
+  root.unmount();
+});
+
+console.log(`\n${pass} search + error boundary tests passed`);
 await win.happyDOM.close();
 process.exit(0);

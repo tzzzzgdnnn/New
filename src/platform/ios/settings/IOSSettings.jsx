@@ -20,7 +20,7 @@ import { collectBackupData, restoreBackupData } from "../../../utils/backup";
 import { version as APP_VERSION } from "../../../../package.json";
 import { getLoadTimes } from "../playerPrefs";
 import { readDiag, clearDiag, diag } from "../../../utils/diag";
-import { registerBackHandler } from "../../../utils/navHistory";
+import { registerBackHandler, reloadApp } from "../../../utils/navHistory";
 
 // Tile colors: one accent family plus iOS system hues so rows scan quickly.
 const C = {
@@ -728,7 +728,7 @@ function StoragePage() {
       await window.electron?.clearWatchData?.();
     } catch {}
     setStatus({ ok: true, msg: "Watch data cleared. Reloading…" });
-    setTimeout(() => window.location.reload(), 800);
+    setTimeout(() => reloadApp("clear watch progress"), 800);
   };
   const reset = async () => {
     setConfirm(null);
