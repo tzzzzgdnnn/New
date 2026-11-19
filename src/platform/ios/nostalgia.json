@@ -1,0 +1,1228 @@
+{
+ "movies": [
+  {
+   "title": "Toy Story",
+   "year": 1995,
+   "tmdb_id": 862
+  },
+  {
+   "title": "Finding Nemo",
+   "year": 2003,
+   "tmdb_id": 12
+  },
+  {
+   "title": "Shrek",
+   "year": 2001,
+   "tmdb_id": 808
+  },
+  {
+   "title": "The Lion King",
+   "year": 1994,
+   "tmdb_id": 8587
+  },
+  {
+   "title": "Monsters, Inc.",
+   "year": 2001,
+   "tmdb_id": 585
+  },
+  {
+   "title": "The Incredibles",
+   "year": 2004,
+   "tmdb_id": 9806
+  },
+  {
+   "title": "Home Alone",
+   "year": 1990,
+   "tmdb_id": 771
+  },
+  {
+   "title": "High School Musical",
+   "year": 2006,
+   "tmdb_id": 10947
+  },
+  {
+   "title": "Space Jam",
+   "year": 1996,
+   "tmdb_id": 2300
+  },
+  {
+   "title": "Ice Age",
+   "year": 2002,
+   "tmdb_id": 425
+  },
+  {
+   "title": "Madagascar",
+   "year": 2005,
+   "tmdb_id": 953
+  },
+  {
+   "title": "Cars",
+   "year": 2006,
+   "tmdb_id": 920
+  },
+  {
+   "title": "Toy Story 2",
+   "year": 1999,
+   "tmdb_id": 863
+  },
+  {
+   "title": "Aladdin",
+   "year": 1992,
+   "tmdb_id": 812
+  },
+  {
+   "title": "Lilo & Stitch",
+   "year": 2002,
+   "tmdb_id": 11544
+  },
+  {
+   "title": "Spy Kids",
+   "year": 2001,
+   "tmdb_id": 10054
+  },
+  {
+   "title": "Shrek 2",
+   "year": 2004,
+   "tmdb_id": 809
+  },
+  {
+   "title": "Harry Potter and the Sorcerer's Stone",
+   "year": 2001,
+   "tmdb_id": 671
+  },
+  {
+   "title": "Holes",
+   "year": 2003,
+   "tmdb_id": 8326
+  },
+  {
+   "title": "The Sandlot",
+   "year": 1993,
+   "tmdb_id": 11528
+  },
+  {
+   "title": "Mulan",
+   "year": 1998,
+   "tmdb_id": 10674
+  },
+  {
+   "title": "Tarzan",
+   "year": 1999,
+   "tmdb_id": 37135
+  },
+  {
+   "title": "Halloweentown",
+   "year": 1998,
+   "tmdb_id": 27850
+  },
+  {
+   "title": "Twitches",
+   "year": 2005,
+   "tmdb_id": 21481
+  },
+  {
+   "title": "The Cheetah Girls",
+   "year": 2003,
+   "tmdb_id": 32293
+  },
+  {
+   "title": "Camp Rock",
+   "year": 2008,
+   "tmdb_id": 13655
+  },
+  {
+   "title": "Zenon: Girl of the 21st Century",
+   "year": 1999,
+   "tmdb_id": 34766
+  },
+  {
+   "title": "Brink!",
+   "year": 1998,
+   "tmdb_id": 15043
+  },
+  {
+   "title": "Up",
+   "year": 2009,
+   "tmdb_id": 14160
+  },
+  {
+   "title": "WALL·E",
+   "year": 2008,
+   "tmdb_id": 10681
+  },
+  {
+   "title": "Ratatouille",
+   "year": 2007,
+   "tmdb_id": 2062
+  },
+  {
+   "title": "Despicable Me",
+   "year": 2010,
+   "tmdb_id": 20352
+  },
+  {
+   "title": "How to Train Your Dragon",
+   "year": 2010,
+   "tmdb_id": 10191
+  },
+  {
+   "title": "Kung Fu Panda",
+   "year": 2008,
+   "tmdb_id": 9502
+  },
+  {
+   "title": "Over the Hedge",
+   "year": 2006,
+   "tmdb_id": 7518
+  },
+  {
+   "title": "Shark Tale",
+   "year": 2004,
+   "tmdb_id": 10555
+  },
+  {
+   "title": "Chicken Little",
+   "year": 2005,
+   "tmdb_id": 9982
+  },
+  {
+   "title": "Brother Bear",
+   "year": 2003,
+   "tmdb_id": 10009
+  },
+  {
+   "title": "Tangled",
+   "year": 2010,
+   "tmdb_id": 38757
+  },
+  {
+   "title": "Toy Story 3",
+   "year": 2010,
+   "tmdb_id": 10193
+  },
+  {
+   "title": "Night at the Museum",
+   "year": 2006,
+   "tmdb_id": 1593
+  },
+  {
+   "title": "The SpongeBob SquarePants Movie",
+   "year": 2004,
+   "tmdb_id": 11836
+  },
+  {
+   "title": "Jimmy Neutron: Boy Genius",
+   "year": 2001,
+   "tmdb_id": 12589
+  },
+  {
+   "title": "Scooby-Doo",
+   "year": 2002,
+   "tmdb_id": 9637
+  },
+  {
+   "title": "Cheaper by the Dozen",
+   "year": 2003,
+   "tmdb_id": 11007
+  },
+  {
+   "title": "Freaky Friday",
+   "year": 2003,
+   "tmdb_id": 10330
+  },
+  {
+   "title": "The Parent Trap",
+   "year": 1998,
+   "tmdb_id": 9820
+  },
+  {
+   "title": "Matilda",
+   "year": 1996,
+   "tmdb_id": 10830
+  },
+  {
+   "title": "Jumanji",
+   "year": 1995,
+   "tmdb_id": 8844
+  },
+  {
+   "title": "Hocus Pocus",
+   "year": 1993,
+   "tmdb_id": 10439
+  },
+  {
+   "title": "Mrs. Doubtfire",
+   "year": 1993,
+   "tmdb_id": 788
+  },
+  {
+   "title": "Stuart Little",
+   "year": 1999,
+   "tmdb_id": 10137
+  },
+  {
+   "title": "The Cat in the Hat",
+   "year": 2003,
+   "tmdb_id": 10588
+  },
+  {
+   "title": "Dr. Dolittle",
+   "year": 1998,
+   "tmdb_id": 3050
+  },
+  {
+   "title": "Elf",
+   "year": 2003,
+   "tmdb_id": 10719
+  },
+  {
+   "title": "The Polar Express",
+   "year": 2004,
+   "tmdb_id": 5255
+  },
+  {
+   "title": "Charlie and the Chocolate Factory",
+   "year": 2005,
+   "tmdb_id": 118
+  },
+  {
+   "title": "Zathura: A Space Adventure",
+   "year": 2005,
+   "tmdb_id": 6795
+  },
+  {
+   "title": "Hannah Montana: The Movie",
+   "year": 2009,
+   "tmdb_id": 18126
+  },
+  {
+   "title": "A Cinderella Story",
+   "year": 2004,
+   "tmdb_id": 11247
+  },
+  {
+   "title": "Ella Enchanted",
+   "year": 2004,
+   "tmdb_id": 14442
+  },
+  {
+   "title": "Herbie Fully Loaded",
+   "year": 2005,
+   "tmdb_id": 11451
+  },
+  {
+   "title": "Sky High",
+   "year": 2005,
+   "tmdb_id": 11459
+  },
+  {
+   "title": "Monster House",
+   "year": 2006,
+   "tmdb_id": 9297
+  },
+  {
+   "title": "Coraline",
+   "year": 2009,
+   "tmdb_id": 14836
+  },
+  {
+   "title": "Flushed Away",
+   "year": 2006,
+   "tmdb_id": 11619
+  },
+  {
+   "title": "Bee Movie",
+   "year": 2007,
+   "tmdb_id": 5559
+  },
+  {
+   "title": "Happy Feet",
+   "year": 2006,
+   "tmdb_id": 9836
+  },
+  {
+   "title": "Chicken Run",
+   "year": 2000,
+   "tmdb_id": 7443
+  },
+  {
+   "title": "The Emperor's New Groove",
+   "year": 2000,
+   "tmdb_id": 11688
+  },
+  {
+   "title": "Treasure Planet",
+   "year": 2002,
+   "tmdb_id": 9016
+  },
+  {
+   "title": "Atlantis: The Lost Empire",
+   "year": 2001,
+   "tmdb_id": 10865
+  },
+  {
+   "title": "Stuck in the Suburbs",
+   "year": 2004,
+   "tmdb_id": 115626
+  },
+  {
+   "title": "Johnny Tsunami",
+   "year": 1999,
+   "tmdb_id": 24020
+  },
+  {
+   "title": "Smart House",
+   "year": 1999,
+   "tmdb_id": 35215
+  },
+  {
+   "title": "Cadet Kelly",
+   "year": 2002,
+   "tmdb_id": 14008
+  },
+  {
+   "title": "Jump In!",
+   "year": 2007,
+   "tmdb_id": 13968
+  },
+  {
+   "title": "Read It and Weep",
+   "year": 2006,
+   "tmdb_id": 4641
+  },
+  {
+   "title": "Life-Size",
+   "year": 2000,
+   "tmdb_id": 36968
+  },
+  {
+   "title": "The Even Stevens Movie",
+   "year": 2003,
+   "tmdb_id": 50794
+  },
+  {
+   "title": "Agent Cody Banks",
+   "year": 2003,
+   "tmdb_id": 10923
+  },
+  {
+   "title": "Shorts",
+   "year": 2009,
+   "tmdb_id": 25132
+  },
+  {
+   "title": "Alvin and the Chipmunks",
+   "year": 2007,
+   "tmdb_id": 6477
+  },
+  {
+   "title": "Hotel for Dogs",
+   "year": 2009,
+   "tmdb_id": 15189
+  },
+  {
+   "title": "Air Bud",
+   "year": 1997,
+   "tmdb_id": 20737
+  },
+  {
+   "title": "Ice Princess",
+   "year": 2005,
+   "tmdb_id": 13374
+  },
+  {
+   "title": "The Princess Diaries",
+   "year": 2001,
+   "tmdb_id": 9880
+  },
+  {
+   "title": "Hoot",
+   "year": 2006,
+   "tmdb_id": 18276
+  },
+  {
+   "title": "Bolt",
+   "year": 2008,
+   "tmdb_id": 13053
+  },
+  {
+   "title": "Rio",
+   "year": 2011,
+   "tmdb_id": 46195
+  },
+  {
+   "title": "Megamind",
+   "year": 2010,
+   "tmdb_id": 38055
+  },
+  {
+   "title": "Cloudy with a Chance of Meatballs",
+   "year": 2009,
+   "tmdb_id": 22794
+  },
+  {
+   "title": "Monsters vs. Aliens",
+   "year": 2009,
+   "tmdb_id": 15512
+  },
+  {
+   "title": "Hop",
+   "year": 2011,
+   "tmdb_id": 50359
+  },
+  {
+   "title": "Wreck-It Ralph",
+   "year": 2012,
+   "tmdb_id": 82690
+  },
+  {
+   "title": "Frozen",
+   "year": 2013,
+   "tmdb_id": 109445
+  },
+  {
+   "title": "Brave",
+   "year": 2012,
+   "tmdb_id": 62177
+  },
+  {
+   "title": "Hotel Transylvania",
+   "year": 2012,
+   "tmdb_id": 76492
+  },
+  {
+   "title": "Diary of a Wimpy Kid",
+   "year": 2010,
+   "tmdb_id": 33217
+  },
+  {
+   "title": "Percy Jackson & the Olympians: The Lightning Thief",
+   "year": 2010,
+   "tmdb_id": 32657
+  },
+  {
+   "title": "Garfield",
+   "year": 2004,
+   "tmdb_id": 8920
+  }
+ ],
+ "tv": [
+  {
+   "title": "SpongeBob SquarePants",
+   "year": 1999,
+   "tmdb_id": 387,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Hannah Montana",
+   "year": 2006,
+   "tmdb_id": 4610,
+   "network": "Disney"
+  },
+  {
+   "title": "Drake & Josh",
+   "year": 2004,
+   "tmdb_id": 2038,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "iCarly",
+   "year": 2007,
+   "tmdb_id": 5371,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "The Suite Life of Zack & Cody",
+   "year": 2005,
+   "tmdb_id": 4605,
+   "network": "Disney"
+  },
+  {
+   "title": "That's So Raven",
+   "year": 2003,
+   "tmdb_id": 4602,
+   "network": "Disney"
+  },
+  {
+   "title": "Phineas and Ferb",
+   "year": 2007,
+   "tmdb_id": 1877,
+   "network": "Disney"
+  },
+  {
+   "title": "The Fairly OddParents",
+   "year": 2001,
+   "tmdb_id": 4630,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Avatar: The Last Airbender",
+   "year": 2005,
+   "tmdb_id": 246,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Wizards of Waverly Place",
+   "year": 2007,
+   "tmdb_id": 3498,
+   "network": "Disney"
+  },
+  {
+   "title": "Kim Possible",
+   "year": 2002,
+   "tmdb_id": 2345,
+   "network": "Disney"
+  },
+  {
+   "title": "Rugrats",
+   "year": 1991,
+   "tmdb_id": 3022,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Ed, Edd n Eddy",
+   "year": 1999,
+   "tmdb_id": 606,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "The Powerpuff Girls",
+   "year": 1998,
+   "tmdb_id": 607,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Dexter's Laboratory",
+   "year": 1996,
+   "tmdb_id": 4229,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Danny Phantom",
+   "year": 2004,
+   "tmdb_id": 2309,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Lizzie McGuire",
+   "year": 2001,
+   "tmdb_id": 4575,
+   "network": "Disney"
+  },
+  {
+   "title": "Hey Arnold!",
+   "year": 1996,
+   "tmdb_id": 537,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Codename: Kids Next Door",
+   "year": 2002,
+   "tmdb_id": 2660,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Courage the Cowardly Dog",
+   "year": 1999,
+   "tmdb_id": 2085,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Zoey 101",
+   "year": 2005,
+   "tmdb_id": 1778,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Victorious",
+   "year": 2010,
+   "tmdb_id": 31251,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Adventure Time",
+   "year": 2010,
+   "tmdb_id": 15260,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Regular Show",
+   "year": 2010,
+   "tmdb_id": 31132,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Teen Titans",
+   "year": 2003,
+   "tmdb_id": 604,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Ben 10",
+   "year": 2005,
+   "tmdb_id": 4686,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Ned's Declassified School Survival Guide",
+   "year": 2004,
+   "tmdb_id": 1600,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "The Adventures of Jimmy Neutron: Boy Genius",
+   "year": 2002,
+   "tmdb_id": 2129,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Gravity Falls",
+   "year": 2012,
+   "tmdb_id": 40075,
+   "network": "Disney"
+  },
+  {
+   "title": "Scooby-Doo, Where Are You!",
+   "year": 1969,
+   "tmdb_id": 926,
+   "network": "Boomerang"
+  },
+  {
+   "title": "The Proud Family",
+   "year": 2001,
+   "tmdb_id": 543,
+   "network": "Disney"
+  },
+  {
+   "title": "Even Stevens",
+   "year": 2000,
+   "tmdb_id": 3200,
+   "network": "Disney"
+  },
+  {
+   "title": "Johnny Bravo",
+   "year": 1997,
+   "tmdb_id": 2405,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Foster's Home for Imaginary Friends",
+   "year": 2004,
+   "tmdb_id": 1720,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "The Grim Adventures of Billy & Mandy",
+   "year": 2001,
+   "tmdb_id": 897,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Big Time Rush",
+   "year": 2009,
+   "tmdb_id": 31356,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "The Amazing World of Gumball",
+   "year": 2011,
+   "tmdb_id": 37606,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Good Luck Charlie",
+   "year": 2010,
+   "tmdb_id": 21641,
+   "network": "Disney"
+  },
+  {
+   "title": "Kenan & Kel",
+   "year": 1996,
+   "tmdb_id": 1835,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "All That",
+   "year": 1994,
+   "tmdb_id": 3814,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "The Amanda Show",
+   "year": 1999,
+   "tmdb_id": 376,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "CatDog",
+   "year": 1998,
+   "tmdb_id": 1567,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "The Wild Thornberrys",
+   "year": 1998,
+   "tmdb_id": 2408,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Invader ZIM",
+   "year": 2001,
+   "tmdb_id": 3793,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Samurai Jack",
+   "year": 2001,
+   "tmdb_id": 2723,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Rocko's Modern Life",
+   "year": 1993,
+   "tmdb_id": 657,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Boy Meets World",
+   "year": 1993,
+   "tmdb_id": 1777,
+   "network": "Other"
+  },
+  {
+   "title": "Sonny with a Chance",
+   "year": 2009,
+   "tmdb_id": 33873,
+   "network": "Disney"
+  },
+  {
+   "title": "Jessie",
+   "year": 2011,
+   "tmdb_id": 38974,
+   "network": "Disney"
+  },
+  {
+   "title": "Austin & Ally",
+   "year": 2011,
+   "tmdb_id": 35279,
+   "network": "Disney"
+  },
+  {
+   "title": "Henry Danger",
+   "year": 2014,
+   "tmdb_id": 61852,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Sam & Cat",
+   "year": 2013,
+   "tmdb_id": 45666,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Degrassi: The Next Generation",
+   "year": 2001,
+   "tmdb_id": 1948,
+   "network": "Other"
+  },
+  {
+   "title": "Steven Universe",
+   "year": 2013,
+   "tmdb_id": 61175,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Teen Titans Go!",
+   "year": 2013,
+   "tmdb_id": 45140,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Recess",
+   "year": 1997,
+   "tmdb_id": 1546,
+   "network": "Disney"
+  },
+  {
+   "title": "American Dragon: Jake Long",
+   "year": 2005,
+   "tmdb_id": 346,
+   "network": "Disney"
+  },
+  {
+   "title": "Rocket Power",
+   "year": 1999,
+   "tmdb_id": 2009,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "As Told by Ginger",
+   "year": 2000,
+   "tmdb_id": 1760,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "All Grown Up!",
+   "year": 2003,
+   "tmdb_id": 130,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Doug",
+   "year": 1991,
+   "tmdb_id": 384,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "The Ren & Stimpy Show",
+   "year": 1991,
+   "tmdb_id": 504,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Aaahh!!! Real Monsters",
+   "year": 1994,
+   "tmdb_id": 2429,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "The Angry Beavers",
+   "year": 1997,
+   "tmdb_id": 3579,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Chowder",
+   "year": 2007,
+   "tmdb_id": 9907,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "The Marvelous Misadventures of Flapjack",
+   "year": 2008,
+   "tmdb_id": 6673,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Johnny Test",
+   "year": 2005,
+   "tmdb_id": 1769,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Fanboy & Chum Chum",
+   "year": 2009,
+   "tmdb_id": 18686,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Kick Buttowski: Suburban Daredevil",
+   "year": 2010,
+   "tmdb_id": 17572,
+   "network": "Disney"
+  },
+  {
+   "title": "Uncle Grandpa",
+   "year": 2013,
+   "tmdb_id": 47035,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "T.U.F.F. Puppy",
+   "year": 2010,
+   "tmdb_id": 18828,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Sanjay and Craig",
+   "year": 2013,
+   "tmdb_id": 61520,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Breadwinners",
+   "year": 2014,
+   "tmdb_id": 27318,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Robot and Monster",
+   "year": 2012,
+   "tmdb_id": 51808,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Pickle and Peanut",
+   "year": 2015,
+   "tmdb_id": 62853,
+   "network": "Disney"
+  },
+  {
+   "title": "Lab Rats",
+   "year": 2012,
+   "tmdb_id": 38867,
+   "network": "Disney"
+  },
+  {
+   "title": "Unfabulous",
+   "year": 2004,
+   "tmdb_id": 2967,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "True Jackson, VP",
+   "year": 2008,
+   "tmdb_id": 7714,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Xiaolin Showdown",
+   "year": 2003,
+   "tmdb_id": 679,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Lilo & Stitch: The Series",
+   "year": 2003,
+   "tmdb_id": 2355,
+   "network": "Disney"
+  },
+  {
+   "title": "The Tom and Jerry Show",
+   "year": 1975,
+   "tmdb_id": 7842,
+   "network": "Boomerang"
+  },
+  {
+   "title": "The Looney Tunes Show",
+   "year": 2011,
+   "tmdb_id": 32605,
+   "network": "Boomerang"
+  },
+  {
+   "title": "The Flintstones",
+   "year": 1960,
+   "tmdb_id": 1996,
+   "network": "Boomerang"
+  },
+  {
+   "title": "The Jetsons",
+   "year": 1962,
+   "tmdb_id": 2362,
+   "network": "Boomerang"
+  },
+  {
+   "title": "The Yogi Bear Show",
+   "year": 1961,
+   "tmdb_id": 30773,
+   "network": "Boomerang"
+  },
+  {
+   "title": "Dora the Explorer",
+   "year": 2000,
+   "tmdb_id": 79,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Blue's Clues",
+   "year": 1996,
+   "tmdb_id": 10821,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Arthur",
+   "year": 1996,
+   "tmdb_id": 2153,
+   "network": "Other"
+  }
+ ],
+ "anime": [
+  {
+   "title": "Naruto",
+   "year": 2002,
+   "tmdb_id": 46260,
+   "type": "tv"
+  },
+  {
+   "title": "Dragon Ball Z",
+   "year": 1989,
+   "tmdb_id": 12971,
+   "type": "tv"
+  },
+  {
+   "title": "Pokémon",
+   "year": 1997,
+   "tmdb_id": 60572,
+   "type": "tv"
+  },
+  {
+   "title": "Yu-Gi-Oh!",
+   "year": 2000,
+   "tmdb_id": 902,
+   "type": "tv"
+  },
+  {
+   "title": "Naruto Shippuden",
+   "year": 2007,
+   "tmdb_id": 31910,
+   "type": "tv"
+  },
+  {
+   "title": "Death Note",
+   "year": 2006,
+   "tmdb_id": 13916,
+   "type": "tv"
+  },
+  {
+   "title": "Bleach",
+   "year": 2004,
+   "tmdb_id": 30984,
+   "type": "tv"
+  },
+  {
+   "title": "One Piece",
+   "year": 1999,
+   "tmdb_id": 37854,
+   "type": "tv"
+  },
+  {
+   "title": "Dragon Ball",
+   "year": 1986,
+   "tmdb_id": 12609,
+   "type": "tv"
+  },
+  {
+   "title": "Digimon: Digital Monsters",
+   "year": 1999,
+   "tmdb_id": 31654,
+   "type": "tv"
+  },
+  {
+   "title": "Fullmetal Alchemist: Brotherhood",
+   "year": 2009,
+   "tmdb_id": 31911,
+   "type": "tv"
+  },
+  {
+   "title": "Attack on Titan",
+   "year": 2013,
+   "tmdb_id": 1429,
+   "type": "tv"
+  },
+  {
+   "title": "Cowboy Bebop",
+   "year": 1998,
+   "tmdb_id": 30991,
+   "type": "tv"
+  },
+  {
+   "title": "Sailor Moon",
+   "year": 1992,
+   "tmdb_id": 3570,
+   "type": "tv"
+  },
+  {
+   "title": "Inuyasha",
+   "year": 2000,
+   "tmdb_id": 35610,
+   "type": "tv"
+  },
+  {
+   "title": "Dragon Ball GT",
+   "year": 1996,
+   "tmdb_id": 12697,
+   "type": "tv"
+  },
+  {
+   "title": "Hunter x Hunter",
+   "year": 2011,
+   "tmdb_id": 46298,
+   "type": "tv"
+  },
+  {
+   "title": "Fullmetal Alchemist",
+   "year": 2003,
+   "tmdb_id": 37863,
+   "type": "tv"
+  },
+  {
+   "title": "Yu Yu Hakusho",
+   "year": 1992,
+   "tmdb_id": 30669,
+   "type": "tv"
+  },
+  {
+   "title": "Beyblade",
+   "year": 2001,
+   "tmdb_id": 54728,
+   "type": "tv"
+  },
+  {
+   "title": "Sword Art Online",
+   "year": 2012,
+   "tmdb_id": 45782,
+   "type": "tv"
+  },
+  {
+   "title": "Code Geass: Lelouch of the Rebellion",
+   "year": 2006,
+   "tmdb_id": 31724,
+   "type": "tv"
+  },
+  {
+   "title": "Fairy Tail",
+   "year": 2009,
+   "tmdb_id": 46261,
+   "type": "tv"
+  },
+  {
+   "title": "Soul Eater",
+   "year": 2008,
+   "tmdb_id": 37305,
+   "type": "tv"
+  },
+  {
+   "title": "Hunter x Hunter",
+   "year": 1999,
+   "tmdb_id": 45952,
+   "type": "tv"
+  },
+  {
+   "title": "Mobile Suit Gundam Wing",
+   "year": 1995,
+   "tmdb_id": 21730,
+   "type": "tv"
+  },
+  {
+   "title": "Rurouni Kenshin",
+   "year": 1996,
+   "tmdb_id": 28136,
+   "type": "tv"
+  },
+  {
+   "title": "Outlaw Star",
+   "year": 1998,
+   "tmdb_id": 35106,
+   "type": "tv"
+  },
+  {
+   "title": "Spirited Away",
+   "year": 2001,
+   "tmdb_id": 129,
+   "type": "movie"
+  },
+  {
+   "title": "Pokémon: The First Movie",
+   "year": 1998,
+   "tmdb_id": 10228,
+   "type": "movie"
+  }
+ ],
+ "tmdb_network_ids": {
+  "Nickelodeon": 13,
+  "Cartoon Network": 56,
+  "Disney Channel": 54,
+  "Disney XD": 44,
+  "Boomerang": 523
+ }
+}

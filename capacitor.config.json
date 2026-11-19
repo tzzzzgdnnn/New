@@ -1,0 +1,18 @@
+{
+  "appId": "com.tezz.tezzdagoat",
+  "appName": "Super Player",
+  "webDir": "dist",
+  "backgroundColor": "#0A0A0A",
+  "ios": {
+    "contentInset": "never",
+    "scheme": "Streambert",
+    "backgroundColor": "#0A0A0A",
+    "allowsLinkPreview": false,
+    "scrollEnabled": true,
+    "webContentsDebuggingEnabled": true
+  },
+  "server": {
+    "iosScheme": "capacitor",
+    "hostname": "localhost"
+  }
+}

@@ -1,0 +1,316 @@
+/* iOS-only styles (loaded by the iOS shim, never by the desktop build). */
+
+/* Red/black theme with white text */
+html.sb-ios {
+  --bg: #0a0a0a;
+  --surface: #121212;
+  --surface2: #181818;
+  --surface3: #202020;
+  --border: #262626;
+  --red: #e50914;
+  --red2: #ff1f2a;
+  --text: #ffffff;
+  --text2: #d4d4d4;
+  --text3: #a3a3a3;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Safe areas (notch / Dynamic Island / home indicator) */
+html.sb-ios .sidebar {
+  padding-top: calc(16px + env(safe-area-inset-top));
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  padding-left: env(safe-area-inset-left);
+  width: calc(var(--sidebar) + env(safe-area-inset-left));
+}
+html.sb-ios .main {
+  margin-left: calc(var(--sidebar) + env(safe-area-inset-left));
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Features that don't exist on iOS */
+html.sb-ios .sb-download-btn,
+html.sb-ios .window-titlebar {
+  display: none !important;
+}
+
+/* <webview> stand-in: a block box holding a sandboxed iframe */
+html.sb-ios webview {
+  display: block;
+  overflow: hidden;
+  background: #000;
+}
+
+/* Home sections: horizontal swipe rows */
+html.sb-ios .sb-row {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 6px;
+  scrollbar-width: none;
+}
+html.sb-ios .sb-row::-webkit-scrollbar { display: none; }
+html.sb-ios .sb-row-item {
+  flex: 0 0 132px;
+  width: 132px;
+  scroll-snap-align: start;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Super Player look: premium red/black, phone-first.
+   ════════════════════════════════════════════════════════════════════════ */
+html.sb-ios {
+  --bg: #050505;
+  --surface: #0e0e0f;
+  --surface2: #151516;
+  --surface3: #1d1d1f;
+  --border: rgba(255, 255, 255, 0.07);
+  --radius: 12px;
+  --red-glow: 0 8px 28px rgba(229, 9, 20, 0.35);
+}
+html.sb-ios body { overscroll-behavior: none; }
+html.sb-ios .card {
+  border: none;
+  border-radius: 10px;
+  background: var(--surface2);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+html.sb-ios .card:hover { transform: none; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5); }
+html.sb-ios .card:active { transform: scale(0.96); transition: transform 0.12s; }
+html.sb-ios .btn { border-radius: 10px; }
+html.sb-ios .btn:active { transform: scale(0.97); }
+html.sb-ios .btn-primary {
+  background: linear-gradient(180deg, #ff2430 0%, #d10612 100%);
+  box-shadow: 0 6px 20px rgba(229, 9, 20, 0.4);
+}
+html.sb-ios .btn-secondary {
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+html.sb-ios .section-title::after { display: none; }
+html.sb-ios .section-title { font-size: 26px; letter-spacing: 1.2px; }
+
+/* Rails (horizontal swipe rows) */
+html.sb-ios .sb-row-section { padding-top: 10px; padding-bottom: 10px; }
+html.sb-ios .sb-row-head { display: flex; align-items: baseline; justify-content: space-between; }
+html.sb-ios .sb-row-sub { font-size: 12px; color: var(--text3); margin: -10px 0 12px; letter-spacing: 0.3px; }
+html.sb-ios .sb-row { padding: 2px 0 10px; scroll-padding-left: 0; }
+html.sb-ios .sb-row-item .card-info { padding: 8px 4px 2px; background: transparent; }
+html.sb-ios .sb-row-item .card { background: transparent; box-shadow: none; }
+html.sb-ios .sb-row-item .card-poster { border-radius: 10px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,.55); }
+
+/* Top 10 rail: big outlined rank numbers */
+html.sb-ios .sb-rank-item { flex: 0 0 168px; width: 168px; display: flex; align-items: flex-end; scroll-snap-align: start; }
+html.sb-ios .sb-rank-num {
+  font-family: var(--font-display);
+  font-size: 128px;
+  line-height: 0.78;
+  color: #050505;
+  -webkit-text-stroke: 3px var(--red);
+  margin-right: -18px;
+  z-index: 0;
+  user-select: none;
+}
+html.sb-ios .sb-rank-item .card { width: 112px; flex: 0 0 112px; z-index: 1; }
+html.sb-ios .sb-rank-item .card-info { display: none; }
+
+/* Wide backdrop cards (Continue Watching) */
+html.sb-ios .sb-wide-item { flex: 0 0 236px; width: 236px; scroll-snap-align: start; cursor: pointer; }
+html.sb-ios .sb-wide-img { position: relative; aspect-ratio: 16/9; border-radius: 10px; overflow: hidden; background: var(--surface3); box-shadow: 0 8px 20px rgba(0,0,0,.55); }
+html.sb-ios .sb-wide-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+html.sb-ios .sb-wide-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+html.sb-ios .sb-wide-play span { width: 40px; height: 40px; border-radius: 50%; background: rgba(0,0,0,.55); border: 1.5px solid #fff; display: flex; align-items: center; justify-content: center; }
+html.sb-ios .sb-wide-play svg { width: 16px; height: 16px; color: #fff; margin-left: 2px; }
+html.sb-ios .sb-wide-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.2); }
+html.sb-ios .sb-wide-bar div { height: 100%; background: var(--red); }
+html.sb-ios .sb-wide-title { font-size: 13px; font-weight: 600; margin-top: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html.sb-ios .sb-wide-meta { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
+/* Hero */
+html.sb-ios .hero-title { text-shadow: 0 4px 30px rgba(0, 0, 0, 0.6); }
+html.sb-ios .hero-type { color: #ff3b45; }
+
+/* ── Portrait phones: bottom tab bar, full-width content ─────────────── */
+@media (max-width: 760px) and (orientation: portrait) {
+  html.sb-ios .sidebar {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: calc(58px + env(safe-area-inset-bottom));
+    padding: 6px 12px env(safe-area-inset-bottom);
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: flex-start;
+    gap: 0;
+    border-right: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(8, 8, 8, 0.82);
+    -webkit-backdrop-filter: saturate(180%) blur(24px);
+    backdrop-filter: saturate(180%) blur(24px);
+    z-index: 150;
+  }
+  html.sb-ios .sidebar-logo,
+  html.sb-ios .sidebar-sep,
+  html.sb-ios .sidebar-saved,
+  html.sb-ios .saved-thumb-tooltip,
+  html.sb-ios .sidebar-btn .tooltip,
+  html.sb-ios .sidebar-bottom > .sidebar-btn:first-child,
+  html.sb-ios .sidebar-bottom > button:last-child {
+    display: none !important;
+  }
+  html.sb-ios .sidebar-bottom { display: contents; }
+  html.sb-ios .sidebar-btn {
+    width: 52px;
+    height: 44px;
+    border-radius: 12px;
+    background: none !important;
+    color: var(--text3);
+  }
+  html.sb-ios .sidebar-btn.active { color: #fff; }
+  html.sb-ios .sidebar-btn.active::after {
+    content: "";
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    width: 18px;
+    height: 3px;
+    margin-left: -9px;
+    border-radius: 2px;
+    background: var(--red);
+    box-shadow: 0 0 10px var(--red);
+  }
+  html.sb-ios .sidebar-btn svg { width: 24px; height: 24px; }
+
+  html.sb-ios .main {
+    margin-left: 0;
+    padding-top: env(safe-area-inset-top);
+    padding-left: 0;
+    padding-right: 0;
+    padding-bottom: calc(70px + env(safe-area-inset-bottom));
+  }
+
+  /* Hero: tall poster-style, content centered at the bottom */
+  html.sb-ios .hero { height: min(78vh, 640px); }
+  html.sb-ios .hero-bg { background-position: center 15%; }
+  html.sb-ios .hero-gradient {
+    background:
+      linear-gradient(to top, var(--bg) 0%, rgba(5,5,5,.85) 22%, transparent 60%),
+      linear-gradient(to bottom, rgba(5,5,5,.7) 0%, transparent calc(14% + env(safe-area-inset-top)));
+  }
+  html.sb-ios .hero-content {
+    left: 0;
+    right: 0;
+    max-width: none;
+    padding: 0 20px 18px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  html.sb-ios .hero-title { font-size: 52px; margin-bottom: 10px; }
+  html.sb-ios .hero-meta { justify-content: center; margin-bottom: 10px; }
+  html.sb-ios .hero-overview { -webkit-line-clamp: 2; font-size: 13px; margin-bottom: 16px; }
+  html.sb-ios .hero-actions { width: 100%; }
+  html.sb-ios .hero-actions .btn { flex: 1; justify-content: center; padding: 12px 10px; font-size: 15px; }
+
+  /* Sections */
+  html.sb-ios .section { padding: 10px 16px; }
+  html.sb-ios .section-title { font-size: 23px; margin-bottom: 12px; }
+  html.sb-ios .cards-grid { grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  html.sb-ios .sb-row-item { flex-basis: 118px; width: 118px; }
+  html.sb-ios .sb-row { margin: 0 -16px; padding-left: 16px; padding-right: 16px; scroll-padding-left: 16px; }
+
+  /* Detail pages (movie / series) */
+  html.sb-ios .detail-hero { min-height: 0; }
+  html.sb-ios .detail-content {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 16px;
+    padding: 28px 16px 20px;
+  }
+  html.sb-ios .detail-poster { width: 150px; box-shadow: 0 16px 40px rgba(0,0,0,.7); }
+  html.sb-ios .detail-title { font-size: 38px; margin-bottom: 10px; }
+  html.sb-ios .detail-meta, html.sb-ios .genres, html.sb-ios .detail-actions { justify-content: center; }
+  html.sb-ios .detail-meta { gap: 10px; font-size: 12px; }
+  html.sb-ios .detail-overview { font-size: 13px; line-height: 1.6; }
+  html.sb-ios .detail-actions .btn { flex: 1 1 140px; justify-content: center; }
+  html.sb-ios .season-selector { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  html.sb-ios .season-selector::-webkit-scrollbar { display: none; }
+  html.sb-ios .season-btn { flex-shrink: 0; }
+  html.sb-ios .episodes-grid { grid-template-columns: 1fr; gap: 10px; }
+  html.sb-ios .episode-thumb { width: 128px; }
+  html.sb-ios .player-wrap { border-radius: 0; margin-left: -16px; margin-right: -16px; }
+
+  /* Modals and wide boxes fit the screen */
+  html.sb-ios .search-box,
+  html.sb-ios .download-modal { width: calc(100vw - 24px) !important; max-width: none; }
+  html.sb-ios .modal-overlay { padding-top: calc(12px + env(safe-area-inset-top)); }
+
+  /* Every modal and popup fits the phone */
+  html.sb-ios .download-modal,
+  html.sb-ios .close-confirm-modal,
+  html.sb-ios .blocked-modal,
+  html.sb-ios .cast-modal,
+  html.sb-ios .trailer-modal,
+  html.sb-ios .apikey-box,
+  html.sb-ios [style*="width: 440px"],
+  html.sb-ios [style*="width: 580px"],
+  html.sb-ios [style*="width: 620px"] {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px) !important;
+    max-height: calc(100vh - 40px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-y: auto;
+  }
+  html.sb-ios [style*="min-width: 380px"],
+  html.sb-ios [style*="min-width: 260px"],
+  html.sb-ios [style*="min-width: 230px"] { min-width: 0 !important; }
+  html.sb-ios .context-menu,
+  html.sb-ios .source-dropdown { max-width: calc(100vw - 24px); }
+  html.sb-ios .source-dropdown--fixed { left: 12px !important; right: 12px !important; width: auto !important; }
+
+  /* Settings + library: tighter gutters, nothing wider than the screen */
+  html.sb-ios .main > div { max-width: 100vw; }
+  html.sb-ios .main [style*="padding: 0px 48px"],
+  html.sb-ios .main [style*="padding: 0 48px"] { padding-left: 16px !important; padding-right: 16px !important; }
+  html.sb-ios .library-header { padding-left: 16px; padding-right: 16px; }
+  html.sb-ios .toast { left: 16px !important; right: 16px; bottom: calc(76px + env(safe-area-inset-bottom)); }
+}
+
+/* Landscape phones: slim sidebar, roomy content */
+@media (max-height: 500px) and (orientation: landscape) {
+  html.sb-ios .hero { height: 88vh; }
+  html.sb-ios .hero-content { padding: 24px 32px; }
+  html.sb-ios .hero-title { font-size: 48px; }
+  html.sb-ios .section { padding: 10px 24px; }
+  html.sb-ios .detail-content { padding: 24px; gap: 24px; }
+  html.sb-ios .detail-poster { width: 140px; }
+  html.sb-ios .detail-title { font-size: 40px; }
+  html.sb-ios .sidebar-saved { display: none; }
+}
+
+/* Nostalgia block header */
+html.sb-ios .sb-nostalgia-head {
+  margin: 28px 16px 6px;
+  padding: 22px 18px;
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(255, 36, 48, 0.45) 0%, transparent 55%),
+    linear-gradient(135deg, #1a0204 0%, #0b0b0c 70%);
+  border: 1px solid rgba(255, 36, 48, 0.25);
+}
+html.sb-ios .sb-nostalgia-kicker { font-size: 11px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; color: #ff3b45; }
+html.sb-ios .sb-nostalgia-title { font-family: var(--font-display); font-size: 44px; line-height: 1; margin-top: 4px; }
+html.sb-ios .sb-nostalgia-sub { font-size: 13px; color: var(--text2); margin-top: 6px; }
+@media (min-width: 761px) {
+  html.sb-ios .sb-nostalgia-head { margin-left: 48px; margin-right: 48px; }
+}
