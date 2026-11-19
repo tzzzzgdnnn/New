@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
+import { IS_IOS } from "../platform/target";
 import { CloseIcon, DownloadIcon, SettingsIcon, SubtitlesIcon } from "./Icons";
 import {
   storage,
@@ -368,7 +369,20 @@ export function SubtitleBrowser({
   );
 }
 
-export default function DownloadModal({
+// iOS has its own picker (stream lookup + quality tiers) on the native
+// downloader; desktop builds never load it.
+const IOSDownloadPicker = IS_IOS ? lazy(() => import("../platform/ios/DownloadPicker")) : null;
+
+export default function DownloadModal(props) {
+  if (!IOSDownloadPicker) return <DesktopDownloadModal {...props} />;
+  return (
+    <Suspense fallback={null}>
+      <IOSDownloadPicker {...props} />
+    </Suspense>
+  );
+}
+
+function DesktopDownloadModal({
   onClose,
   m3u8Url,
   subtitles = [],

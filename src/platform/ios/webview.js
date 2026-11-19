@@ -136,16 +136,15 @@ function rememberLastGood(ctx, serverId) {
   } catch {}
 }
 
-function buildCandidates(url) {
-  const list = buildCandidateList(url);
-  const good = readLastGood()[titleKey(currentCtx())];
+function buildCandidates(url, ctx = currentCtx()) {
+  const list = buildCandidateList(url, ctx);
+  const good = readLastGood()[titleKey(ctx)];
   const i = good ? list.findIndex((c) => c.id === good) : -1;
   if (i > 0) list.unshift(...list.splice(i, 1));
   return list;
 }
 
-function buildCandidateList(url) {
-  const ctx = currentCtx();
+function buildCandidateList(url, ctx) {
   const isAnime = !!ctx.isAnime;
   const mode = dubModeOf(ctx);
   const suffix = mode === "dub" ? " · Dub" : " · Sub";
@@ -194,6 +193,14 @@ function buildCandidateList(url) {
     if (!animeRoute(s)) add(s, tmdbUrl(s, ctx));
   }
   return list;
+}
+
+/**
+ * Servers for downloading one title/episode: the same list Play would try,
+ * built for `override` (e.g. another episode) on top of the page's context.
+ */
+export function downloadCandidates(override = {}) {
+  return buildCandidates(null, { ...currentCtx(), ...override });
 }
 
 // ── Native playback bookkeeping ──────────────────────────────────────────

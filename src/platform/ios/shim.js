@@ -4,6 +4,7 @@
 import { version as APP_VERSION } from "../../../package.json";
 import "./ios.css";
 import { SecureStorage } from "@aparajita/capacitor-secure-storage";
+import { iosDownloadApi, recordFromEvent } from "./downloads";
 
 const noop = () => {};
 const resolved = (v) => () => Promise.resolve(v);
@@ -40,19 +41,12 @@ window.electron = {
   onDownloadProgress: on("download-progress"),
   offDownloadProgress: off("download-progress"),
 
-  // Downloads: not supported on iOS
-  checkDownloader: resolved({ ok: false, error: "Downloads are not available on iOS" }),
-  runDownload: resolved({ ok: false, error: "Downloads are not available on iOS" }),
-  getDownloads: resolved([]),
-  deleteDownload: resolved({ ok: true }),
+  // Downloads: native segmented downloader (see ./downloads.js)
+  ...iosDownloadApi,
   showInFolder: resolved(undefined),
-  fileExists: resolved(false),
   scanDirectory: resolved([]),
   pickFolder: resolved(null),
-  openPath: resolved(undefined),
   getInstallPath: resolved(""),
-  openPathAtTime: resolved(undefined),
-  pruneSubtitlePaths: resolved({ ok: true, subtitlePaths: [] }),
   getVideoDuration: resolved({ ok: false }),
 
   openExternal: (url) => {
@@ -93,11 +87,9 @@ window.electron = {
   playerStopped: noop,
 
   getCacheSize: resolved(-1),
-  getDownloadsSize: resolved(-1),
   clearAppCache: resolved({ ok: true }),
   queryVideoProgress: resolved(null),
   clearWatchData: resolved({ ok: true }),
-  deleteAllDownloads: resolved({ ok: true }),
   resetApp: () => {
     try {
       Object.keys(localStorage)
@@ -181,6 +173,12 @@ window.electron = {
   fetchReleaseImage: resolved(null),
   discordRpcSetEnabled: resolved(undefined),
   discordRpcUpdateActivity: resolved(undefined),
+};
+
+// Native download progress -> the existing "download-progress" listeners.
+window.__sbDownloadEvent = (e) => {
+  const record = recordFromEvent(e);
+  if (record) emit("download-progress", record);
 };
 
 // No auto-update checks on iOS (the desktop updater can't install an IPA).
