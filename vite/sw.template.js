@@ -46,7 +46,26 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // The app itself: from the phone first; refresh in the background.
+  // Opening the app: the newest version when online (2.5 s max), else the
+  // copy on the phone, so it still opens offline or if the site is down.
+  if (url.origin === self.location.origin && req.mode === "navigate") {
+    e.respondWith(
+      caches.open(APP).then(async (c) => {
+        const net = fetch(req, { cache: "no-store" }).then((r) => {
+          if (r.ok) c.put("./", r.clone());
+          return r;
+        });
+        const slow = new Promise((r) => setTimeout(() => r(null), 2500));
+        const first = await Promise.race([net.catch(() => null), slow]);
+        if (first) return first;
+        const hit = (await c.match("./")) || (await c.match("./index.html"));
+        return hit || (await net.catch(() => null)) || new Response("Offline", { status: 503 });
+      }),
+    );
+    return;
+  }
+
+  // The app's files: from the phone first; refresh in the background.
   if (url.origin === self.location.origin) {
     e.respondWith(
       caches.open(APP).then(async (c) => {

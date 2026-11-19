@@ -76,6 +76,8 @@ window.__sbPlayerPref = ({ key, value } = {}) => {
  * @param {null | {progressKey: string, title: string, subtitle?: string, thumb?: string, countdown: number}} info
  */
 export function postUpNext(info) {
+  // Web app: the in-page player reads this when an episode ends.
+  window.__sbWebUpNext = info || null;
   const h = handler("sbUpNext");
   if (!h) return;
   try {

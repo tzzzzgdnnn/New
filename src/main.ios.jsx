@@ -38,7 +38,24 @@ const webReady = import.meta.env.VITE_WEB
   ? import("./platform/web/offlineDownloads").then((m) => m.installWebDownloads()).catch(() => {})
   : Promise.resolve();
 if (import.meta.env.VITE_WEB && "serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
+  // A new version installs in the background, then the app reloads once onto
+  // it, so fixes show up on the next open instead of two opens later.
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || reloaded) return;
+    reloaded = true;
+    // Never pull the page out from under someone watching.
+    if (document.querySelector("video.sb-direct-video")?.paused === false) return;
+    location.reload();
+  });
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then((reg) => {
+      const check = () => reg.update().catch(() => {});
+      document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && check());
+      setInterval(check, 30 * 60 * 1000);
+    }).catch(() => {});
+  });
 }
 showLaunchSplash();
 installImageReadyMarker();
