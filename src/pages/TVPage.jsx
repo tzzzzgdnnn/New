@@ -8,6 +8,7 @@ import {
   useNativeServerSelect,
 } from "../platform/ios/playerBridge";
 import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
+import { DetailSkeleton, SkeletonList } from "../platform/ios/Skeletons";
 import { isShuffleable, pickRandomEpisode } from "../utils/shuffle";
 import { syncPlayerPrefs, postUpNext } from "../platform/ios/playerPrefs";
 import {
@@ -2094,11 +2095,14 @@ export default function TVPage({
           }}
         />
       )}
-      {loading && (
-        <div className="loader">
-          <div className="spinner" />
-        </div>
-      )}
+      {loading &&
+        (IS_IOS ? (
+          <DetailSkeleton />
+        ) : (
+          <div className="loader">
+            <div className="spinner" />
+          </div>
+        ))}
       {!loading && (
         <>
           <div className="detail-hero">
@@ -3001,11 +3005,14 @@ export default function TVPage({
                 </span>
               </div>
             )}
-            {loadingSeason && (
-              <div className="loader">
-                <div className="spinner" />
-              </div>
-            )}
+            {loadingSeason &&
+              (IS_IOS ? (
+                <SkeletonList rows={4} />
+              ) : (
+                <div className="loader">
+                  <div className="spinner" />
+                </div>
+              ))}
             {!loadingSeason &&
               (seasonData?.episodes || episodeGroupCurrentEpisodes?.length) && (
                 <div className="episodes-grid">

@@ -198,6 +198,13 @@ html.sb-ios .sb-tape.sp-img-ready > img { animation: spImgIn .35s ease both; }
 .sp-skel-wide { aspect-ratio: 16 / 9; width: 100%; }
 .sp-skel-bill { height: min(70vh, 560px); border-radius: 0; margin-bottom: var(--sp-space-3); }
 .sp-skel-line { height: 12px; border-radius: 6px; margin-top: 8px; }
+.sp-skel-short { width: 60%; }
+.sp-skel-list { display: flex; flex-direction: column; gap: 12px; }
+.sp-skel-row { display: flex; align-items: center; gap: 12px; }
+.sp-skel-thumb { flex: none; width: 128px; aspect-ratio: 16 / 9; border-radius: 8px; }
+.sp-skel-thumb-poster { flex: none; width: 44px; aspect-ratio: 2 / 3; border-radius: 6px; }
+.sp-skel-text { flex: 1; min-width: 0; }
+.sp-skel-text > .sp-skel-line:first-child { margin-top: 0; }
 
 /* ── Motion: pages and modals ───────────────────────────────────────────── */
 html.sb-ios .main > div { animation: spPageIn var(--dur-page) var(--ease-out) both; }
@@ -212,10 +219,12 @@ html.sb-ios .search-box { border-radius: 14px; border-color: var(--hairline); }
 html.sb-ios .btn,
 html.sb-ios .sb-btn-play,
 html.sb-ios .sb-btn-info,
+html.sb-ios .sb-btn-icon,
 html.sb-ios .sb-chip { transition: transform .15s var(--ease-out), opacity .15s ease, background .2s ease; }
 html.sb-ios .btn:active,
 html.sb-ios .sb-btn-play:active,
 html.sb-ios .sb-btn-info:active,
+html.sb-ios .sb-btn-icon:active,
 html.sb-ios .sb-chip:active { transform: scale(.97); opacity: .88; }
 html.sb-ios .sb-btn-play,
 html.sb-ios .sb-btn-info { border-radius: 8px; min-height: 44px; }

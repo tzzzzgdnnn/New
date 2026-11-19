@@ -372,7 +372,9 @@ html.sb-ios .sb-bill-dot::before { content: "•"; margin-right: 10px; color: #7
 html.sb-ios .sb-bill-actions { display: flex; gap: 10px; }
 html.sb-ios .sb-btn-play, html.sb-ios .sb-btn-info { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 6px; padding: 11px 26px; font: 700 16px -apple-system, system-ui, sans-serif; cursor: pointer; }
 html.sb-ios .sb-btn-play { background: #fff; color: #000; }
-html.sb-ios .sb-btn-play svg { width: 18px; height: 18px; }
+html.sb-ios .sb-btn-play svg, html.sb-ios .sb-btn-info svg { width: 18px; height: 18px; flex: none; }
+html.sb-ios .sb-btn-icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: rgba(109,109,110,.7); color: #fff; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+html.sb-ios .sb-btn-icon svg { width: 22px; height: 22px; }
 html.sb-ios .sb-btn-info { background: rgba(109,109,110,.7); color: #fff; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 html.sb-ios .sb-btn-play:active, html.sb-ios .sb-btn-info:active { transform: scale(.96); }
 html.sb-ios .sb-bill-dots { display: flex; gap: 6px; margin-top: 18px; }
@@ -415,7 +417,8 @@ html.sb-ios .sb-tape-title { position: absolute; left: 12px; right: 12px; bottom
   html.sb-ios .sb-bill-title { font-size: 48px; max-width: 100%; }
   html.sb-ios .sb-bill-meta { justify-content: center; font-size: 12px; }
   html.sb-ios .sb-bill-actions { width: 100%; }
-  html.sb-ios .sb-bill-actions button { flex: 1; padding: 11px 10px; }
+  html.sb-ios .sb-bill-actions .sb-btn-play,
+  html.sb-ios .sb-bill-actions .sb-btn-info { flex: 1; min-width: 0; padding: 11px 10px; white-space: nowrap; }
   html.sb-ios .sb-nos-hero { margin: 0 16px 14px; height: 240px; }
   html.sb-ios .sb-nos-rec { top: -170px; }
   html.sb-ios .sb-nos-big { font-size: 50px; }

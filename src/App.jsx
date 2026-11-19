@@ -1266,6 +1266,8 @@ export default function App() {
                 onMarkUnwatched={markUnwatched}
                 history={history}
                 apiKey={apiKey}
+                isSaved={isSaved}
+                onToggleSave={toggleSave}
               />
             )}
             {page === "movie" && selected && (

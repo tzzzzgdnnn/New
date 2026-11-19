@@ -30,3 +30,37 @@ export function HomeSkeleton() {
     </div>
   );
 }
+
+/** Thumbnail + two-line rows: episodes (16:9) or search results (poster). */
+export function SkeletonList({ rows = 4, poster = false }) {
+  return (
+    <div className="sp-skel-list" role="status" aria-label="Loading">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="sp-skel-row">
+          <div className={"sp-skel " + (poster ? "sp-skel-thumb-poster" : "sp-skel-thumb")} />
+          <div className="sp-skel-text">
+            <div className="sp-skel sp-skel-line" />
+            <div className="sp-skel sp-skel-line sp-skel-short" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Title page while its details load: backdrop, title, overview, episodes. */
+export function DetailSkeleton() {
+  return (
+    <div className="sp-detail-skel" role="status" aria-label="Loading">
+      <div className="sp-skel sp-skel-bill" />
+      <div className="section">
+        <div className="sp-skel sp-skel-title" />
+        <div className="sp-skel sp-skel-line" />
+        <div className="sp-skel sp-skel-line sp-skel-short" />
+      </div>
+      <div className="section">
+        <SkeletonList rows={3} />
+      </div>
+    </div>
+  );
+}

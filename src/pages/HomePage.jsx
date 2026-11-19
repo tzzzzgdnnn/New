@@ -49,6 +49,8 @@ export default function HomePage({
   onMarkUnwatched,
   history,
   apiKey,
+  isSaved,
+  onToggleSave,
 }) {
   const hero = trending[0];
 
@@ -252,7 +254,13 @@ export default function HomePage({
 
       {/* ── Hero (always first) ── */}
       {IS_IOS && !loading && (
-        <Billboard items={[...(trending || []), ...(trendingTV || [])]} apiKey={apiKey} onSelect={onSelect} />
+        <Billboard
+          items={[...(trending || []), ...(trendingTV || [])]}
+          apiKey={apiKey}
+          onSelect={onSelect}
+          isSaved={isSaved}
+          onToggleSave={onToggleSave}
+        />
       )}
       {!IS_IOS && !loading && hero && (
         <div className="hero">
