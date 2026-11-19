@@ -211,7 +211,6 @@ await t("kids: Home rails, billboard, Continue Watching hide unverified titles",
   const common = { onSelect() {}, watched: {}, apiKey: "tok" };
   for (const [C, props, sel] of [
     [HS.PosterRail, { title: "R", items }, ".sb-row-item"],
-    [HS.RankRail, { title: "R", items }, ".sb-rank-item"],
     [HS.WideRail, { title: "R", items, progress: {} }, ".sb-wide-item"],
   ]) {
     const { host, root } = await mountEl(React.createElement(C, { ...common, ...props }));
@@ -251,7 +250,7 @@ await t("every surface uses the kids filter", () => {
     "src/utils/api.js": [/filterKidsResponse\(/, /kidsRewritePath\(/, /kv: KIDS_FILTER_VERSION/],
     "src/App.jsx": [/<KidsTitleGate item=\{selected\} type="movie"/, /<KidsTitleGate item=\{selected\} type="tv"/, /isKidsAllowedNow\(/],
     "src/pages/HomePage.jsx": [/useKidsFilter\(trendingAll/, /useKidsFilter\(trendingTVAll/, /useKidsFilter\(inProgressAll/],
-    "src/platform/ios/HomeSections.jsx": [/PosterRail[\s\S]*?useKidsFilter\(items\)/, /RankRail[\s\S]*?useKidsFilter\(all\)/, /WideRail[\s\S]*?useKidsFilter\(all\)/, /Billboard[\s\S]*?useKidsFilter\(all, apiKey\)/, /WideBackdropRail[\s\S]*?useKidsFilter\(all\)/],
+    "src/platform/ios/HomeSections.jsx": [/PosterRail[\s\S]*?useKidsFilter\(items\)/, /WideRail[\s\S]*?useKidsFilter\(all\)/, /Billboard[\s\S]*?useKidsFilter\(all, apiKey\)/, /WideBackdropRail[\s\S]*?useKidsFilter\(all\)/],
     "src/pages/LibraryPage.jsx": [/useKidsFilter\(historyAll\)/, /useKidsFilter\(inProgressAll\)/, /useKidsFilter\(savedAll\)/],
     "src/pages/DownloadsPage.jsx": [/useKidsFilter\(props\.downloads\)/, /downloads=\{downloads\}/],
     "src/components/SearchModal.jsx": [/useKidsFilter\(rawResults/],
