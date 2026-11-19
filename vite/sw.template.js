@@ -36,6 +36,12 @@ self.addEventListener("fetch", (e) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
 
+  // Downloaded shows: only ever from the phone (no internet needed).
+  if (url.origin === self.location.origin && url.pathname.includes("/offline/")) {
+    e.respondWith(caches.match(req.url, { ignoreSearch: true }).then((h) => h || new Response("Not downloaded", { status: 404 })));
+    return;
+  }
+
   // The app itself: from the phone first; refresh in the background.
   if (url.origin === self.location.origin) {
     e.respondWith(

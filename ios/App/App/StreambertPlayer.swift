@@ -1601,6 +1601,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     /// Landscape: video fills the screen. Portrait: 16:9, full width, centered.
     private func applyVideoLayout() {
         let portrait = isPortrait
+        applyVideoGravity()
         guard portrait != portraitLayoutActive else { return }
         portraitLayoutActive = portrait
         NSLayoutConstraint.deactivate(portrait ? landscapeVideoConstraints : portraitVideoConstraints)
@@ -2326,6 +2327,10 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         doubleTap.cancelsTouchesInView = false
         doubleTap.delegate = self
         view.addGestureRecognizer(doubleTap)
+        // Pinch out: fill the screen (crops the edges); pinch in: whole picture.
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handleVideoPinch(_:)))
+        pinch.cancelsTouchesInView = false
+        view.addGestureRecognizer(pinch)
         let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap))
         singleTap.cancelsTouchesInView = false
         singleTap.delegate = self
@@ -2362,6 +2367,25 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             tapHideWork = w
             DispatchQueue.main.asyncAfter(deadline: .now() + PlayerTap.doubleTapWindow, execute: w)
         }
+    }
+
+    /// Fill (zoomed to the screen) vs fit (whole picture). Remembered; on by
+    /// default in landscape so shows use the whole screen, never in portrait.
+    private static let fillKey = "sbVideoFill"
+    private var prefersFill: Bool {
+        get { UserDefaults.standard.object(forKey: Self.fillKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Self.fillKey) }
+    }
+
+    private func applyVideoGravity() {
+        let portrait = isPortrait
+        videoView.playerLayer.videoGravity = (prefersFill && !portrait) ? .resizeAspectFill : .resizeAspect
+    }
+
+    @objc private func handleVideoPinch(_ g: UIPinchGestureRecognizer) {
+        guard g.state == .ended else { return }
+        if g.scale > 1.08 { prefersFill = true } else if g.scale < 0.92 { prefersFill = false } else { return }
+        UIView.animate(withDuration: 0.2) { self.applyVideoGravity() }
     }
 
     @objc private func handleDoubleTap(_ g: UITapGestureRecognizer) {
