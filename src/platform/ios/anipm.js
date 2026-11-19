@@ -107,5 +107,21 @@ export async function anipmCandidates(ctx, { waitMs = WAIT_ON_PLAY_MS } = {}) {
   ];
 }
 
+/**
+ * What ani.pm reported for this episode ({ sub, dub }), from any finished
+ * lookup of it (Sub or Dub), or null while unknown. The server sheet greys
+ * out Dub when ani.pm says the episode has no dub.
+ */
+export function anipmAvailability(ctx) {
+  const key = anipmKey(ctx);
+  if (!key) return null;
+  const base = key.replace(/:(sub|dub)$/, "");
+  for (const k of [`${base}:sub`, `${base}:dub`]) {
+    const a = cache.get(k)?.result?.availability;
+    if (a) return a;
+  }
+  return null;
+}
+
 /** Forget every lookup (tests). */
 export const clearAnipmCache = () => cache.clear();

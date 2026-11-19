@@ -7,6 +7,7 @@ import DesktopWindowTitlebar from "../components/WindowTitlebar";
 import Sidebar from "../components/Sidebar";
 import TabBar from "./ios/TabBar";
 import IOSActionSheet from "./ios/ActionSheet";
+import IOSServerSheet from "./ios/ServerSheet";
 import { longPressProps } from "./ios/longPress";
 
 // Desktop only (null on iOS).
@@ -32,6 +33,10 @@ export const Navigation = IS_IOS ? TabBar : Sidebar;
 // Secondary actions: right-click + context menu on desktop; long-press +
 // action sheet on iOS (ActionSheet is null on desktop).
 export const ActionSheet = IS_IOS ? IOSActionSheet : null;
+
+// Server picker: a dropdown on desktop (in the pages); a bottom sheet with
+// "Auto" + manual servers on iOS (ServerSheet is null on desktop).
+export const ServerSheet = IS_IOS ? IOSServerSheet : null;
 export const contextMenuProps = IS_IOS
   ? longPressProps
   : (open) => ({ onContextMenu: open });

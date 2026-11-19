@@ -6,7 +6,11 @@ import {
   publishPlayerContext,
   useAnimeServerGuard,
   useNativeServerSelect,
+  applyServerChoice,
 } from "../platform/ios/playerBridge";
+import { ServerSheet } from "../platform/ui";
+import { getServerChoice } from "../platform/ios/autoServer";
+import { serverChoiceLabel } from "../platform/ios/serverSheetLogic.js";
 import { setAutoPick } from "../platform/ios/autoServer";
 import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
 import { DetailSkeleton, SkeletonList } from "../platform/ios/Skeletons";
@@ -534,6 +538,8 @@ export default function TVPage({
   const playerAccentColor = playerSettings?.accentColor ?? null;
   const playerSubLang = playerSettings?.subtitleLang ?? null;
   const [showSourceMenu, setShowSourceMenu] = useState(false);
+  // iOS: server bottom sheet (Auto + manual servers + Sub/Dub for anime)
+  const [showServerSheet, setShowServerSheet] = useState(false);
   // Derived from playerSource, computed once per render instead of 5-6× inline
   const isAsync = useMemo(() => sourceIsAsync(playerSource), [playerSource]);
   const supportsProgress = useMemo(
@@ -1830,8 +1836,10 @@ export default function TVPage({
       setDubMode(mode);
       storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, mode);
     }
-    setPlayerSource(sourceId);
-    storage.set(STORAGE_KEYS.PLAYER_SOURCE, sourceId);
+    if (sourceId) {
+      setPlayerSource(sourceId);
+      storage.set(STORAGE_KEYS.PLAYER_SOURCE, sourceId);
+    }
     resetPlayerResolution();
   });
 
@@ -2680,6 +2688,10 @@ export default function TVPage({
                     ref={sourceRef}
                     className="player-overlay-btn"
                     onClick={() => {
+                      if (ServerSheet) {
+                        setShowServerSheet(true);
+                        return;
+                      }
                       const rect = sourceRef.current?.getBoundingClientRect();
                       if (rect)
                         setMenuPos({ top: rect.bottom + 6, left: rect.left });
@@ -2688,8 +2700,9 @@ export default function TVPage({
                     title="Change source"
                   >
                     <SourceIcon />
-                    {PLAYER_SOURCES.find((s) => s.id === playerSource)?.label ??
-                      "Source"}
+                    {ServerSheet
+                  ? serverChoiceLabel(getServerChoice(), PLAYER_SOURCES)
+                  : PLAYER_SOURCES.find((s) => s.id === playerSource)?.label ?? "Source"}
                   </button>
                   {/* Sub/Dub toggle: HiAnime, and anime-capable sources (Vidnest) on anime titles */}
                   {(isAsync ||
@@ -2754,6 +2767,29 @@ export default function TVPage({
                     </button>
                   )}
                 </div>
+                {ServerSheet && showServerSheet && (
+                  <ServerSheet
+                    title={title}
+                    type="tv"
+                    anime={!!isAnime}
+                    choice={getServerChoice()}
+                    dubMode={dubMode}
+                    onDubChange={(next) => {
+                      setDubMode(next);
+                      storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, next);
+                      resetPlayerResolution();
+                    }}
+                    onSelect={(choice) =>
+                      applyServerChoice(choice, {
+                        playerSource,
+                        setPlayerSource,
+                        reset: resetPlayerResolution,
+                        playing,
+                      })
+                    }
+                    onClose={() => setShowServerSheet(false)}
+                  />
+                )}
                 {showSourceMenu && menuPos && (
                   <div
                     className="source-dropdown source-dropdown--fixed"
