@@ -805,6 +805,14 @@ export default function App() {
     else navigate("home");
   }, [navigateBack, navigate]);
 
+  // Fire TV / Android TV: the remote's Search key opens search.
+  useEffect(() => {
+    if (!import.meta.env.VITE_ANDROID) return;
+    const open = () => setShowSearch(true);
+    window.addEventListener("sb-tv-open-search", open);
+    return () => window.removeEventListener("sb-tv-open-search", open);
+  }, []);
+
   // Android: the system Back button (MainActivity asks window.__sbAndroidBack).
   // Leaves full screen first, then goes back a screen; false = nothing left,
   // so Android puts the app in the background.

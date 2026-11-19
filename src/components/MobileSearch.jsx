@@ -76,6 +76,12 @@ export default function MobileSearch({ apiKey, onSelect, onClose, offline }) {
     return () => clearTimeout(timer.current);
   }, [query, run]);
   useEffect(() => () => { clearTimeout(timer.current); req.current.ctl?.abort(); }, []);
+  // TV remote voice search: the spoken words land here.
+  useEffect(() => {
+    const on = (e) => { const t = String(e.detail || "").trim(); if (t) { setQuery(t); run(t); } };
+    window.addEventListener("sb-voice-query", on);
+    return () => window.removeEventListener("sb-voice-query", on);
+  }, [run]);
 
   const remember = (t) => {
     const s = t.trim(); if (!s) return;
@@ -104,6 +110,7 @@ export default function MobileSearch({ apiKey, onSelect, onClose, offline }) {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && query.trim()) { remember(query); run(query); inputRef.current?.blur(); } if (e.key === "Escape") onClose(); }}
         />
+        {window.__SB_TV && <button className="nfs-clear" onClick={() => (window.SbTV?.startVoice ? window.SbTV.startVoice() : inputRef.current?.focus())} aria-label="Voice search">🎤</button>}
         {query && <button className="nfs-clear" onClick={() => { setQuery(""); inputRef.current?.focus(); }} aria-label="Clear"><X /></button>}
       </div>
       <button className="nfs-cancel" onClick={onClose}>Cancel</button>

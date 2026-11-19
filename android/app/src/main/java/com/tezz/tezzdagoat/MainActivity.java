@@ -1,6 +1,14 @@
 package com.tezz.tezzdagoat;
 
+import android.app.UiModeManager;
+import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.os.Bundle;
+import android.speech.RecognizerIntent;
+import android.view.KeyEvent;
+import android.webkit.JavascriptInterface;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.WebChromeClient;
@@ -44,6 +52,8 @@ public class MainActivity extends BridgeActivity {
             Pattern.compile("\\.(ts|m4s|aac|jpg|png|webp|gif|css|js|woff2?)(\\?|#|$)|vast|preroll|/ads?/|doubleclick|googlesyndication|thumb|sprite|preview",
                     Pattern.CASE_INSENSITIVE);
     private final Set<String> seen = Collections.synchronizedSet(new HashSet<>());
+    private static final int VOICE_REQ = 4711;
+    private boolean tv;
     private View fullView;
     private WebChromeClient.CustomViewCallback fullCallback;
 
@@ -51,9 +61,11 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(SbPlayerPlugin.class);
         super.onCreate(savedInstanceState);
-        requestHighRefreshRate();
         WebView wv = getBridge().getWebView();
         WebSettings ws = wv.getSettings();
+        tv = isTv();
+        if (!tv) setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
+        if (tv) setupTv(wv, ws); else requestHighRefreshRate();
         ws.setMediaPlaybackRequiresUserGesture(false);
         ws.setSupportMultipleWindows(false);
         ws.setJavaScriptCanOpenWindowsAutomatically(false);
@@ -104,6 +116,76 @@ public class MainActivity extends BridgeActivity {
         });
     }
 
+    // ── Fire TV / Android TV ───────────────────────────────────────────────
+    private boolean isTv() {
+        try {
+            PackageManager pm = getPackageManager();
+            UiModeManager um = (UiModeManager) getSystemService(UI_MODE_SERVICE);
+            return (um != null && um.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION)
+                    || pm.hasSystemFeature("amazon.hardware.fire_tv")
+                    || pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK);
+        } catch (Throwable t) { return false; }
+    }
+
+    /** Tells the web app it runs on a TV (remote navigation, TV layout) and gives it voice search. */
+    private void setupTv(WebView wv, WebSettings ws) {
+        ws.setUserAgentString(ws.getUserAgentString() + " SuperPlayerTV");
+        // Low-RAM sticks: no pre-drawing off screen, cache what's already loaded.
+        ws.setOffscreenPreRaster(false);
+        wv.setFocusable(true);
+        wv.setFocusableInTouchMode(true);
+        wv.requestFocus();
+        wv.addJavascriptInterface(new Object() {
+            @JavascriptInterface public boolean hasVoice() { return voiceAvailable(); }
+            @JavascriptInterface public void startVoice() { runOnUiThread(MainActivity.this::startVoice); }
+        }, "SbTV");
+        // The page was already loading before the UA changed: load it once more.
+        wv.post(wv::reload);
+    }
+
+    private boolean voiceAvailable() {
+        try {
+            return new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    .resolveActivity(getPackageManager()) != null;
+        } catch (Throwable t) { return false; }
+    }
+
+    private void startVoice() {
+        WebView wv = getBridge().getWebView();
+        if (!voiceAvailable()) {
+            // Fire TV: no speech screen for apps; the on-screen keyboard's mic
+            // dictates into the focused search box instead.
+            wv.evaluateJavascript("(function(){var i=document.querySelector('.nfs input');if(i){i.focus();i.click();}})()", null);
+            return;
+        }
+        Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH);
+        i.putExtra(RecognizerIntent.EXTRA_PROMPT, "Search movies, shows, anime");
+        try { startActivityForResult(i, VOICE_REQ); } catch (Throwable ignored) {}
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != VOICE_REQ || res != RESULT_OK || data == null) return;
+        java.util.ArrayList<String> r = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+        if (r == null || r.isEmpty()) return;
+        getBridge().getWebView().evaluateJavascript(
+                "window.__sbVoiceResult&&window.__sbVoiceResult(" + JSONObject.quote(r.get(0)) + ")", null);
+    }
+
+    // Remote's Search / voice key opens search (and voice input when the TV has it).
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        int k = e.getKeyCode();
+        if (tv && (k == KeyEvent.KEYCODE_SEARCH || k == KeyEvent.KEYCODE_VOICE_ASSIST)) {
+            if (e.getAction() == KeyEvent.ACTION_UP)
+                getBridge().getWebView().evaluateJavascript("window.__sbTvSearch&&window.__sbTvSearch()", null);
+            return true;
+        }
+        return super.dispatchKeyEvent(e);
+    }
+
     // While the app is hidden (or the built-in player is on top), the web view
     // stops drawing and running animations, and its renderer may be dropped
     // first when the phone needs memory.
@@ -131,7 +213,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
-        requestHighRefreshRate();
+        if (!tv) requestHighRefreshRate();
     }
 
     @Override

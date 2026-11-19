@@ -25,6 +25,7 @@ if (import.meta.env.VITE_WEB) {
   keepData().then((restored) => restored && location.reload());
   if (import.meta.env.VITE_ANDROID) {
     document.documentElement.classList.add("sb-android");
+    import("./platform/tv/tv.js").then((m) => m.installTV()).catch(() => {});
     // Light on GPU: no live blur layers (the costliest effect on Android).
     const st = document.createElement("style");
     // Smooth 90/120 Hz: no blur layers, scroll areas on their own GPU layer,

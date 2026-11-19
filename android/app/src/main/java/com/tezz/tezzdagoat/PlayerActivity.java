@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.GestureDetector;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.WindowManager;
 import android.widget.Toast;
@@ -223,6 +224,57 @@ public class PlayerActivity extends AppCompatActivity {
         view.setOnTouchListener((v, e) -> { gd.onTouchEvent(e); return true; });
 
         start(getIntent());
+    }
+
+    // TV remote (Fire TV / Android TV): with the controls hidden, Left/Right
+    // skip 10 s and OK pauses or plays; with them showing, the D-pad moves
+    // between the buttons. Play/Pause, Rewind and Fast-forward always work.
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        if (player == null || view == null) return super.dispatchKeyEvent(e);
+        int k = e.getKeyCode();
+        boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+        switch (k) {
+            case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+            case KeyEvent.KEYCODE_MEDIA_PLAY:
+            case KeyEvent.KEYCODE_MEDIA_PAUSE:
+                if (down && e.getRepeatCount() == 0) {
+                    if (k == KeyEvent.KEYCODE_MEDIA_PAUSE || (k == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && player.isPlaying())) player.pause();
+                    else player.play();
+                    view.showController();
+                }
+                return true;
+            case KeyEvent.KEYCODE_MEDIA_REWIND:
+            case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
+                if (down) {
+                    long d = k == KeyEvent.KEYCODE_MEDIA_REWIND ? -10_000 : 10_000;
+                    player.seekTo(Math.max(0, player.getCurrentPosition() + d));
+                    view.showController();
+                }
+                return true;
+        }
+        if (!view.isControllerFullyVisible()) {
+            if (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                if (down) {
+                    long d = k == KeyEvent.KEYCODE_DPAD_LEFT ? -10_000 : 10_000;
+                    player.seekTo(Math.max(0, player.getCurrentPosition() + d));
+                    Toast.makeText(this, d < 0 ? "⏪ 10s" : "10s ⏩", Toast.LENGTH_SHORT).show();
+                }
+                return true;
+            }
+            if (k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER || k == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+                if (down && e.getRepeatCount() == 0) {
+                    if (player.isPlaying()) player.pause(); else player.play();
+                    view.showController();
+                }
+                return true;
+            }
+            if (k == KeyEvent.KEYCODE_DPAD_UP || k == KeyEvent.KEYCODE_DPAD_DOWN || k == KeyEvent.KEYCODE_MENU) {
+                if (down) view.showController();
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(e);
     }
 
     @Override
