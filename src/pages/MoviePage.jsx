@@ -7,6 +7,7 @@ import {
   useNativeServerSelect,
 } from "../platform/ios/playerBridge";
 import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
+import { syncPlayerPrefs, postUpNext } from "../platform/ios/playerPrefs";
 import {
   clearResume,
   formatClock,
@@ -113,6 +114,13 @@ export default function MoviePage({
 }) {
   const [details, setDetails] = useState(null);
   const [playing, setPlaying] = useState(false);
+  // iOS native player: this profile's quality and subtitle settings; movies
+  // have no Up Next.
+  useEffect(() => {
+    if (!IS_IOS) return;
+    syncPlayerPrefs();
+    if (playing) postUpNext(null);
+  }, [playing]);
   const [showDownload, setShowDownload] = useState(false);
   const [trailerKey, setTrailerKey] = useState(null);
   const [showTrailer, setShowTrailer] = useState(false);

@@ -111,6 +111,10 @@ export const STORAGE_KEYS = {
   DISCORD_RPC_SHOW_BUTTON: "discordRpcShowButton",
   // Controller / gamepad navigation
   GAMEPAD_ENABLED: "gamepadEnabled",
+  // Native iOS player, per profile
+  PLAYER_QUALITY: "playerQuality",
+  PLAYER_SUBS_ON: "playerSubsOn",
+  PLAYER_SUB_SCALE: "playerSubScale",
 };
 
 // ── Profiles ──────────────────────────────────────────────────────────────────
@@ -135,6 +139,9 @@ export const PROFILE_SCOPED_KEYS = new Set([
   STORAGE_KEYS.AUTOPLAY_NEXT_DURATION,
   STORAGE_KEYS.AUTOPLAY_NEXT_LAYOUT,
   STORAGE_KEYS.WATCHED_THRESHOLD,
+  STORAGE_KEYS.PLAYER_QUALITY,
+  STORAGE_KEYS.PLAYER_SUBS_ON,
+  STORAGE_KEYS.PLAYER_SUB_SCALE,
   "searchHistory",
 ]);
 

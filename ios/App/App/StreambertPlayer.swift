@@ -417,6 +417,12 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     private lazy var sniffer = StreamSniffer(container: view)
     private var resolveToken: String?
     private var resolveList: [SniffCandidate] = []
+    /// Per-profile player settings from the page (quality, subtitles).
+    private var playerPrefs: [String: Any] = [:]
+    /// The "Up Next" episode the page offers for the playing episode.
+    private var upNextInfo: [String: Any]?
+    /// Resolve token in flight when the last player started closing.
+    private var closingToken: String?
 
     override func capacitorDidLoad() {
         super.capacitorDidLoad()
@@ -433,6 +439,8 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         ucc.add(WeakBridgeHandler(self), name: "sbMedia")
         ucc.add(WeakBridgeHandler(self), name: "sbContext")
         ucc.add(WeakBridgeHandler(self), name: "sbResolve")
+        ucc.add(WeakBridgeHandler(self), name: "sbPrefs")
+        ucc.add(WeakBridgeHandler(self), name: "sbUpNext")
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
     }
 
@@ -450,6 +458,12 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
             handleResolve(body)
         case "sbMedia":
             handleVisibleMedia(body, frame: message.frameInfo)
+        case "sbPrefs":
+            playerPrefs = body
+            playerVC?.applyPrefs(body)
+        case "sbUpNext":
+            upNextInfo = (body["clear"] as? Bool) == true ? nil : body
+            playerVC?.setUpNext(upNextInfo)
         default: break
         }
     }
@@ -517,9 +531,19 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         return fromCandidates.count > fromCtx.count ? fromCandidates : fromCtx
     }
 
-    private func presentOnTop(_ vc: UIViewController) {
+    private func presentOnTop(_ vc: UIViewController, attempt: Int = 0) {
         var top: UIViewController = self
         while let p = top.presentedViewController, !p.isBeingDismissed { top = p }
+        // A player still animating out: present once it is gone, or UIKit
+        // drops the new presentation and the player never shows.
+        let busy = top.presentedViewController?.isBeingDismissed == true || top.transitionCoordinator != nil
+        if busy, attempt < 20 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak vc] in
+                guard let self = self, let vc = vc, vc.presentingViewController == nil else { return }
+                self.presentOnTop(vc, attempt: attempt + 1)
+            }
+            return
+        }
         top.present(vc, animated: true)
     }
 
@@ -615,6 +639,14 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
             currentServer: currentServer)
         vc.keepOpenOnFail = sniffBased
         vc.subtitleInfo = ctx
+        vc.applyPrefs(playerPrefs)
+        vc.setUpNext(upNextInfo)
+        vc.onPref = { [weak self] key, value in
+            self?.sendToJS("__sbPlayerPref", ["key": key, "value": value])
+        }
+        vc.onUpNextPlay = { [weak self] in
+            self?.sendToJS("__sbUpNextPlay", [:])
+        }
         vc.onSelectServer = { [weak self] id in self?.selectServer(id) }
         vc.onFail = { [weak self] in
             guard let self = self else { return }
@@ -640,8 +672,17 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
             guard let key = progressKey else { return }
             self?.sendToJS("__sbNativeProgress", ["key": key, "time": time, "duration": duration, "inOutro": inOutro])
         }
+        vc.onWillClose = { [weak self, weak vc] in
+            guard let self = self else { return }
+            if self.playerVC === vc { self.playerVC = nil }
+            self.closingToken = self.resolveToken
+        }
         vc.onClose = { [weak self, weak vc] position in
             guard let self = self else { return }
+            // A newer player (or resolve) started while this one animated
+            // out: leave it alone, and don't tell the page this one closed.
+            if let newer = self.playerVC, newer !== vc { return }
+            if self.resolveToken != nil, self.resolveToken != self.closingToken { return }
             self.sniffer.cancel()
             if let t = self.failedToken { self.notifyJS(token: t, ok: false, server: nil) }
             self.failedToken = nil
@@ -855,6 +896,15 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     var onProgress: ((Double, Double, Bool) -> Void)?
     var onRetry: (() -> Void)?
     var onOpenSettings: (() -> Void)?
+    /// A per-profile setting changed in the player (saved by the page).
+    var onPref: ((String, Any) -> Void)?
+    /// Fired the moment closing starts (before the dismiss animation), so the
+    /// bridge stops routing streams to a player that is on its way out.
+    var onWillClose: (() -> Void)?
+    /// Set once closing starts; a closing player ignores taps, timers and a second close.
+    private(set) var isClosing = false
+    /// Up Next: the viewer chose to play the next episode (player is closed first).
+    var onUpNextPlay: (() -> Void)?
 
     private var url: URL?
     private var headers: [String: String] = [:]
@@ -897,7 +947,12 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private let failureSubbedButton = UIButton(type: .system)
     private var dubStallWork: DispatchWorkItem?
     private static let dubStallDelay: TimeInterval = 20
-    fileprivate var qualityMenuHasSize = false
+    /// Height of the video last shown on the Quality button (0 = unknown).
+    fileprivate var shownVideoHeight = 0
+    /// Heights the loaded stream's variants confirm (read from the item).
+    fileprivate var variantHeights: [Int] = []
+    fileprivate var variantPeaks: [Int: Double] = [:]
+    fileprivate var variantsKnown = false
     private let healthDot = HealthDotView()
     private let healthLabel = PaddedLabel()
     private let healthMonitor = ConnectionHealthMonitor()
@@ -940,9 +995,26 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     fileprivate let speedButton = UIButton(type: .system)
     fileprivate let qualityButton = UIButton(type: .system)
     fileprivate var speed: Float = 1.0
-    fileprivate var qualityCap: Double = 0  // 0 = auto (peak bit rate)
-    fileprivate var qualityMaxResolution: CGSize = .zero  // .zero = no cap
-    fileprivate let subLabel = UILabel()
+    /// Chosen quality cap as a video height (0 = Max, no cap).
+    fileprivate var qualityHeight: Int = 0
+    /// Subtitle sync offset in seconds (+ shows them later, - earlier).
+    fileprivate var subOffset: Double = 0
+    /// Subtitles on/off as last chosen on this profile (nil = not known yet).
+    fileprivate var subsOnPref: Bool?
+    // Up Next card
+    fileprivate var upNext: [String: Any]?
+    fileprivate let upNextCard = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
+    fileprivate let upNextImage = UIImageView()
+    fileprivate let upNextTitle = UILabel()
+    fileprivate let upNextCountdown = UILabel()
+    fileprivate let upNextPlayButton = UIButton(type: .system)
+    fileprivate let upNextCancelButton = UIButton(type: .system)
+    fileprivate var upNextTimer: Timer?
+    fileprivate var upNextRemaining = 0
+    fileprivate var upNextShown = false
+    fileprivate var upNextDismissed = false
+    fileprivate var upNextEndObserver: NSObjectProtocol?
+    fileprivate let subLabel = PaddedLabel()
     fileprivate var subAboveControls: NSLayoutConstraint?
     fileprivate var subTracks: [SubTrack] = []
     fileprivate var subCueCache: [String: [SubCue]] = [:]
@@ -994,6 +1066,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         setupHealthLight()
         setupGestures()
         setupSubtitles()
+        setupUpNext()
         loadSkipTimes()
         searchOnlineSubtitles()
         observeAppLifecycle()
@@ -1232,6 +1305,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         if let t = timeObserver { player?.removeTimeObserver(t) }
         statusObs?.invalidate()
         lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        if let o = upNextEndObserver { NotificationCenter.default.removeObserver(o) }
+        upNextTimer?.invalidate()
         healthMonitor.stop()
     }
 
@@ -1280,8 +1355,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         // Quality choice survives server switches and failover.
         // Max quality = no caps, and start on the best variant instead of
         // climbing up from the lowest one.
-        item.preferredPeakBitRate = qualityCap
-        item.preferredMaximumResolution = qualityMaxResolution
+        applyQuality(to: item)
+        loadVariants(for: item)
         if #available(iOS 14.0, *) { item.startsOnFirstEligibleVariant = false }
         item.preferredForwardBufferDuration = 0
         let p = player ?? AVPlayer()
@@ -1354,10 +1429,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private func tick(_ t: Double) {
         updateSubtitle(t)
         guard let item = player?.currentItem else { return }
-        if !qualityMenuHasSize, item.presentationSize.height > 0 {
-            qualityMenuHasSize = true
-            refreshQualityMenu()
-        }
+        updateShownResolution(item)
+        checkUpNext(t, item: item)
         if item.status == .readyToPlay, t > 1, pendingSeek == 0 { lastPosition = t }
         if Date().timeIntervalSince(lastReportAt) >= Self.progressReportInterval,
            player?.timeControlStatus == .playing {
@@ -1761,7 +1834,9 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     }
 
     @objc private func handleSingleTap() {
-        setControls(visible: controls.alpha < 0.5)
+        // Hidden (or mid-fade): always bring the controls back.
+        let shown = controls.alpha > 0.99 && controls.layer.presentation().map { $0.opacity > 0.99 } ?? true
+        setControls(visible: !shown)
     }
 
     @objc private func handleDoubleTap(_ g: UITapGestureRecognizer) {
@@ -1796,6 +1871,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
     private func setControls(visible: Bool) {
         hideWork?.cancel()
+        if isClosing { return }
         updateSubtitlePlacement(controlsVisible: visible)
         UIView.animate(withDuration: 0.25) {
             self.controls.alpha = visible ? 1 : 0
@@ -1810,7 +1886,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private func scheduleHide() {
         hideWork?.cancel()
         let w = DispatchWorkItem { [weak self] in
-            guard let self = self, !self.isScrubbing,
+            guard let self = self, !self.isClosing, !self.isScrubbing,
+                  self.view.window != nil,
                   self.player?.timeControlStatus == .playing else { return }
             self.setControls(visible: false)
         }
@@ -1824,17 +1901,36 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
     /// Viewer closed the player: save the position, stop, dismiss.
     func closePlayer(then after: (() -> Void)?) {
+        // One close only: a second tap (or Up Next + close) must not dismiss
+        // whatever sits under the player.
+        guard !isClosing else { return }
+        isClosing = true
+        hideWork?.cancel(); hideWork = nil
         reportProgress()
         player?.pause()
         generation += 1
         healthMonitor.stop()
         let cb = onClose
         let position = lastPosition
+        onWillClose?()
         resetSessionState()
-        dismiss(animated: true) {
+        dismissFromPresenter {
             cb?(position)
             after?()
         }
+    }
+
+    /// Dismiss the player itself (and anything it presented, like the AirPlay
+    /// picker), waiting out a presentation that is still animating in.
+    private func dismissFromPresenter(_ done: @escaping () -> Void) {
+        if isBeingPresented, let tc = transitionCoordinator {
+            tc.animate(alongsideTransition: nil) { [weak self] _ in
+                if let self = self { self.dismissFromPresenter(done) } else { done() }
+            }
+            return
+        }
+        guard let presenter = presentingViewController else { done(); return }
+        presenter.dismiss(animated: true, completion: done)
     }
 
     /// Closing ends this session: timers, observers, hints and the item go,
@@ -1854,6 +1950,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         activeSkip = nil
         skipButton.isHidden = true
         spinner.stopAnimating()
+        hideUpNext()
     }
 
     @objc private func playTapped() {
@@ -2141,6 +2238,11 @@ extension StreambertPlayerViewController {
         subLabel.textAlignment = .center
         subLabel.isUserInteractionEnabled = false
         subLabel.isHidden = true
+        subLabel.insets = UIEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
+        subLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        subLabel.layer.cornerRadius = 6
+        subLabel.layer.masksToBounds = true
+        subLabel.lineBreakMode = .byWordWrapping
         // Above the video, below the control bars (never covered by them:
         // see the constraints below).
         view.insertSubview(subLabel, aboveSubview: videoView)
@@ -2151,8 +2253,9 @@ extension StreambertPlayerViewController {
         subAboveControls = aboveBar
         NSLayoutConstraint.activate([
             subLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            subLabel.leadingAnchor.constraint(greaterThanOrEqualTo: safe.leadingAnchor, constant: 24),
-            subLabel.trailingAnchor.constraint(lessThanOrEqualTo: safe.trailingAnchor, constant: -24),
+            subLabel.leadingAnchor.constraint(greaterThanOrEqualTo: safe.leadingAnchor, constant: 16),
+            subLabel.trailingAnchor.constraint(lessThanOrEqualTo: safe.trailingAnchor, constant: -16),
+            subLabel.topAnchor.constraint(greaterThanOrEqualTo: safe.topAnchor, constant: 8),
             subLabel.bottomAnchor.constraint(lessThanOrEqualTo: safe.bottomAnchor, constant: -Self.subtitleInset),
             onVideo,
             aboveBar,
@@ -2177,7 +2280,7 @@ extension StreambertPlayerViewController {
         var out: [UIMenuElement] = []
         var subs: [UIMenuElement] = [
             UIAction(title: "Off", state: activeSubId == nil ? .on : .off) { [weak self] _ in
-                self?.selectSubtitle(nil)
+                self?.selectSubtitle(nil, byUser: true)
             },
         ]
         if let group = embeddedLegibleGroup() {
@@ -2185,13 +2288,13 @@ extension StreambertPlayerViewController {
                 let id = "emb:\(i)"
                 subs.append(UIAction(title: opt.displayName + " (stream)",
                                      state: activeSubId == id ? .on : .off) { [weak self] _ in
-                    self?.selectSubtitle(id)
+                    self?.selectSubtitle(id, byUser: true)
                 })
             }
         }
         for t in subTracks {
             subs.append(UIAction(title: t.label, state: activeSubId == t.id ? .on : .off) { [weak self] _ in
-                self?.selectSubtitle(t.id)
+                self?.selectSubtitle(t.id, byUser: true)
             })
         }
         if subSearching {
@@ -2218,9 +2321,23 @@ extension StreambertPlayerViewController {
                 guard let self = self else { return }
                 self.subScale = s.1
                 UserDefaults.standard.set(Double(s.1), forKey: "sb.subScale")
+                self.onPref?("subScale", Double(s.1))
                 self.updateSubtitle(self.player?.currentTime().seconds ?? 0, force: true)
             }
         }))
+
+        // Sync offset (our own rendering only; stream-embedded tracks are timed by the stream)
+        if let id = activeSubId, !id.hasPrefix("emb:") {
+            let steps: [(String, Double)] = [("Earlier −0.5 s", -0.5), ("Earlier −0.1 s", -0.1),
+                                             ("Later +0.1 s", 0.1), ("Later +0.5 s", 0.5)]
+            var timing: [UIMenuElement] = steps.map { st in
+                UIAction(title: st.0) { [weak self] _ in self?.nudgeSubtitles(by: st.1) }
+            }
+            timing.append(UIAction(title: "Reset", attributes: subOffset == 0 ? .disabled : []) { [weak self] _ in
+                self?.nudgeSubtitles(by: -(self?.subOffset ?? 0))
+            })
+            out.append(UIMenu(title: "Subtitle timing: " + Self.offsetText(subOffset), children: timing))
+        }
         return out
     }
 
@@ -2232,29 +2349,34 @@ extension StreambertPlayerViewController {
 
     // MARK: Selection
 
-    fileprivate func selectSubtitle(_ id: String?) {
+    fileprivate func selectSubtitle(_ id: String?, byUser: Bool = false) {
         activeSubId = id
         activeCues = []
         lastSubText = nil
         subLabel.isHidden = true
         UserDefaults.standard.set(id != nil, forKey: "sb.subsOn")
         pill(ccButton, symbol: id == nil ? "captions.bubble" : "captions.bubble.fill", title: "Subtitles")
-        guard let item = player?.currentItem else { return }
         let legible = embeddedLegibleGroup()
+        if byUser { rememberSubtitleChoice(id, legible: legible) }
 
         // Embedded HLS track: AVPlayerLayer draws it.
         if let id = id, id.hasPrefix("emb:"), let g = legible, let i = Int(id.dropFirst(4)), i < g.options.count {
-            item.select(g.options[i], in: g)
+            player?.currentItem?.select(g.options[i], in: g)
             return
         }
-        if let g = legible { item.select(nil, in: g) }
+        if let g = legible { player?.currentItem?.select(nil, in: g) }
+        // External files load even before the item is ready.
         guard let id = id, let track = subTracks.first(where: { $0.id == id }) else { return }
-        if let cached = subCueCache[id] { activeCues = cached; return }
+        if let cached = subCueCache[id] {
+            activeCues = cached
+            updateSubtitle(player?.currentTime().seconds ?? 0, force: true)
+            return
+        }
         var req = URLRequest(url: track.url, timeoutInterval: 15)
         track.headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
         URLSession.shared.dataTask(with: req) { [weak self] data, response, error in
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            let cues = data.map { SubParser.parse(SubParser.decode($0)) } ?? []
+            let cues = (data.map { SubParser.parse(SubParser.decode($0)) } ?? []).sorted { $0.start < $1.start }
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 if cues.isEmpty {
@@ -2263,14 +2385,17 @@ extension StreambertPlayerViewController {
                     return
                 }
                 self.subCueCache[id] = cues
-                if self.activeSubId == id { self.activeCues = cues }
+                if self.activeSubId == id {
+                    self.activeCues = cues
+                    self.updateSubtitle(self.player?.currentTime().seconds ?? 0, force: true)
+                }
             }
         }.resume()
     }
 
     /// Turn subtitles back on automatically if the viewer had them on last time.
     func autoSelectIfWanted() {
-        guard activeSubId == nil, UserDefaults.standard.bool(forKey: "sb.subsOn") else { return }
+        guard activeSubId == nil, subsOnPref ?? UserDefaults.standard.bool(forKey: "sb.subsOn") else { return }
         let lang = preferredLang
         if let g = embeddedLegibleGroup(),
            let i = g.options.firstIndex(where: { ($0.extendedLanguageTag ?? "").lowercased().hasPrefix(lang) }) {
@@ -2383,22 +2508,28 @@ extension StreambertPlayerViewController {
             if !subLabel.isHidden { subLabel.isHidden = true }
             return
         }
-        let text = activeCues.last(where: { $0.start <= t && t < $0.end })?.text
+        // Offset: + shows a cue later, so look it up that much earlier.
+        let st = t - subOffset
+        let text = activeCues.last(where: { $0.start <= st && st < $0.end })?.text
         if !force, text == lastSubText { return }
         lastSubText = text
-        guard let text = text else { subLabel.isHidden = true; return }
+        guard let text = text, !text.isEmpty else { subLabel.isHidden = true; return }
         let landscape = view.bounds.width > view.bounds.height
-        let base: CGFloat = landscape ? 22 : 17
+        // Scales with the screen: ~4.5% of the short side, readable on every phone.
+        let short = min(view.bounds.width, view.bounds.height)
+        let base: CGFloat = landscape ? max(20, short * 0.055) : max(15, short * 0.042)
         let shadow = NSShadow()
         shadow.shadowColor = UIColor.black
-        shadow.shadowBlurRadius = 4
+        shadow.shadowBlurRadius = 2
         shadow.shadowOffset = .zero
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        para.lineBreakMode = .byWordWrapping
         subLabel.attributedText = NSAttributedString(string: text, attributes: [
             .font: UIFont.systemFont(ofSize: base * subScale, weight: .semibold),
             .foregroundColor: UIColor.white,
-            .strokeColor: UIColor.black,
-            .strokeWidth: -2.5,
             .shadow: shadow,
+            .paragraphStyle: para,
         ])
         subLabel.isHidden = false
     }
@@ -2513,40 +2644,345 @@ extension StreambertPlayerViewController {
         qualityButton.menu = UIMenu(title: "Quality", children: qualityMenuItems())
     }
 
-    fileprivate func qualityMenuItems() -> [UIMenuElement] {
-        // Caps the bit rate the HLS player may pick; Auto lets it adapt.
-        // This screen's own resolution (iPhone 16e: 1170p), long side first.
-        let nb = UIScreen.main.nativeBounds.size
-        let native = CGSize(width: max(nb.width, nb.height), height: min(nb.width, nb.height))
-        let options: [(String, Double, CGSize)] = [
-            ("Max (best the stream has)", 0, .zero),
-            ("\(Int(native.height))p", 30_000_000, native),
-            ("4K (2160p)", 40_000_000, CGSize(width: 3840, height: 2160)),
-            ("1440p", 20_000_000, CGSize(width: 2560, height: 1440)),
-            ("1080p", 8_000_000, CGSize(width: 1920, height: 1080)),
-            ("720p", 4_000_000, CGSize(width: 1280, height: 720)),
-            ("480p", 1_500_000, CGSize(width: 854, height: 480)),
-            ("Data saver (360p)", 800_000, CGSize(width: 640, height: 360)),
-        ]
-        let choices: [UIMenuElement] = options.map { o in
-            UIAction(title: o.0, state: qualityCap == o.1 ? .on : .off) { [weak self] _ in
-                guard let self = self, let item = self.player?.currentItem else { return }
-                self.qualityCap = o.1
-                self.qualityMaxResolution = o.2
-                item.preferredPeakBitRate = o.1
-                item.preferredMaximumResolution = o.2
-                let sym = UIImage(systemName: "sparkles.tv") == nil ? "tv" : "sparkles.tv"
-                self.pill(self.qualityButton, symbol: sym, title: o.1 == 0 ? "Max" : o.0.components(separatedBy: " ").first ?? o.0)
-                self.refreshQualityMenu()
+    /// Height cap -> peak bit rate. Max (0) = no caps.
+    static let qualityBitRates: [Int: Double] = [
+        2160: 40_000_000, 1440: 20_000_000, 1080: 8_000_000,
+        720: 4_000_000, 480: 1_500_000, 360: 800_000,
+    ]
+    static let qualityHeights = [2160, 1440, 1080, 720, 480, 360]
+
+    /// Standard height a frame size belongs to (1920×800 counts as 1080p).
+    static func qualityBucket(_ size: CGSize) -> Int {
+        let h = max(size.height, size.width * 9 / 16)
+        return qualityHeights.first(where: { h >= CGFloat($0) * 0.9 }) ?? 360
+    }
+
+    static func qualityName(_ h: Int) -> String { h == 2160 ? "4K (2160p)" : "\(h)p" }
+
+    /// Apply the chosen cap to an item (the playing one, or a new one).
+    func applyQuality(to item: AVPlayerItem?) {
+        guard let item = item else { return }
+        let h = qualityHeight
+        var rate = h == 0 ? 0 : (Self.qualityBitRates[h] ?? 0)
+        // Never cap below the stream's own top bit rate for that height.
+        if h > 0, let peak = variantPeaks[h], peak > rate { rate = peak * 1.1 }
+        item.preferredPeakBitRate = rate
+        let size = h == 0 ? CGSize.zero : CGSize(width: ceil(CGFloat(h) * 16 / 9) + 2, height: CGFloat(h))
+        if #available(iOS 15.0, *) {
+            item.preferredMaximumResolution = size
+            item.preferredMaximumResolutionForExpensiveNetworks = size
+        } else {
+            item.preferredMaximumResolution = size
+        }
+    }
+
+    /// Picked in the menu: cap the playing item now (same item, same source),
+    /// save it for this profile, and nudge the buffer so the switch shows soon.
+    fileprivate func chooseQuality(_ h: Int) {
+        qualityHeight = h
+        onPref?("quality", h)
+        guard let p = player, let item = p.currentItem else { refreshQualityButton(); return }
+        applyQuality(to: item)
+        if item.status == .readyToPlay {
+            // A seek to "now" drops the buffered segments, so the next ones
+            // come from the newly allowed variant instead of in a minute.
+            let now = p.currentTime()
+            if now.seconds.isFinite, now.seconds > 1 {
+                p.seek(to: now, toleranceBefore: .zero, toleranceAfter: .zero)
             }
         }
+        showToast(h == 0 ? "Quality: Max" : "Quality: up to \(Self.qualityName(h))")
+        refreshQualityButton()
+    }
+
+    /// Read the item's real renditions (read-only) once it is loaded.
+    func loadVariants(for item: AVPlayerItem) {
+        variantHeights = []
+        variantPeaks = [:]
+        variantsKnown = false
+        guard let asset = item.asset as? AVURLAsset else { refreshQualityButton(); return }
+        if #available(iOS 15.0, *) {
+            asset.loadValuesAsynchronously(forKeys: ["variants"]) { [weak self, weak item] in
+                var heights = Set<Int>()
+                var peaks: [Int: Double] = [:]
+                var ok = false
+                if asset.statusOfValue(forKey: "variants", error: nil) == .loaded {
+                    for v in asset.variants {
+                        guard let size = v.videoAttributes?.presentationSize, size.height > 0 else { continue }
+                        let b = Self.qualityBucket(size)
+                        heights.insert(b)
+                        if let r = v.peakBitRate ?? v.averageBitRate { peaks[b] = max(peaks[b] ?? 0, r) }
+                    }
+                    ok = !heights.isEmpty
+                }
+                DispatchQueue.main.async {
+                    guard let self = self, let item = item, self.player?.currentItem === item else { return }
+                    self.variantHeights = heights.sorted(by: >)
+                    self.variantPeaks = peaks
+                    self.variantsKnown = ok
+                    print("[SuperPlayer] variants: \(self.variantHeights)")
+                    self.applyQuality(to: item)
+                    self.refreshQualityButton()
+                }
+            }
+        } else {
+            refreshQualityButton()
+        }
+    }
+
+    /// Button title: the actual resolution playing now, plus the cap.
+    func refreshQualityButton() {
+        let sym = UIImage(systemName: "sparkles.tv") == nil ? "tv" : "sparkles.tv"
+        let actual = shownVideoHeight > 0 ? "\(shownVideoHeight)p" : nil
+        let cap = qualityHeight == 0 ? "Max" : "≤\(qualityHeight)p"
+        pill(qualityButton, symbol: sym, title: actual.map { "\($0) · \(cap)" } ?? (qualityHeight == 0 ? "Quality" : cap))
+        refreshQualityMenu()
+    }
+
+    /// Follow the real playing size (presentationSize, else the access log).
+    func updateShownResolution(_ item: AVPlayerItem) {
+        var h = 0
+        let size = item.presentationSize
+        if size.height > 0 { h = Int(size.height.rounded()) }
+        if h != shownVideoHeight {
+            shownVideoHeight = h
+            refreshQualityButton()
+        }
+    }
+
+    fileprivate func qualityMenuItems() -> [UIMenuElement] {
         var items: [UIMenuElement] = []
-        if let size = player?.currentItem?.presentationSize, size.height > 0 {
+        let item = player?.currentItem
+        if let size = item?.presentationSize, size.height > 0 {
+            var line = "Now playing: \(Int(size.width))×\(Int(size.height))"
+            if let kbps = item?.accessLog()?.events.last?.indicatedBitrate, kbps > 0 {
+                line += String(format: " · %.1f Mbps", kbps / 1_000_000)
+            }
             items.append(UIMenu(title: "", options: .displayInline, children: [
-                UIAction(title: "Now playing: \(Int(size.width))×\(Int(size.height))", attributes: .disabled) { _ in },
+                UIAction(title: line, attributes: .disabled) { _ in },
             ]))
+        }
+        // Only heights a variant of this stream confirms (plus Max / Auto).
+        var choices: [UIMenuElement] = [
+            UIAction(title: "Auto (best the stream has)", state: qualityHeight == 0 ? .on : .off) { [weak self] _ in
+                self?.chooseQuality(0)
+            },
+        ]
+        if variantsKnown, variantHeights.count > 1 {
+            for h in variantHeights {
+                choices.append(UIAction(title: Self.qualityName(h), state: qualityHeight == h ? .on : .off) { [weak self] _ in
+                    self?.chooseQuality(h)
+                })
+            }
+        } else {
+            let note = shownVideoHeight > 0 ? "Only \(shownVideoHeight)p on this stream" : "One quality on this stream"
+            choices.append(UIAction(title: note, attributes: .disabled) { _ in })
         }
         items.append(UIMenu(title: "", options: .displayInline, children: choices))
         return items
+    }
+}
+
+// MARK: - Per-profile settings and Up Next
+
+extension StreambertPlayerViewController {
+
+    /// Settings saved for the active profile, sent by the page.
+    func applyPrefs(_ prefs: [String: Any]) {
+        if let q = (prefs["quality"] as? NSNumber)?.intValue { qualityHeight = q }
+        if let on = prefs["subsOn"] as? Bool { subsOnPref = on }
+        if let sc = (prefs["subScale"] as? NSNumber)?.doubleValue, sc > 0 { subScale = CGFloat(sc) }
+        if let lang = prefs["subLang"] as? String, !lang.isEmpty { subtitleInfo["subLang"] = lang }
+        guard isViewLoaded else { return }
+        applyQuality(to: player?.currentItem)
+        refreshQualityButton()
+    }
+
+    /// Remember the viewer's subtitle pick (on/off and language) for this profile.
+    fileprivate func rememberSubtitleChoice(_ id: String?, legible: AVMediaSelectionGroup?) {
+        subsOnPref = id != nil
+        onPref?("subsOn", id != nil)
+        guard let id = id else { return }
+        var lang = ""
+        if id.hasPrefix("emb:"), let g = legible, let i = Int(id.dropFirst(4)), i < g.options.count {
+            lang = (g.options[i].extendedLanguageTag ?? g.options[i].locale?.languageCode ?? "").lowercased()
+        } else if let t = subTracks.first(where: { $0.id == id }) {
+            lang = t.lang
+        }
+        lang = lang.split(separator: "-").first.map(String.init) ?? lang
+        guard !lang.isEmpty else { return }
+        subtitleInfo["subLang"] = lang
+        onPref?("subLang", lang)
+    }
+
+    static func offsetText(_ o: Double) -> String {
+        abs(o) < 0.05 ? "0.0 s" : String(format: "%+.1f s", o)
+    }
+
+    fileprivate func nudgeSubtitles(by delta: Double) {
+        subOffset = (subOffset + delta * 10).rounded() / 10
+        updateSubtitle(player?.currentTime().seconds ?? 0, force: true)
+        showToast("Subtitle timing " + Self.offsetText(subOffset))
+    }
+
+    // MARK: Up Next
+
+    func setupUpNext() {
+        let card = upNextCard
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.layer.cornerRadius = 14
+        card.clipsToBounds = true
+        card.isHidden = true
+        view.addSubview(card)
+
+        upNextImage.contentMode = .scaleAspectFill
+        upNextImage.clipsToBounds = true
+        upNextImage.layer.cornerRadius = 8
+        upNextImage.backgroundColor = UIColor(white: 0.15, alpha: 1)
+
+        upNextCountdown.font = .systemFont(ofSize: 12, weight: .semibold)
+        upNextCountdown.textColor = UIColor(white: 0.8, alpha: 1)
+        upNextTitle.font = .systemFont(ofSize: 15, weight: .bold)
+        upNextTitle.textColor = .white
+        upNextTitle.numberOfLines = 2
+
+        var play = UIButton.Configuration.filled()
+        play.baseBackgroundColor = .white
+        play.baseForegroundColor = .black
+        play.cornerStyle = .capsule
+        play.image = UIImage(systemName: "play.fill")
+        play.imagePadding = 6
+        play.title = "Play Now"
+        upNextPlayButton.configuration = play
+        upNextPlayButton.addTarget(self, action: #selector(upNextPlayTapped), for: .touchUpInside)
+
+        var cancel = UIButton.Configuration.gray()
+        cancel.baseForegroundColor = .white
+        cancel.cornerStyle = .capsule
+        cancel.title = "Cancel"
+        upNextCancelButton.configuration = cancel
+        upNextCancelButton.addTarget(self, action: #selector(upNextCancelTapped), for: .touchUpInside)
+
+        let text = UIStackView(arrangedSubviews: [upNextCountdown, upNextTitle])
+        text.axis = .vertical
+        text.spacing = 2
+        let top = UIStackView(arrangedSubviews: [upNextImage, text])
+        top.spacing = 10
+        top.alignment = .center
+        let buttons = UIStackView(arrangedSubviews: [upNextCancelButton, upNextPlayButton])
+        buttons.spacing = 8
+        buttons.distribution = .fillEqually
+        let column = UIStackView(arrangedSubviews: [top, buttons])
+        column.axis = .vertical
+        column.spacing = 10
+        column.translatesAutoresizingMaskIntoConstraints = false
+        card.contentView.addSubview(column)
+
+        let safe = view.safeAreaLayoutGuide
+        let width = card.widthAnchor.constraint(equalToConstant: 340)
+        width.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            upNextImage.widthAnchor.constraint(equalToConstant: 112),
+            upNextImage.heightAnchor.constraint(equalToConstant: 63),
+            column.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: 12),
+            column.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -12),
+            column.topAnchor.constraint(equalTo: card.contentView.topAnchor, constant: 12),
+            column.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -12),
+            width,
+            card.leadingAnchor.constraint(greaterThanOrEqualTo: safe.leadingAnchor, constant: 12),
+            card.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -16),
+            card.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -96),
+        ])
+
+        upNextEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] note in
+            guard let self = self, let item = note.object as? AVPlayerItem,
+                  item === self.player?.currentItem else { return }
+            self.showUpNextIfReady(force: true)
+        }
+    }
+
+    /// Next episode from the page (nil = none: finale, autoplay off, Kids).
+    func setUpNext(_ info: [String: Any]?) {
+        // Ignore an offer meant for another episode.
+        if let info = info, let key = info["progressKey"] as? String,
+           let mine = subtitleInfo["progressKey"] as? String, key != mine { return }
+        upNext = info
+        guard isViewLoaded else { return }
+        if info == nil { hideUpNext() } else if upNextShown { fillUpNextCard() }
+    }
+
+    func checkUpNext(_ t: Double, item: AVPlayerItem) {
+        guard upNext != nil, !upNextShown, !upNextDismissed, item.status == .readyToPlay else { return }
+        let d = item.duration.seconds
+        guard d.isFinite, d > 60 else { return }
+        let inOutro = skipIntervals.contains { $0.kind == "ed" && t >= $0.start && t < $0.end }
+        if inOutro || d - t <= 1.5 { showUpNextIfReady(force: false) }
+    }
+
+    func showUpNextIfReady(force: Bool) {
+        guard upNext != nil, !upNextShown, !upNextDismissed, isViewLoaded else { return }
+        upNextShown = true
+        fillUpNextCard()
+        let secs = (upNext?["countdown"] as? NSNumber)?.intValue ?? 10
+        upNextRemaining = max(0, secs)
+        updateUpNextCountdown()
+        upNextCard.alpha = 0
+        upNextCard.isHidden = false
+        view.bringSubviewToFront(upNextCard)
+        UIView.animate(withDuration: 0.25) { self.upNextCard.alpha = 1 }
+        upNextTimer?.invalidate()
+        guard upNextRemaining > 0 else { return } // 0 = buttons only, no auto play
+        upNextTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            // Paused by the viewer: hold the countdown.
+            if self.userPaused, self.player?.currentItem?.status == .readyToPlay,
+               self.player?.timeControlStatus == .paused { return }
+            self.upNextRemaining -= 1
+            self.updateUpNextCountdown()
+            if self.upNextRemaining <= 0 { self.playUpNext() }
+        }
+    }
+
+    fileprivate func fillUpNextCard() {
+        guard let info = upNext else { return }
+        let sub = (info["subtitle"] as? String) ?? ""
+        let title = (info["title"] as? String) ?? "Next episode"
+        upNextTitle.text = sub.isEmpty ? title : "\(sub) · \(title)"
+        upNextImage.image = nil
+        if let s = info["thumb"] as? String, let u = URL(string: s) {
+            URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
+                guard let data = data, let img = UIImage(data: data) else { return }
+                DispatchQueue.main.async { self?.upNextImage.image = img }
+            }.resume()
+        }
+    }
+
+    fileprivate func updateUpNextCountdown() {
+        upNextCountdown.text = upNextRemaining > 0 ? "UP NEXT IN \(upNextRemaining)" : "UP NEXT"
+    }
+
+    func hideUpNext() {
+        upNextTimer?.invalidate()
+        upNextTimer = nil
+        upNextShown = false
+        upNextCard.isHidden = true
+    }
+
+    @objc fileprivate func upNextCancelTapped() {
+        upNextDismissed = true
+        hideUpNext()
+    }
+
+    @objc fileprivate func upNextPlayTapped() { playUpNext() }
+
+    /// Close this player, then let the page open the next episode the same
+    /// way a tap on it does.
+    fileprivate func playUpNext() {
+        guard upNext != nil else { return }
+        let cb = onUpNextPlay
+        upNext = nil
+        hideUpNext()
+        closePlayer { cb?() }
     }
 }
