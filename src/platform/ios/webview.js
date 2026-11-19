@@ -309,11 +309,13 @@ function upgrade(wv) {
       showCard(t >= MIN_RESUME_SECONDS ? `Resume from ${formatClock(t)}` : "Ready to play", true);
       cardBtn.textContent = t >= MIN_RESUME_SECONDS ? "▶  Resume" : "▶  Play";
     };
-    // Give the page a tick to publish its context (title, ids, Sub/Dub).
+    // Keychain read runs while the page gets a tick to publish its context
+    // (title, ids, Sub/Dub).
+    const subCtxReady = subtitleContext();
     setTimeout(async () => {
       if (nativeToken !== token) return;
       postContext(url);
-      const subCtx = await subtitleContext();
+      const subCtx = await subCtxReady;
       if (nativeToken !== token) return;
       const ctx = currentCtx();
       const startAt = getResumeSeconds(ctx.progressKey);

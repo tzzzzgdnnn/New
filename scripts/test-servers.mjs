@@ -89,3 +89,64 @@ test("Sub candidates: TMDB-route servers keep plain ids matching the menu", () =
   const menu = new Set(nativeServerList(true).map((s) => s.id));
   for (const c of downloadCandidates()) assert.ok(menu.has(c.id), `${c.id} not in the menu`);
 });
+
+const { settleEach } = await import("../src/utils/servers/concurrent.js");
+const delay = (ms, v, signal) =>
+  new Promise((res, rej) => {
+    const t = setTimeout(() => res(v), ms);
+    signal?.addEventListener("abort", () => (clearTimeout(t), rej(new Error("aborted"))));
+  });
+
+test("settleEach reports each result as it settles, fastest first", async () => {
+  const seen = [];
+  const out = await settleEach([30, 5, 15], (ms, signal) => delay(ms, ms, signal), {
+    onSettled: (r) => seen.push(r.item),
+  });
+  assert.deepEqual(seen, [5, 15, 30]);
+  assert.deepEqual(out.map((r) => r.value), [5, 15, 30]);
+});
+
+test("settleEach never waits on a slow job past its timeout, and aborts it", async () => {
+  let abortedSlow = false;
+  const started = Date.now();
+  const out = await settleEach(
+    ["fast", "slow"],
+    (id, signal) => {
+      signal.addEventListener("abort", () => id === "slow" && (abortedSlow = true));
+      return delay(id === "fast" ? 5 : 10_000, id, signal);
+    },
+    { timeoutMs: 40 },
+  );
+  assert.ok(Date.now() - started < 1000);
+  assert.deepEqual(out.map((r) => [r.item, r.ok]), [["fast", true], ["slow", false]]);
+  assert.ok(abortedSlow);
+});
+
+test("settleEach: a thrown job fails alone; a parent abort cancels the rest", async () => {
+  const parent = new AbortController();
+  const done = settleEach(
+    ["boom", "wait"],
+    (id, signal) => {
+      if (id === "boom") throw new Error("boom");
+      return delay(10_000, id, signal);
+    },
+    { signal: parent.signal, timeoutMs: 10_000 },
+  );
+  setTimeout(() => parent.abort(), 10);
+  const out = await done;
+  assert.ok(out.every((r) => !r.ok));
+  assert.equal(out.find((r) => r.item === "boom").error.message, "boom");
+});
+
+test("boot applies the cached server list without waiting on the network", async () => {
+  const { loadServers } = await import("../src/platform/ios/servers.js");
+  let release;
+  globalThis.fetch = () => new Promise((r) => (release = r));
+  localStorage.setItem("streambert_serversCache", JSON.stringify({ ...bundled, servers: [] }));
+  const refresh = loadServers();
+  assert.ok(!sourcesForContent(false).some((s) => s.id === "hexa"), "cached copy applied synchronously");
+  release({ ok: true, json: async () => bundled });
+  await refresh;
+  assert.ok(sourcesForContent(false).some((s) => s.id === "hexa"), "fresh copy applied after the refresh");
+  localStorage.removeItem("streambert_serversCache");
+});

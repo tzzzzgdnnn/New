@@ -89,7 +89,8 @@ export async function loadServers() {
     if (valid(cached)) cfg = cached;
   } catch {}
   applyServers(cfg);
-  // Refresh with a short timeout; applied right away if it beats first render.
+  // Refresh in the background with a short timeout: boot never waits on the
+  // network, and a fresh copy applies to every play that starts after it.
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
