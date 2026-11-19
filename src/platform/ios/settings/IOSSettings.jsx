@@ -17,7 +17,7 @@ import { SUBTITLE_LANGUAGES } from "../../../utils/subtitles";
 import { RATING_COUNTRIES } from "../../../utils/ageRating";
 import { DEFAULT_INVIDIOUS_BASE } from "../../../components/TrailerModal";
 import { HOME_ROWS, IOS_HIDDEN_HOME_ROWS, loadHomeLayout, saveHomeLayout } from "../../../utils/homeLayout";
-import { collectBackupData, restoreBackupData } from "../../../utils/backup";
+import { collectBackupData, restoreBackupData, collectEverything, restoreEverything } from "../../../utils/backup";
 import { AGE_LIMIT_OPTIONS, TMDB_LANGUAGES } from "../../../utils/settingsOptions";
 import { version as APP_VERSION } from "../../../../package.json";
 import { getLoadTimes } from "../playerPrefs";
@@ -658,7 +658,7 @@ function BackupPage() {
   const [status, setStatus] = useState(null);
   const fileRef = useRef(null);
   const exportBackup = async () => {
-    const json = JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), data: collectBackupData() }, null, 2);
+    const json = JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), data: collectBackupData(), all: collectEverything() });
     const name = `super-player-backup-${new Date().toISOString().slice(0, 10)}.json`;
     try {
       const file = typeof File !== "undefined" ? new File([json], name, { type: "application/json" }) : null;
@@ -686,7 +686,11 @@ function BackupPage() {
       try {
         const backup = JSON.parse(ev.target.result);
         if (!backup?.data) throw new Error("This file is not a Super Player backup.");
-        restoreBackupData(backup.data);
+        if (backup.all) {
+          // Full file: profiles, PINs and every profile's data. Reload to apply.
+          restoreEverything(backup.all);
+          setTimeout(() => location.reload(), 600);
+        } else restoreBackupData(backup.data);
         setStatus({ ok: true, msg: "Backup restored. Reloading…" });
         setTimeout(() => window.location.reload(), 1200);
       } catch (err) {
@@ -698,16 +702,16 @@ function BackupPage() {
   };
   return (
     <Group
-      header="This Profile"
+      header="All Profiles"
       footer={
         status ? (
           <span className={status.ok ? "sps-ok" : "sps-err"}>{status.msg}</span>
         ) : (
-          "A backup holds your library, history, progress and preferences. Keys and tokens are not included."
+          "One small file with every profile, its PIN, library, history, progress and settings. Save it to Files, and restore it on any phone or browser."
         )
       }
     >
-      <Row label="Export Backup" onClick={exportBackup} chevron={false} />
+      <Row label="Save Backup to Files" onClick={exportBackup} chevron={false} />
       <Row label="Restore from File" onClick={() => fileRef.current?.click()} chevron={false} />
       <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={importBackup} />
     </Group>

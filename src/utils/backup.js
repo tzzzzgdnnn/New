@@ -84,3 +84,20 @@ export function restoreBackupData(data) {
     }
   }
 }
+
+// Full backup: every app key on this device, so profiles, their PINs and
+// avatars, and each profile's history, progress and settings all come back.
+export function collectEverything() {
+  const all = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(PREFIX) && !k.includes("_corrupt_")) all[k] = localStorage.getItem(k);
+  }
+  return all;
+}
+export function restoreEverything(all) {
+  if (!all || typeof all !== "object") throw new Error("Invalid backup data");
+  for (const [k, v] of Object.entries(all)) {
+    if (typeof k === "string" && k.startsWith(PREFIX) && typeof v === "string") localStorage.setItem(k, v);
+  }
+}
