@@ -579,3 +579,9 @@ html.sb-ios .sp-ss-seg { flex: 0 0 auto; min-width: 72px; min-height: 36px; bord
 html.sb-ios .sp-ss-seg.is-selected { background: #fff; color: #000; }
 html.sb-ios .sp-ss-seg:disabled { opacity: .35; }
 html.sb-ios .sp-ss-audio__note { font-size: 13px; color: rgba(255, 255, 255, .55); }
+
+/* Per-episode download button (TV page episode rows). 44pt tap target. */
+html.sb-ios .episode-info { position: relative; }
+html.sb-ios .episode-info:has(> .ep-dl-btn) .episode-name { padding-right: 44px; }
+html.sb-ios .ep-dl-btn { position: absolute; top: -6px; right: -6px; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 22px; background: transparent; color: var(--text2, #ccc); }
+html.sb-ios .ep-dl-btn:active { background: rgba(255, 255, 255, 0.12); color: var(--text, #fff); }

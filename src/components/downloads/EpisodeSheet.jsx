@@ -28,12 +28,15 @@ export default function EpisodeSheet({
   start, // ({ episodes, option, subtitleLangs, first, onProgress }) => Promise<{ ok, started, skipped, failed }>
   dub = false,
   preferredLang = "en",
+  // One episode picked from its own row ({ season, episode }): it is selected
+  // and measured first, and the sheet opens straight on the quality step.
+  preselect = null,
   onClose,
 }) {
-  const [season, setSeason] = useState(initialSeason ?? seasons[0]?.season_number ?? 1);
+  const [season, setSeason] = useState(preselect?.season ?? initialSeason ?? seasons[0]?.season_number ?? 1);
   const [bySeason, setBySeason] = useState({}); // season -> raw episodes | "error"
   const [selected, setSelected] = useState(() => new Map()); // "s:e" -> choice
-  const [step, setStep] = useState("episodes");
+  const [step, setStep] = useState(preselect ? "quality" : "episodes");
   const [sample, setSample] = useState(null); // { season, episode, runtime, probe, options } | { error }
   const [subs, setSubs] = useState(NO_SUBS);
   const [queue, setQueue] = useState(null); // { done, total }
@@ -55,6 +58,26 @@ export default function EpisodeSheet({
     [raw, season, downloads, showKey],
   );
   const open = choices.filter((c) => !c.download);
+  const preChoice = preselect
+    ? choices.find((c) => c.season === Number(preselect.season) && c.episode === Number(preselect.episode)) || null
+    : null;
+
+  // Row download: tick that episode once its season has loaded.
+  const preselected = useRef(false);
+  useEffect(() => {
+    if (preselected.current || !preselect || !choices.length) return;
+    if (!preChoice) {
+      preselected.current = true;
+      setStep("episodes"); // not in this season's list: let the viewer pick
+      return;
+    }
+    preselected.current = true;
+    if (preChoice.download) {
+      setStep("episodes"); // already downloaded / downloading: show it in the list
+      return;
+    }
+    setSelected(new Map([[keyOf(preChoice), preChoice]]));
+  }, [preselect, choices.length, preChoice]);
 
   // One episode is measured in the background, so the selection shows a size
   // and the quality step opens with real tiers.
@@ -62,7 +85,7 @@ export default function EpisodeSheet({
   useEffect(() => {
     if (sampled.current || !choices.length) return;
     sampled.current = true;
-    const pick = open[0] || choices[0];
+    const pick = (preChoice && !preChoice.download && preChoice) || open[0] || choices[0];
     (async () => {
       try {
         const res = await probeFn(pick);
@@ -76,7 +99,7 @@ export default function EpisodeSheet({
         if (alive.current) setSample({ error: e?.message || "Download lookup failed" });
       }
     })();
-  }, [choices, open, probeFn, measure, dub, preferredLang]);
+  }, [choices, open, preChoice, probeFn, measure, dub, preferredLang]);
 
   const picked = [...selected.values()].sort((a, b) => a.season - b.season || a.episode - b.episode);
   const sized = sample?.options && !sample.options[0]?.sizing;
@@ -232,7 +255,8 @@ export default function EpisodeSheet({
         {step === "quality" && (
           <>
             <div className="pd-sheet__hint">{countText}</div>
-            {!sample?.options && (
+            {sample?.error && <div role="alert" className="pd-sheet__error">{sample.error}</div>}
+            {!sample?.options && !sample?.error && (
               <div className="pd-sheet__status" role="status">
                 <span className="pd-spinner" aria-hidden="true" /> Finding a stream…
               </div>

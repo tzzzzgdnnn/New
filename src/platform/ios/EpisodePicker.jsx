@@ -15,6 +15,7 @@ export default function EpisodePicker({
   ctxFor = () => ({}), // season -> server context overrides (e.g. anime's AniList id per season)
   downloads,
   onDownloadStarted, // (record) for each job started, like the single-episode sheet
+  preselect = null, // { season, episode } from an episode row's download button
   onClose,
 }) {
   const { isAnime, dub } = currentAudioMode();
@@ -53,6 +54,7 @@ export default function EpisodePicker({
       start={start}
       dub={!isAnime || dub}
       preferredLang={storage.get(STORAGE_KEYS.SUBTITLE_LANG) || "en"}
+      preselect={preselect}
       onClose={onClose}
     />
   );

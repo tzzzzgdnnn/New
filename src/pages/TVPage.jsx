@@ -528,6 +528,14 @@ export default function TVPage({
   const [downloadTarget, setDownloadTarget] = useState(null);
   // iOS: the multi-episode download picker is open.
   const [showEpisodePicker, setShowEpisodePicker] = useState(false);
+  const [pickerEpisode, setPickerEpisode] = useState(null); // { season, episode } from a row's download button
+  const downloadOneEpisode = useCallback(
+    (ep) => {
+      setPickerEpisode({ season: selectedSeason, episode: ep.episode_number });
+      setShowEpisodePicker(true);
+    },
+    [selectedSeason],
+  );
   const [trailerKey, setTrailerKey] = useState(null);
   const [showTrailer, setShowTrailer] = useState(false);
   const [showCast, setShowCast] = useState(false);
@@ -3071,7 +3079,10 @@ export default function TVPage({
               <button
                 type="button"
                 className="btn btn-ghost sb-episodes-download"
-                onClick={() => setShowEpisodePicker(true)}
+                onClick={() => {
+                  setPickerEpisode(null);
+                  setShowEpisodePicker(true);
+                }}
               >
                 <DownloadIcon /> Download Episodes
               </button>
@@ -3165,6 +3176,7 @@ export default function TVPage({
                         onPlay={playEpisode}
                         onContextMenu={setEpMenu}
                         onGoToDownloads={onGoToDownloads}
+                        onDownload={EpisodePicker ? downloadOneEpisode : null}
                       />
                     );
                   })}
@@ -3248,7 +3260,11 @@ export default function TVPage({
             }
             downloads={downloads}
             onDownloadStarted={onDownloadStarted}
-            onClose={() => setShowEpisodePicker(false)}
+            preselect={pickerEpisode}
+            onClose={() => {
+              setShowEpisodePicker(false);
+              setPickerEpisode(null);
+            }}
           />
         </Suspense>
       )}
@@ -3299,6 +3315,7 @@ const EpisodeCard = memo(function EpisodeCard({
   onPlay,
   onContextMenu,
   onGoToDownloads,
+  onDownload = null, // iOS: download just this episode
 }) {
   const pk = `tv_${itemId}_s${selectedSeason}e${ep.episode_number}`;
   const isPlaying = playing && selectedEpNumber === ep.episode_number;
@@ -3399,6 +3416,23 @@ const EpisodeCard = memo(function EpisodeCard({
           )}
         </div>
         <div className="episode-name">{ep.name}</div>
+        {onDownload && !epDownload && !restricted && !epUnreleased && (
+          <button
+            type="button"
+            className="ep-dl-btn"
+            aria-label={`Download episode ${ep.episode_number}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDownload(ep);
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 4v11" />
+              <path d="M7 11l5 5 5-5" />
+              <path d="M5 20h14" />
+            </svg>
+          </button>
+        )}
         <EpisodeDesc overview={ep.overview} episodeName={ep.name} />
         {!epWatched && epPct > 0 && (
           <div className="episode-progress-bar">

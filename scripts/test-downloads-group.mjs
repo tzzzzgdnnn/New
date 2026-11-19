@@ -420,5 +420,76 @@ await t("picker sheet: checkboxes, Select all, season switcher, size, one qualit
   root.unmount();
 });
 
+await t("row download: one episode preselected, sheet opens on the quality step, queues just that episode", async () => {
+  for (const j of sevJobs()) jobs.splice(jobs.indexOf(j), 1);
+  const show = { tmdbId: SEV.id, name: SEV.name, posterPath: SEV.poster };
+  const calls = [];
+  const probed = [];
+  let closed = false;
+  document.body.innerHTML = "";
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+  await act(async () =>
+    root.render(
+      React.createElement(EpisodeSheet, {
+        showName: "Severance",
+        showKey: SEV_KEY,
+        seasons: [{ season_number: 1 }, { season_number: 2 }],
+        initialSeason: 1,
+        preselect: { season: 2, episode: 2 },
+        loadEpisodes: async (s) => (s === 1 ? sevEps(4, 50) : sevEps(2, 25)),
+        downloads: [],
+        probe: (c) => (probed.push(`${c.season}:${c.episode}`), fakeProbe({ ctx: { season: c.season, episode: c.episode } })),
+        measure: async (_p, options) => options,
+        start: async (args) => {
+          calls.push(args);
+          return d.downloadEpisodes({ ...args, show, ctx: {}, probe: fakeProbe });
+        },
+        onClose: () => (closed = true),
+      }),
+    ),
+  );
+  await flush();
+  assert.ok(host.textContent.includes("1 episode selected"), host.textContent);
+  assert.equal(probed[0], "2:2", "the tapped episode is the one measured");
+  const rows = [...host.querySelectorAll("button.pd-row")];
+  assert.ok(rows.length >= 1, "quality step shown right away");
+  await act(async () => rows[0].click());
+  for (let i = 0; i < 100 && !closed; i++) await flush();
+  assert.equal(closed, true, host.textContent);
+  assert.deepEqual(calls[0].episodes.map((e) => `${e.season}:${e.episode}`), ["2:2"]);
+  root.unmount();
+});
+
+await t("row download: an already-downloaded episode opens the list instead", async () => {
+  document.body.innerHTML = "";
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+  await act(async () =>
+    root.render(
+      React.createElement(EpisodeSheet, {
+        showName: "Severance",
+        showKey: SEV_KEY,
+        seasons: [{ season_number: 1 }],
+        preselect: { season: 1, episode: 2 },
+        loadEpisodes: async () => sevEps(4, 50),
+        downloads: [ep("dl2b", SEV, 1, 2, "downloading")],
+        probe: (c) => fakeProbe({ ctx: { season: c.season, episode: c.episode } }),
+        measure: async (_p, options) => options,
+        start: async () => ({ ok: true }),
+        onClose: () => {},
+      }),
+    ),
+  );
+  await flush();
+  assert.ok(host.textContent.includes("0 episodes selected"), host.textContent);
+  assert.ok(host.querySelector(".pd-batchbar"), "episode list shown");
+  root.unmount();
+});
+
 console.log(`\n${pass} download grouping checks passed`);
 process.exit(0);
