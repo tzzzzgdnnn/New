@@ -705,6 +705,137 @@ final class PaddedLabel: UILabel {
     }
 }
 
+// MARK: - Connection health light
+//
+// A small dot that stays in the top corner during playback (it does not fade
+// with the controls). Every 2 s it reads the access log: green when the
+// network delivers >= 1.5x the bitrate of the playing variant, yellow when it
+// is close (1.0-1.5x), a stall happened in the last 30 s, or frames are being
+// dropped; red when it is below the variant bitrate, buffering, or 2+ stalls
+// in 30 s. Tapping it shows "Connection: Good · 24 Mbps".
+
+final class ConnectionHealthMonitor {
+    enum Level { case unknown, good, fair, poor }
+
+    private static let interval: TimeInterval = 2
+    private static let stallWindow: TimeInterval = 30
+    private static let goodRatio = 1.5
+
+    private weak var player: AVPlayer?
+    private var timer: Timer?
+    private var stallObserver: NSObjectProtocol?
+    private var stalls: [Date] = []
+    private var lastDropped = 0
+    private(set) var level: Level = .unknown
+    private(set) var observedMbps: Double = 0
+    var onChange: ((Level) -> Void)?
+
+    func start(player: AVPlayer) {
+        stop()
+        self.player = player
+        stalls = []
+        lastDropped = 0
+        stallObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self = self, let item = note.object as? AVPlayerItem,
+                  item === self.player?.currentItem else { return }
+            self.stalls.append(Date())
+            self.evaluate()
+        }
+        timer = Timer.scheduledTimer(withTimeInterval: Self.interval, repeats: true) { [weak self] _ in
+            self?.evaluate()
+        }
+    }
+
+    func stop() {
+        timer?.invalidate(); timer = nil
+        if let o = stallObserver { NotificationCenter.default.removeObserver(o) }
+        stallObserver = nil
+    }
+
+    deinit { stop() }
+
+    private func evaluate() {
+        guard let p = player, let item = p.currentItem, item.status == .readyToPlay,
+              p.timeControlStatus != .paused || p.reasonForWaitingToPlay != nil else { return }
+        let now = Date()
+        stalls.removeAll { now.timeIntervalSince($0) > Self.stallWindow }
+        let event = item.accessLog()?.events.last
+        let observed = event?.observedBitrate ?? 0
+        let indicated = event?.indicatedBitrate ?? 0
+        let dropped = event?.numberOfDroppedVideoFrames ?? 0
+        let droppedRising = dropped > lastDropped && lastDropped > 0
+        lastDropped = dropped
+        if observed > 0 { observedMbps = observed / 1_000_000 }
+        let buffering = p.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        let ratio = (observed > 0 && indicated > 0) ? observed / indicated : nil
+
+        let next: Level
+        if buffering || stalls.count >= 2 || (ratio.map { $0 < 1 } ?? false) {
+            next = .poor
+        } else if !stalls.isEmpty || droppedRising || (ratio.map { $0 < Self.goodRatio } ?? false) {
+            next = .fair
+        } else if ratio != nil {
+            next = .good
+        } else {
+            next = level // no bitrate data yet: keep what we had
+        }
+        if next != level {
+            level = next
+            onChange?(next)
+        }
+    }
+}
+
+final class HealthDotView: UIControl {
+    private let dot = UIView()
+    private static let dotSize: CGFloat = 9
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        dot.isUserInteractionEnabled = false
+        dot.layer.cornerRadius = Self.dotSize / 2
+        dot.layer.shadowOffset = .zero
+        dot.layer.shadowRadius = 4
+        dot.layer.shadowOpacity = 0.9
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(dot)
+        NSLayoutConstraint.activate([
+            dot.widthAnchor.constraint(equalToConstant: Self.dotSize),
+            dot.heightAnchor.constraint(equalToConstant: Self.dotSize),
+            dot.centerXAnchor.constraint(equalTo: centerXAnchor),
+            dot.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        accessibilityLabel = "Connection health"
+        set(.unknown, animated: false)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    static func color(for level: ConnectionHealthMonitor.Level) -> UIColor {
+        switch level {
+        case .good: return UIColor(red: 0.20, green: 0.84, blue: 0.40, alpha: 1)
+        case .fair: return UIColor(red: 1.00, green: 0.80, blue: 0.10, alpha: 1)
+        case .poor: return UIColor(red: 1.00, green: 0.23, blue: 0.19, alpha: 1)
+        case .unknown: return UIColor(white: 0.6, alpha: 1)
+        }
+    }
+
+    func set(_ level: ConnectionHealthMonitor.Level, animated: Bool) {
+        let c = Self.color(for: level)
+        dot.backgroundColor = c
+        dot.layer.shadowColor = c.cgColor
+        guard animated, level == .fair || level == .poor else { return }
+        // Brief pulse so a worse connection is noticed.
+        UIView.animate(withDuration: 0.18, animations: {
+            self.dot.transform = CGAffineTransform(scaleX: 1.8, y: 1.8)
+        }, completion: { _ in
+            UIView.animate(withDuration: 0.25) { self.dot.transform = .identity }
+        })
+    }
+}
+
 // MARK: - Native player
 //
 // AVPlayerLayer-backed player with its own control layer (top bar, scrubber,
@@ -751,6 +882,10 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private var landscapeVideoConstraints: [NSLayoutConstraint] = []
     private var portraitVideoConstraints: [NSLayoutConstraint] = []
     private var portraitLayoutActive = false
+    private let healthDot = HealthDotView()
+    private let healthLabel = PaddedLabel()
+    private let healthMonitor = ConnectionHealthMonitor()
+    private var healthLabelWork: DispatchWorkItem?
     private var userPaused = false
     /// Last real playback position; a failover or server switch resumes here.
     private var lastPosition: Double = 0
@@ -839,6 +974,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         setupVideoView()
         setupControls()
         setupOverlays()
+        setupHealthLight()
         setupGestures()
         setupSubtitles()
         loadSkipTimes()
@@ -1007,6 +1143,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         if let t = timeObserver { player?.removeTimeObserver(t) }
         statusObs?.invalidate()
         lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        healthMonitor.stop()
     }
 
     // MARK: Player
@@ -1057,6 +1194,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         p.usesExternalPlaybackWhileExternalScreenIsActive = true
         player = p
         videoView.playerLayer.player = p
+        healthMonitor.start(player: p)
+        healthDot.isHidden = false
 
         generation += 1
         let gen = generation
@@ -1301,7 +1440,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
         NSLayoutConstraint.activate([
             topBar.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 12),
-            topBar.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -12),
+            // Leaves the top-right corner to the connection light.
+            topBar.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -30),
             topBar.topAnchor.constraint(equalTo: safe.topAnchor, constant: 8),
             topStack.leadingAnchor.constraint(equalTo: topBar.contentView.leadingAnchor, constant: 12),
             topStack.trailingAnchor.constraint(equalTo: topBar.contentView.trailingAnchor, constant: -12),
@@ -1340,6 +1480,68 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             color.setFill()
             ctx.cgContext.fillEllipse(in: CGRect(x: 0, y: 0, width: size, height: size))
         }
+    }
+
+    // MARK: Connection health light
+
+    private static let healthHitSize: CGFloat = 28
+
+    private func setupHealthLight() {
+        healthDot.translatesAutoresizingMaskIntoConstraints = false
+        healthDot.isHidden = true
+        healthDot.addTarget(self, action: #selector(healthTapped), for: .touchUpInside)
+        view.addSubview(healthDot) // not inside `controls`: never fades out
+
+        healthLabel.translatesAutoresizingMaskIntoConstraints = false
+        healthLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        healthLabel.textColor = .white
+        healthLabel.backgroundColor = UIColor(white: 0.08, alpha: 0.85)
+        healthLabel.layer.cornerRadius = 12
+        healthLabel.clipsToBounds = true
+        healthLabel.insets = UIEdgeInsets(top: 5, left: 10, bottom: 5, right: 10)
+        healthLabel.alpha = 0
+        view.addSubview(healthLabel)
+
+        // Safe area keeps it clear of the notch / Dynamic Island either way up.
+        let safe = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            healthDot.widthAnchor.constraint(equalToConstant: Self.healthHitSize),
+            healthDot.heightAnchor.constraint(equalToConstant: Self.healthHitSize),
+            healthDot.topAnchor.constraint(equalTo: safe.topAnchor, constant: -6),
+            healthDot.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -2),
+            healthLabel.centerYAnchor.constraint(equalTo: healthDot.centerYAnchor),
+            healthLabel.trailingAnchor.constraint(equalTo: healthDot.leadingAnchor, constant: -2),
+        ])
+        healthMonitor.onChange = { [weak self] level in
+            guard let self = self else { return }
+            self.healthDot.set(level, animated: true)
+            if level == .poor || level == .fair { self.showHealthLabel() }
+        }
+    }
+
+    private func healthText() -> String {
+        let name: String
+        switch healthMonitor.level {
+        case .good: name = "Good"
+        case .fair: name = "Slow"
+        case .poor: name = "Poor"
+        case .unknown: name = "Measuring"
+        }
+        let mbps = healthMonitor.observedMbps
+        return mbps > 0 ? "Connection: \(name) · \(Int(mbps.rounded())) Mbps" : "Connection: \(name)"
+    }
+
+    @objc private func healthTapped() { showHealthLabel() }
+
+    private func showHealthLabel() {
+        healthLabel.text = healthText()
+        UIView.animate(withDuration: 0.2) { self.healthLabel.alpha = 1 }
+        healthLabelWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            UIView.animate(withDuration: 0.3) { self?.healthLabel.alpha = 0 }
+        }
+        healthLabelWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: w)
     }
 
     // MARK: Toast + failure screen
@@ -1485,6 +1687,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         reportProgress()
         player?.pause()
         generation += 1
+        healthMonitor.stop()
         let cb = onClose
         let position = lastPosition
         dismiss(animated: true) {
