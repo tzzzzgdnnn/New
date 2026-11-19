@@ -1,4 +1,6 @@
 import { IS_IOS as __IS_IOS } from "../platform/target";
+import { AnimeDubSetting } from "../platform/ios/AnimeDubPrompt";
+import { getAnimeDubMode } from "../platform/ios/playerBridge";
 import { useState, useEffect, useRef } from "react";
 import UpdateModal from "../components/UpdateModal";
 import {
@@ -1934,6 +1936,21 @@ function TmdbLanguageSection() {
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Anime audio (iOS) ─────────────────────────────────────────────────────────
+function AnimeAudioSection() {
+  const [mode, setMode] = useState(getAnimeDubMode);
+  return (
+    <div style={{ marginBottom: 40 }}>
+      <div className="settings-section-title">Anime: Sub or Dub</div>
+      <div style={{ fontSize: 13, color: "var(--text3)", marginBottom: 14, lineHeight: 1.6 }}>
+        How anime plays by default. The SUB/DUB button in the player still
+        switches a single episode.
+      </div>
+      <AnimeDubSetting value={mode} onChange={setMode} />
     </div>
   );
 }
@@ -4228,6 +4245,7 @@ export default function SettingsPage({
             title="Subtitles"
             subtitle="Subtitle download source, preferred language, and API key"
           />
+          {__IS_IOS && <AnimeAudioSection />}
           <SubtitleSettingsSection />
         </div>
 

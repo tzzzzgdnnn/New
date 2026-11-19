@@ -694,6 +694,14 @@ export default function App() {
     }
   }, []);
 
+  // iOS: the native player's subtitle menu links to Settings → Subtitles.
+  useEffect(() => {
+    if (!IS_IOS) return;
+    const open = (e) => navigate("settings", { section: e?.detail || "subtitles" });
+    window.addEventListener("sb-open-settings", open);
+    return () => window.removeEventListener("sb-open-settings", open);
+  }, [navigate]);
+
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e) => {

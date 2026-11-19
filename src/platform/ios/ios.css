@@ -383,3 +383,23 @@ html.sb-ios .sb-tape-title { position: absolute; left: 12px; right: 12px; bottom
   html.sb-ios .sb-chips { padding: 4px 16px 6px; }
   html.sb-ios .sb-tape { flex-basis: 78vw; width: 78vw; }
 }
+
+/* ── Native player placeholder (webview.js) ─────────────────────────────── */
+html.sb-ios .sb-native-card { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: #000; color: #d4d4d4; font: 500 14px -apple-system, system-ui, sans-serif; text-align: center; padding: 16px; }
+html.sb-ios .sb-native-play { min-height: 44px; min-width: 120px; padding: 0 22px; border: 0; border-radius: 22px; background: #e50914; color: #fff; font: 600 16px -apple-system, system-ui, sans-serif; }
+html.sb-ios .sb-native-note { position: absolute; left: 8px; bottom: 8px; padding: 4px 10px; border-radius: 12px; background: rgba(0,0,0,.7); color: #d4d4d4; font: 500 12px -apple-system, system-ui, sans-serif; pointer-events: none; display: none; }
+
+/* ── Anime "Sub or Dub?" prompt + Settings choice ───────────────────────── */
+html.sb-ios .sb-dub-prompt { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(0,0,0,.72); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); animation: sbFadeIn .25s ease-out; }
+html.sb-ios .sb-dub-card { width: 100%; max-width: 420px; padding: 26px 20px 20px; border-radius: 22px; background: rgba(28,28,30,.92); border: 1px solid rgba(255,255,255,.08); box-shadow: 0 24px 60px rgba(0,0,0,.6); text-align: center; animation: sbPopIn .28s cubic-bezier(.2,.8,.2,1); }
+html.sb-ios .sb-dub-title { font: 800 22px -apple-system, system-ui, sans-serif; color: #fff; }
+html.sb-ios .sb-dub-sub { margin: 6px 0 20px; font: 500 13px -apple-system, system-ui, sans-serif; color: #9a9a9f; }
+html.sb-ios .sb-dub-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+html.sb-ios .sb-dub-buttons--inline { max-width: 420px; }
+html.sb-ios .sb-dub-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 104px; padding: 14px 10px; border-radius: 16px; border: 1.5px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06); color: #fff; transition: transform .15s ease, background .2s ease, border-color .2s ease; }
+html.sb-ios .sb-dub-btn:active { transform: scale(.97); }
+html.sb-ios .sb-dub-btn.is-active, html.sb-ios .sb-dub-prompt .sb-dub-btn:hover { border-color: #e50914; background: rgba(229,9,20,.16); }
+html.sb-ios .sb-dub-btn-title { font: 800 24px -apple-system, system-ui, sans-serif; letter-spacing: .5px; }
+html.sb-ios .sb-dub-btn-detail { font: 500 12px -apple-system, system-ui, sans-serif; color: #bdbdc2; line-height: 1.35; }
+@keyframes sbFadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sbPopIn { from { opacity: 0; transform: translateY(12px) scale(.96); } to { opacity: 1; transform: none; } }

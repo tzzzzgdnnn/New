@@ -43,6 +43,8 @@ export const STORAGE_KEYS = {
   UPDATE_SOURCE: "updateSource",
   PLAYER_SOURCE: "playerSource",
   HIANIME_DUB_MODE: "hianimeDubMode",
+  // iOS: set once the viewer answered the "Sub or Dub?" prompt
+  ANIME_DUB_CHOSEN: "animeDubChosen",
   WATCH_PROGRESS: "progress",
   WATCHED: "watched",
   HISTORY: "history",

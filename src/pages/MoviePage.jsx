@@ -1,4 +1,12 @@
 import { IS_IOS } from "../platform/target";
+import AnimeDubPrompt from "../platform/ios/AnimeDubPrompt";
+import {
+  getAnimeDubMode,
+  hasChosenAnimeDubMode,
+  publishPlayerContext,
+  useAnimeServerGuard,
+  useNativeServerSelect,
+} from "../platform/ios/playerBridge";
 import {
   useState,
   useEffect,
@@ -120,8 +128,10 @@ export default function MoviePage({
     [playerSource],
   );
   const [showSourceMenu, setShowSourceMenu] = useState(false);
-  const [dubMode, setDubMode] = useState(
-    () => storage.get(STORAGE_KEYS.HIANIME_DUB_MODE) || "sub",
+  const [dubMode, setDubMode] = useState(getAnimeDubMode);
+  // iOS: ask "Sub or Dub?" once, on the first anime title
+  const [askDubMode, setAskDubMode] = useState(
+    () => IS_IOS && !hasChosenAnimeDubMode(),
   );
   const [anilistData, setAnilistData] = useState(null);
   const [menuPos, setMenuPos] = useState(null);
@@ -333,7 +343,6 @@ export default function MoviePage({
     setM3u8Url(null);
     setInterceptedSubs([]);
     setShowSourceMenu(false);
-    setAnilistData(null);
     resolvedPlayerUrlRef.current = null;
     setResolvedPlayerUrl(null);
     resolvingUrlRef.current = false;
@@ -342,9 +351,12 @@ export default function MoviePage({
     setWebviewLoading(true); // instantly blank the player on every source/item switch
   }, [item.id, playerSource, dubMode]);
 
-  // Fetch AniList data + auto-set source for anime/non-anime
+  // Fetch AniList data + auto-set source for anime/non-anime.
+  // AniList data belongs to the title, so it is only cleared when the title
+  // changes (not on every source / Sub-Dub switch).
   useEffect(() => {
     let mounted = true;
+    setAnilistData(null);
     if (isAnime) {
       fetchAnilistData(item.title || item.name, "ANIME", item.id).then(
         (data) => {
@@ -765,29 +777,42 @@ export default function MoviePage({
     };
   }, [playing]);
 
-  // ── iOS: context for the native player + its server switcher ──────────
-  useEffect(() => {
-    if (!IS_IOS) return;
-    window.__sbCtx = { type: "movie", title, isAnime: !!isAnime, season: null, episode: null, tmdbId: item.id };
-  }, [title, isAnime, item.id]);
-  useEffect(() => {
-    if (!IS_IOS) return;
-    const onSelect = (e) => {
-      const id = typeof e?.detail === "string" ? e.detail.replace(/:(sub|dub)$/, "") : e?.detail;
-      if (!id || !PLAYER_SOURCES.some((s) => s.id === id)) return;
-      setPlayerSource(id);
-      storage.set(STORAGE_KEYS.PLAYER_SOURCE, id);
-      setM3u8Url(null);
-      setInterceptedSubs([]);
-      resolvedPlayerUrlRef.current = null;
-      setResolvedPlayerUrl(null);
-      resolvingUrlRef.current = false;
-      setResolvingUrl(false);
-      setResolveError(null);
-    };
-    window.addEventListener("sb-select-server", onSelect);
-    return () => window.removeEventListener("sb-select-server", onSelect);
+  // Drop the resolved/intercepted stream so the player reloads from scratch.
+  const resetPlayerResolution = useCallback(() => {
+    setM3u8Url(null);
+    setInterceptedSubs([]);
+    resolvedPlayerUrlRef.current = null;
+    setResolvedPlayerUrl(null);
+    resolvingUrlRef.current = false;
+    setResolvingUrl(false);
+    setResolveError(null);
   }, []);
+
+  // ── iOS: native player bridge ──────────────────────────────────────────
+  useAnimeServerGuard({ isAnime, playerSource, dubMode, setPlayerSource });
+
+  useEffect(() => {
+    publishPlayerContext({
+      type: "movie",
+      title,
+      isAnime: !!isAnime,
+      season: null,
+      episode: null,
+      tmdbId: item.id,
+      anilistId: (isAnime && anilistData?.id) || null,
+      dubMode,
+    });
+  }, [title, isAnime, item.id, anilistData?.id, dubMode]);
+
+  useNativeServerSelect(({ sourceId, dubMode: mode }) => {
+    if (mode) {
+      setDubMode(mode);
+      storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, mode);
+    }
+    setPlayerSource(sourceId);
+    storage.set(STORAGE_KEYS.PLAYER_SOURCE, sourceId);
+    resetPlayerResolution();
+  });
 
   const handleSetDownloaderFolder = useCallback((folder) => {
     setDownloaderFolder(folder);
@@ -830,6 +855,17 @@ export default function MoviePage({
 
   return (
     <div className="fade-in">
+      {IS_IOS && isAnime && askDubMode && (
+        <AnimeDubPrompt
+          onChoose={(mode) => {
+            setAskDubMode(false);
+            if (mode !== dubMode) {
+              setDubMode(mode);
+              resetPlayerResolution();
+            }
+          }}
+        />
+      )}
       <div className="detail-hero">
         <div
           className="detail-bg"
@@ -1194,13 +1230,7 @@ export default function MoviePage({
                     const next = dubMode === "sub" ? "dub" : "sub";
                     setDubMode(next);
                     storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, next);
-                    setM3u8Url(null);
-                    setInterceptedSubs([]);
-                    resolvedPlayerUrlRef.current = null;
-                    setResolvedPlayerUrl(null);
-                    resolvingUrlRef.current = false;
-                    setResolvingUrl(false);
-                    setResolveError(null);
+                    resetPlayerResolution();
                   }}
                   title="Toggle Sub/Dub"
                 >
@@ -1273,13 +1303,7 @@ export default function MoviePage({
                       clearFailoverSource(`movie_${item.id}_${dubMode}`);
                       setPlayerSource(src.id);
                       storage.set(STORAGE_KEYS.PLAYER_SOURCE, src.id);
-                      setM3u8Url(null);
-                      setInterceptedSubs([]);
-                      resolvedPlayerUrlRef.current = null;
-                      setResolvedPlayerUrl(null);
-                      resolvingUrlRef.current = false;
-                      setResolvingUrl(false);
-                      setResolveError(null);
+                      resetPlayerResolution();
                     }}
                   >
                     <span>{src.label}</span>

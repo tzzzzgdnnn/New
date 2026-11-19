@@ -1,4 +1,12 @@
 import { IS_IOS } from "../platform/target";
+import AnimeDubPrompt from "../platform/ios/AnimeDubPrompt";
+import {
+  getAnimeDubMode,
+  hasChosenAnimeDubMode,
+  publishPlayerContext,
+  useAnimeServerGuard,
+  useNativeServerSelect,
+} from "../platform/ios/playerBridge";
 import {
   useState,
   useEffect,
@@ -464,8 +472,10 @@ export default function TVPage({
     () => sourceProgressViaFrames(playerSource),
     [playerSource],
   );
-  const [dubMode, setDubMode] = useState(
-    () => storage.get(STORAGE_KEYS.HIANIME_DUB_MODE) || "sub",
+  const [dubMode, setDubMode] = useState(getAnimeDubMode);
+  // iOS: ask "Sub or Dub?" once, on the first anime title
+  const [askDubMode, setAskDubMode] = useState(
+    () => IS_IOS && !hasChosenAnimeDubMode(),
   );
   // async URL resolution
   const [resolvedPlayerUrl, setResolvedPlayerUrl] = useState(null);
@@ -1691,45 +1701,58 @@ export default function TVPage({
   const autoplayNextLayout =
     storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_LAYOUT) || "right";
 
-  // ── iOS: anime titles always start on an anime server ──────────────────
-  useEffect(() => {
-    if (!IS_IOS || !isAnime) return;
-    const ok = sourcesForContent(true).filter((s) => !s.async);
-    const animeRoute = ok.find((s) => s.animeUrl);
-    // Dub needs the anime route; Sub may stay on any anime server.
-    const valid = ok.some((s) => s.id === playerSource) && (dubMode !== "dub" || !animeRoute || playerSource === animeRoute.id);
-    if (!valid && ok.length) setPlayerSource((animeRoute || ok[0]).id);
-  }, [isAnime, playerSource, dubMode]);
-
-  // ── iOS: context for the native player + its server switcher ──────────
-  useEffect(() => {
-    if (!IS_IOS) return;
-    window.__sbCtx = { type: "tv", title: item.name || item.title, isAnime: !!isAnime, season: selectedSeason, episode: selectedEp?.episode_number ?? null, tmdbId: item.id, tmdbSeason: playerEp?.season ?? selectedSeason, tmdbEpisode: playerEp?.episode ?? selectedEp?.episode_number ?? null, anilistId: (anilistSeasons?.find((s) => s.seasonNum === selectedSeason)?.id ?? anilistData?.id) || null, dubMode };
-  }, [item.name, item.title, item.id, isAnime, selectedSeason, selectedEp?.episode_number, playerEp, anilistSeasons, anilistData, dubMode]);
-  useEffect(() => {
-    if (!IS_IOS) return;
-    const onSelect = (e) => {
-      let id = e?.detail;
-      if (typeof id === "string" && /:(sub|dub)$/.test(id)) {
-        const mode = id.endsWith(":dub") ? "dub" : "sub";
-        id = id.replace(/:(sub|dub)$/, "");
-        setDubMode(mode);
-        storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, mode);
-      }
-      if (!id || !PLAYER_SOURCES.some((s) => s.id === id)) return;
-      setPlayerSource(id);
-      storage.set(STORAGE_KEYS.PLAYER_SOURCE, id);
-      setM3u8Url(null);
-      setInterceptedSubs([]);
-      resolvedPlayerUrlRef.current = null;
-      setResolvedPlayerUrl(null);
-      resolvingUrlRef.current = false;
-      setResolvingUrl(false);
-      setResolveError(null);
-    };
-    window.addEventListener("sb-select-server", onSelect);
-    return () => window.removeEventListener("sb-select-server", onSelect);
+  // Drop the resolved/intercepted stream so the player reloads from scratch.
+  const resetPlayerResolution = useCallback(() => {
+    setM3u8Url(null);
+    setInterceptedSubs([]);
+    resolvedPlayerUrlRef.current = null;
+    setResolvedPlayerUrl(null);
+    resolvingUrlRef.current = false;
+    setResolvingUrl(false);
+    setResolveError(null);
   }, []);
+
+  // ── iOS: native player bridge ──────────────────────────────────────────
+  useAnimeServerGuard({ isAnime, playerSource, dubMode, setPlayerSource });
+
+  const anilistIdForSeason =
+    (anilistSeasons?.find((s) => s.seasonNum === selectedSeason)?.id ??
+      anilistData?.id) ||
+    null;
+  useEffect(() => {
+    publishPlayerContext({
+      type: "tv",
+      title: item.name || item.title,
+      isAnime: !!isAnime,
+      season: selectedSeason,
+      episode: selectedEp?.episode_number ?? null,
+      tmdbId: item.id,
+      tmdbSeason: playerEp?.season ?? selectedSeason,
+      tmdbEpisode: playerEp?.episode ?? selectedEp?.episode_number ?? null,
+      anilistId: anilistIdForSeason,
+      dubMode,
+    });
+  }, [
+    item.name,
+    item.title,
+    item.id,
+    isAnime,
+    selectedSeason,
+    selectedEp?.episode_number,
+    playerEp,
+    anilistIdForSeason,
+    dubMode,
+  ]);
+
+  useNativeServerSelect(({ sourceId, dubMode: mode }) => {
+    if (mode) {
+      setDubMode(mode);
+      storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, mode);
+    }
+    setPlayerSource(sourceId);
+    storage.set(STORAGE_KEYS.PLAYER_SOURCE, sourceId);
+    resetPlayerResolution();
+  });
 
   const handleSetDownloaderFolder = useCallback((folder) => {
     setDownloaderFolder(folder);
@@ -1794,6 +1817,17 @@ export default function TVPage({
 
   return (
     <div className="fade-in">
+      {IS_IOS && isAnime && askDubMode && (
+        <AnimeDubPrompt
+          onChoose={(mode) => {
+            setAskDubMode(false);
+            if (mode !== dubMode) {
+              setDubMode(mode);
+              resetPlayerResolution();
+            }
+          }}
+        />
+      )}
       {loading && (
         <div className="loader">
           <div className="spinner" />
@@ -2314,13 +2348,7 @@ export default function TVPage({
                         const next = dubMode === "sub" ? "dub" : "sub";
                         setDubMode(next);
                         storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, next);
-                        setM3u8Url(null);
-                        setInterceptedSubs([]);
-                        resolvedPlayerUrlRef.current = null;
-                        setResolvedPlayerUrl(null);
-                        resolvingUrlRef.current = false;
-                        setResolvingUrl(false);
-                        setResolveError(null);
+                        resetPlayerResolution();
                       }}
                       title="Toggle Sub/Dub"
                     >
@@ -2399,13 +2427,7 @@ export default function TVPage({
                             }
                             setPlayerSource(src.id);
                             storage.set(STORAGE_KEYS.PLAYER_SOURCE, src.id);
-                            setM3u8Url(null);
-                            setInterceptedSubs([]);
-                            resolvedPlayerUrlRef.current = null;
-                            setResolvedPlayerUrl(null);
-                            resolvingUrlRef.current = false;
-                            setResolvingUrl(false);
-                            setResolveError(null);
+                            resetPlayerResolution();
                           }}
                         >
                           <span>{src.label}</span>
