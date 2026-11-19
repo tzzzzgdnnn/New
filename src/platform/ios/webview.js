@@ -18,7 +18,7 @@ import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
 import { anipmCandidates, ANIPM_ID, cachedAnipm, prefetchAnipm, anipmWebReady } from "./anipm";
 import { movyCandidates, MOVY_ID } from "./movy";
 import { cinejoyCandidates, cachedCinejoy, prefetchCinejoy, CINEJOY_ID } from "./cinejoy";
-import { playDirect } from "../web/directPlayer";
+import { playDirect, forceFullscreen } from "../web/directPlayer";
 import { parseServerKey } from "../../utils/servers/catalog";
 import { diag } from "../../utils/diag";
 
@@ -166,9 +166,9 @@ function pinnedFor(ctx) {
  * Candidates for `ctx`, best first: providers with no fresh stats are probed
  * now (in parallel, short budget). Ids in `exclude` are left out.
  */
-function rankedCandidates(url, ctx, { signal, exclude = [] } = {}) {
+function rankedCandidates(url, ctx, { signal, exclude = [], budgetMs } = {}) {
   const list = buildCandidateList(url, ctx).filter((c) => !exclude.includes(c.id));
-  return probeAndRank(list, { stats: serverStats, probe: probeUrl, pinned: pinnedFor(ctx), signal });
+  return probeAndRank(list, { stats: serverStats, probe: probeUrl, pinned: pinnedFor(ctx), signal, budgetMs });
 }
 
 /**
@@ -289,6 +289,14 @@ export const downloadContext = (override = {}) => ({ ...currentCtx(), ...overrid
  */
 export const downloadCandidates = (ctx, opts) => rankedCandidates(null, ctx, opts);
 
+// Web app: where to start (the saved Resume point) and progress reports in
+// the same shape the native player sends, so Continue Watching works.
+const webStartAt = (ctx) => (ctx?.progressKey ? getResumeSeconds(ctx.progressKey) : 0);
+const webProgress = (ctx) => (time, duration) => {
+  if (!ctx?.progressKey || !(duration > 0)) return;
+  window.__sbNativeProgress?.({ key: ctx.progressKey, time, duration });
+};
+
 // ── Native playback bookkeeping ──────────────────────────────────────────
 const pending = new Map(); // token -> callback(result)
 window.__sbNativeResult = (r) => {
@@ -324,8 +332,10 @@ function upgrade(wv) {
   // Ad blocking: no allow-popups / allow-top-navigation, so embeds can't open
   // pop-ups, new tabs, or redirect the app. Servers that refuse a sandbox are
   // dropped from the web build (NEEDS_UNSANDBOXED in api.js).
-  // No sandbox: players detect it and refuse to play ("disable sandbox").
-  iframe.removeAttribute("sandbox");
+  // Pop-up / ad blocking: the sandbox has no allow-popups, allow-top-navigation
+  // or allow-modals, so an embed can't open ad tabs, pop-ups or redirect the
+  // app. (The main web path is the ad-free direct stream; embeds are backups.)
+  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-presentation");
   iframe.setAttribute("referrerpolicy", "origin");
   iframe.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media");
   iframe.setAttribute("allowfullscreen", "");
@@ -411,12 +421,15 @@ function upgrade(wv) {
       if (nativeToken !== token) return;
       postContext(url);
       const ctx = currentCtx();
+      const haveDirect = ctx.isAnime ? !!cachedAnipm(ctx) : !!cachedCinejoy(ctx);
       // Start on the fastest server: untested providers are probed at once,
       // within a short budget, while the Keychain read finishes.
       const tRank = Date.now();
       const [subCtx, ranked, anipm, movy] = await Promise.all([
         subCtxReady,
-        rankedCandidates(url, ctx, { signal: probing.signal }),
+        // A direct stream already in hand plays first, so the embed probes
+        // (only backups then) get a tiny budget instead of holding Play up.
+        rankedCandidates(url, ctx, { signal: probing.signal, budgetMs: haveDirect ? 150 : undefined }),
         ctx.isAnime ? anipmCandidates(ctx) : [],
         ctx.isAnime ? [] : directCandidates(ctx),
       ]);
@@ -444,7 +457,7 @@ function upgrade(wv) {
         hideCard();
         loadUrl(url, { webOnly: true });
       }
-    }, 60);
+    }, window.__sbCtx?.tmdbId ? 0 : 60);
   };
 
   cardBtn.addEventListener("click", () => {
@@ -492,7 +505,8 @@ function upgrade(wv) {
       log("playing", `ani.pm (${r.lang})`);
       fire("did-finish-load");
       stopDirect = playDirect(wv, r.source, {
-        startAt: ctx.startAt || 0,
+        startAt: webStartAt(ctx),
+        onTime: webProgress(ctx),
         nativeOnly: true,
         onFail: (why) => {
           if (directFor !== url) return;
@@ -537,7 +551,8 @@ function upgrade(wv) {
       // Called synchronously from the Play tap when the stream is already
       // known, so iPhone opens its own full-screen player right away.
       stopDirect = playDirect(wv, src, {
-        startAt: ctx.startAt || 0,
+        startAt: webStartAt(ctx),
+        onTime: webProgress(ctx),
         onFail: (why) => {
           if (directFor !== url) return;
           diag("player", `web direct failed: ${why}`);
@@ -579,6 +594,7 @@ function upgrade(wv) {
       iframe.src = "about:blank";
       return;
     }
+    if (import.meta.env.VITE_WEB && !webOnly && !/iPhone|iPod/.test(navigator.userAgent)) forceFullscreen(wv);
     if (import.meta.env.VITE_WEB && !webOnly && tryWebDirect(url)) return;
     // No load event in time: the next mirror takes over, else the page hears
     // did-fail-load and fails over to another server.

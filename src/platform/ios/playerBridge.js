@@ -27,6 +27,19 @@ export function setAnimeDubMode(mode) {
   return m;
 }
 
+// Warm up the web player for the title still on screen (not one left behind).
+function warmWeb(ctx, source, nativeOnly) {
+  if (window.__sbCtx !== ctx) return;
+  import("./resume")
+    .then(({ getResumeSeconds }) =>
+      import("../web/directPlayer").then((m) =>
+        window.__sbCtx === ctx &&
+        m.prewarmDirect(source, { startAt: ctx.progressKey ? getResumeSeconds(ctx.progressKey) : 0, nativeOnly }),
+      ),
+    )
+    .catch(() => {});
+}
+
 /** Publish the playing title for the native player (read by webview.js). */
 export function publishPlayerContext(ctx) {
   if (!IS_IOS) return;
@@ -36,7 +49,17 @@ export function publishPlayerContext(ctx) {
   if (ctx?.isAnime && ctx.anilistId) import("./anipm").then((m) => m.prefetchAnipm(ctx)).catch(() => {});
   // Movies and series: Movy's stream API, resolved now so Play is instant.
   if (!import.meta.env.VITE_WEB && ctx && !ctx.isAnime && ctx.tmdbId) import("./movy").then((m) => m.prefetchMovy(ctx)).catch(() => {});
-  if (ctx && !ctx.isAnime && ctx.tmdbId) import("./cinejoy").then((m) => m.prefetchCinejoy(ctx)).catch(() => {});
+  if (ctx && !ctx.isAnime && ctx.tmdbId) {
+    const lookup = import("./cinejoy").then((m) => m.prefetchCinejoy(ctx)).catch(() => null);
+    // Web app: load the stream into a hidden player now, so Play is instant.
+    if (import.meta.env.VITE_WEB) lookup.then((r) => r?.ok && warmWeb(ctx, r.source, false));
+  }
+  if (import.meta.env.VITE_WEB && ctx?.isAnime && ctx.anilistId) {
+    import("./anipm")
+      .then((m) => m.prefetchAnipm(ctx))
+      .then((r) => r?.ok && r.lang === (ctx.dubMode === "dub" ? "dub" : "sub") && warmWeb(ctx, r.source, true))
+      .catch(() => {});
+  }
   // Measure the title's servers now (player Auto ranking), not on Play.
   import("./webview").then((m) => m.prefetchTitle(ctx)).catch(() => {});
 }
