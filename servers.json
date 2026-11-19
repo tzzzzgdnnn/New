@@ -53,6 +53,15 @@
       "movie": "https://www.movy.sx/movie/{tmdb}?play=true",
       "tv": "https://www.movy.sx/tv/{tmdb}/{season}/{episode}?play=true",
       "mirrors": []
+    },
+    {
+      "id": "cinejoy",
+      "name": "Cinejoy",
+      "enabled": true,
+      "verified": true,
+      "movie": "https://cinejoy.pk/watch/movie/{tmdb}",
+      "tv": "https://cinejoy.pk/watch/tv/{tmdb}/{season}/{episode}",
+      "mirrors": []
     }
   ],
   "builtin": {
