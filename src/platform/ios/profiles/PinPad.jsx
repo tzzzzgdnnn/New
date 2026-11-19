@@ -80,7 +80,18 @@ export default function PinPad({ profile, onSuccess, onCancel }) {
     setCount(digitsRef.current.length);
     if (digitsRef.current.length < PIN_LENGTH) return;
     lockedRef.current = true;
-    if (pinMatches(profileRef.current, digitsRef.current)) doneRef.current();
+    if (pinMatches(profileRef.current, digitsRef.current)) {
+      // The pad closes on pointerdown; swallow the click that follows so it
+      // can't land on the screen underneath (e.g. the profile button, which
+      // reopened the picker).
+      const block = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+      };
+      window.addEventListener("click", block, true);
+      setTimeout(() => window.removeEventListener("click", block, true), 500);
+      doneRef.current();
+    }
     else setWrong(true);
   }, []);
 
