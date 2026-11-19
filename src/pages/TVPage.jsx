@@ -7,6 +7,7 @@ import {
   useNativeServerSelect,
 } from "../platform/ios/playerBridge";
 import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
+import { isShuffleable, pickRandomEpisode } from "../utils/shuffle";
 import {
   clearResume,
   formatClock,
@@ -1824,6 +1825,29 @@ export default function TVPage({
     else playEpisode(ep);
   }, [pendingPlay, selectedSeason, currentSeasonEpisodes, playing, selectedEp, playEpisode]);
 
+  // ── Play Random Episode (shuffle) ──────────────────────────────────────
+  // Picks an aired episode and opens it through startEpisode, the same path
+  // as tapping an episode.
+  const canShuffle = useMemo(() => isShuffleable(d, { isAnime }), [d, isAnime]);
+  const [shuffling, setShuffling] = useState(false);
+  const [shuffleOn, setShuffleOn] = useState(false);
+  const shuffle = useCallback(async () => {
+    if (shuffling) return;
+    setShuffling(true);
+    try {
+      const avoid = playing && selectedEp ? { season: selectedSeason, episode: selectedEp.episode_number } : null;
+      const pickEp = await pickRandomEpisode(d, apiKey, avoid);
+      if (pickEp) {
+        setShuffleOn(true);
+        startEpisode(pickEp.season, pickEp.episode);
+      }
+    } catch (err) {
+      console.warn("[shuffle] could not pick an episode", err);
+    } finally {
+      setShuffling(false);
+    }
+  }, [shuffling, playing, selectedEp, selectedSeason, d, apiKey, startEpisode]);
+
   // Continue Watching opens straight into the episode it was left on.
   const autoResumedRef = useRef(null);
   useEffect(() => {
@@ -2005,6 +2029,19 @@ export default function TVPage({
                           : null
                       }
                     />
+                  )}
+                  {canShuffle && !restricted && (
+                    <button
+                      className="btn btn-secondary sp-shuffle-btn"
+                      onClick={shuffle}
+                      disabled={shuffling}
+                      aria-label={shuffleOn ? "Shuffle again" : "Play random episode"}
+                    >
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
+                      </svg>
+                      {shuffling ? "Picking…" : shuffleOn ? "Shuffle Again" : "Random Episode"}
+                    </button>
                   )}
                   {trailerKey &&
                     (restricted ? (
