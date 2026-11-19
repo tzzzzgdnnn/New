@@ -2374,11 +2374,12 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         }
     }
 
-    /// Fill (zoomed to the screen) vs fit (whole picture). Remembered; on by
-    /// default in landscape so shows use the whole screen, never in portrait.
-    private static let fillKey = "sbVideoFill"
+    /// Fit (whole picture, nothing cropped) by default: the video is scaled
+    /// as large as the screen allows edge to edge without cutting any of the
+    /// image. Pinch out zooms to fill (crops edges); pinch in goes back.
+    private static let fillKey = "sbVideoFillV2"
     private var prefersFill: Bool {
-        get { UserDefaults.standard.object(forKey: Self.fillKey) as? Bool ?? true }
+        get { UserDefaults.standard.object(forKey: Self.fillKey) as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: Self.fillKey) }
     }
 
