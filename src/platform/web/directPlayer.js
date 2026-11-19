@@ -39,7 +39,8 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   const nativeHls = !!video.canPlayType("application/vnd.apple.mpegurl");
   video.playsInline = !isIPhone;
   if (!isIPhone) video.setAttribute("playsinline", "");
-  video.autoplay = true;
+  // iPhone: Apple's full-screen player only opens from a tap, so we wait for one.
+  video.autoplay = !isIPhone;
   video.preload = "auto";
   // Required for ManagedMediaSource (hls.js on iPhone, iOS 17.1+).
   video.disableRemotePlayback = true;
@@ -96,8 +97,9 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   // play() right now, inside the Play tap when the stream was already known,
   // so iPhone opens its own full-screen player; else on canplay; if the
   // browser still blocks it, one tap on the button.
-  video.play().catch(() => {});
+  if (!isIPhone) video.play().catch(() => {});
   video.addEventListener("canplay", () => {
+    if (isIPhone) return;
     if (!video.paused) return;
     video.play().then(() => !isIPhone && goFull()).catch(() => {
       // Autoplay blocked: one tap starts it, full screen.
@@ -108,13 +110,24 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   const fullBtn = document.createElement("button");
   fullBtn.textContent = "⛶  Full screen";
   fullBtn.style.cssText = "position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;padding:12px 22px;border-radius:24px;border:0;background:rgba(229,9,20,.92);color:#fff;font-size:16px;font-weight:600;display:none";
-  fullBtn.onclick = () => { fullBtn.style.display = "none"; goFull(); video.play().catch(() => {}); };
+  fullBtn.onclick = () => {
+    fullBtn.style.display = "none";
+    // Inside the tap: play, then Apple's player (iPhone needs both in the gesture).
+    const p = video.play();
+    goFull();
+    p?.catch?.(() => { fullBtn.textContent = "▶  Play"; fullBtn.style.display = ""; });
+  };
+  if (isIPhone) {
+    fullBtn.textContent = "▶  Play";
+    fullBtn.style.cssText += ";font-size:20px;padding:16px 34px";
+    fullBtn.style.display = "";
+    clearTimeout(timer);
+  }
   box.appendChild(fullBtn);
   // iPhone: if it started inline (no tap left to use), try Apple's full-screen
   // player at once, and keep a big Full screen button up until it's on.
   video.addEventListener("playing", () => {
     if (!isIPhone || video.webkitDisplayingFullscreen) return;
-    goFull();
     setTimeout(() => {
       if (!done && !video.webkitDisplayingFullscreen) { fullBtn.textContent = "⛶  Full screen"; fullBtn.style.display = ""; }
     }, 400);
