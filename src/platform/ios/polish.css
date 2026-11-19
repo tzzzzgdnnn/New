@@ -2,35 +2,81 @@
    frosted chrome, shimmer skeletons, rounded posters with press feedback and
    200–300 ms page/modal motion. Loaded after ios.css, iOS build only. */
 
+/* ── Design tokens ──────────────────────────────────────────────────────────
+   One source for color, spacing, radii, type and motion. Brand color follows
+   the user's accent (--red is set by applyAccentColor), so every surface that
+   reads --sp-accent recolors together. */
 html.sb-ios {
+  /* Brand: "Super" ember, a hot red that warms toward orange at its edge */
+  --sp-accent: var(--red, #e50914);
+  --sp-accent-2: var(--red2, #ff1f2a);
+  --sp-accent-warm: color-mix(in srgb, var(--sp-accent) 70%, #ff8a00);
+  --sp-accent-soft: color-mix(in srgb, var(--sp-accent) 16%, transparent);
+  --sp-accent-glow: color-mix(in srgb, var(--sp-accent) 38%, transparent);
+  --sp-brand-gradient: linear-gradient(135deg, var(--sp-accent-warm) 0%, var(--sp-accent) 45%, color-mix(in srgb, var(--sp-accent) 70%, #000) 100%);
+  /* System colors (dark appearance) */
+  --sp-label: #fff;
+  --sp-secondary: rgba(235, 235, 245, .6);
+  --sp-tertiary: rgba(235, 235, 245, .3);
+  --sp-success: #30d158;
+  --sp-danger: #ff453a;
+  --sp-warning: #ffd60a;
+  --sp-blue: #0a84ff;
+  --sp-group-bg: #1c1c1e;
+  --sp-separator: rgba(84, 84, 88, .65);
+  --sp-press: rgba(255, 255, 255, .08);
+  --sp-hairline: rgba(255, 255, 255, .08);
+  --sp-chrome-bg: rgba(12, 12, 14, .68);
+  --sp-chrome-blur: saturate(180%) blur(28px);
   /* 8-pt spacing */
-  --sp-1: 4px;
-  --sp-2: 8px;
-  --sp-3: 16px;
-  --sp-4: 24px;
-  --sp-5: 32px;
-  --sp-6: 48px;
-  /* Type scale */
+  --sp-space-1: 4px;
+  --sp-space-2: 8px;
+  --sp-space-3: 16px;
+  --sp-space-4: 24px;
+  --sp-space-5: 32px;
+  --sp-space-6: 48px;
+  /* Radii */
+  --sp-radius-sm: 8px;
+  --sp-radius-md: 10px;
+  --sp-radius-lg: 12px;
+  --sp-radius-xl: 16px;
+  --sp-radius-pill: 999px;
+  /* Type scale (iOS Dynamic Type, default size) */
   --fs-caption: 12px;
   --fs-footnote: 13px;
-  --fs-body: 15px;
+  --fs-subhead: 15px;
+  --fs-body: 17px;
   --fs-headline: 17px;
   --fs-title3: 20px;
   --fs-title2: 22px;
   --fs-title1: 28px;
   --fs-display: 34px;
-  /* Surfaces */
-  --poster-radius: 12px;
-  --poster-shadow: 0 2px 6px rgba(0, 0, 0, .35), 0 12px 28px rgba(0, 0, 0, .45);
-  --chrome-bg: rgba(12, 12, 14, .68);
-  --chrome-blur: saturate(180%) blur(28px);
-  --hairline: rgba(255, 255, 255, .08);
-  --focus-ring: 0 0 0 2px #0a0a0a, 0 0 0 4px rgba(255, 255, 255, .85);
-  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  /* Motion */
+  --sp-ease-out: cubic-bezier(.2, .8, .2, 1);
+  --sp-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --sp-dur-fast: 120ms;
+  --sp-dur: 200ms;
   --dur-page: 260ms;
   --dur-modal: 220ms;
-  --skel-base: #1a1a1c;
-  --skel-hi: #2a2a2d;
+  /* Surfaces */
+  --poster-radius: var(--sp-radius-lg);
+  --poster-shadow: 0 2px 6px rgba(0, 0, 0, .35), 0 12px 28px rgba(0, 0, 0, .45);
+  --focus-ring: 0 0 0 2px #0a0a0a, 0 0 0 4px rgba(255, 255, 255, .85);
+  --skel-base: #18181a;
+  --skel-hi: rgba(255, 255, 255, .06);
+
+  /* Legacy aliases (older rules still read these names) */
+  --sp-1: var(--sp-space-1);
+  --sp-2: var(--sp-space-2);
+  --sp-3: var(--sp-space-3);
+  --sp-4: var(--sp-space-4);
+  --sp-5: var(--sp-space-5);
+  --sp-6: var(--sp-space-6);
+  --sp-tint: var(--sp-accent);
+  --chrome-bg: var(--sp-chrome-bg);
+  --chrome-blur: var(--sp-chrome-blur);
+  --hairline: var(--sp-hairline);
+  --ease-out: var(--sp-ease-out);
   background: #000;
 }
 html.sb-ios body { background: var(--bg); font-feature-settings: "kern"; -webkit-font-smoothing: antialiased; }
@@ -115,30 +161,51 @@ html.sb-ios .sb-wide-item,
 html.sb-ios .sb-tape,
 html.sb-ios .episode-card { transition: transform .18s var(--ease-out); }
 
-/* Images shimmer until they arrive (the img paints over the background). */
+/* Images shimmer until they arrive. The sweep is a pseudo-element moved with
+   transform (compositor only) behind the image, and stops once the image has
+   loaded or failed (imageReady.js) or when there is no image at all. */
 html.sb-ios .card-poster,
 html.sb-ios .sb-wide-img,
 html.sb-ios .sb-tape,
-html.sb-ios .episode-thumb {
-  background: linear-gradient(100deg, var(--skel-base) 30%, var(--skel-hi) 50%, var(--skel-base) 70%) 0 0 / 300% 100%;
-  animation: spShimmerBg 1.4s linear infinite;
+html.sb-ios .episode-thumb { background: var(--skel-base); isolation: isolate; }
+html.sb-ios .card-poster::before,
+html.sb-ios .sb-wide-img::before,
+html.sb-ios .sb-tape::before,
+html.sb-ios .episode-thumb::before,
+.sp-skel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(100deg, transparent 20%, var(--skel-hi) 50%, transparent 80%);
+  transform: translate3d(-100%, 0, 0);
+  animation: spSweep 1.4s var(--sp-ease-out) infinite;
+  pointer-events: none;
 }
-html.sb-ios .card-poster.sp-img-ready,
-html.sb-ios .sb-wide-img.sp-img-ready,
-html.sb-ios .sb-tape.sp-img-ready,
-html.sb-ios .episode-thumb.sp-img-ready { animation: none; background: var(--skel-base); }
+html.sb-ios .sp-img-ready::before,
+html.sb-ios .card-poster:has(> .no-poster)::before,
+html.sb-ios .sb-wide-img:not(:has(img))::before { content: none; }
+@keyframes spSweep { to { transform: translate3d(100%, 0, 0); } }
+/* Images fade in as they arrive (the class lands on load, so an image that
+   is never marked simply shows without the fade). */
+html.sb-ios .card-poster.sp-img-ready > img,
+html.sb-ios .sb-wide-img.sp-img-ready > img,
+html.sb-ios .sb-tape.sp-img-ready > img { animation: spImgIn .35s ease both; }
+@keyframes spImgIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* ── Skeletons ──────────────────────────────────────────────────────────── */
 .sp-skel {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
   border-radius: var(--poster-radius, 12px);
-  background: linear-gradient(100deg, var(--skel-base) 30%, var(--skel-hi) 50%, var(--skel-base) 70%) 0 0 / 300% 100%;
-  animation: spShimmerBg 1.4s linear infinite;
+  background: var(--skel-base, #18181a);
 }
-.sp-skel-title { width: 40%; max-width: 220px; height: 20px; border-radius: 6px; margin-bottom: var(--sp-3); }
+.sp-skel-title { width: 40%; max-width: 220px; height: 20px; border-radius: 6px; margin-bottom: var(--sp-space-3); }
 .sp-skel-poster { aspect-ratio: 2 / 3; width: 100%; }
 .sp-skel-wide { aspect-ratio: 16 / 9; width: 100%; }
-.sp-skel-bill { height: min(70vh, 560px); border-radius: 0; margin-bottom: var(--sp-3); }
-@keyframes spShimmerBg { from { background-position: 100% 0; } to { background-position: -50% 0; } }
+.sp-skel-bill { height: min(70vh, 560px); border-radius: 0; margin-bottom: var(--sp-space-3); }
+.sp-skel-line { height: 12px; border-radius: 6px; margin-top: 8px; }
 
 /* ── Motion: pages and modals ───────────────────────────────────────────── */
 html.sb-ios .main > div { animation: spPageIn var(--dur-page) var(--ease-out) both; }
@@ -172,9 +239,175 @@ html.sb-ios .card:focus-visible .card-poster { box-shadow: var(--focus-ring), va
   html.sb-ios .modal-overlay,
   html.sb-ios .modal-overlay > div,
   .sp-splash-icon { animation: none; }
-  html.sb-ios .card-poster,
-  html.sb-ios .sb-wide-img,
-  html.sb-ios .sb-tape,
-  html.sb-ios .episode-thumb,
-  .sp-skel { animation-duration: 3s; }
+  html.sb-ios .card-poster::before,
+  html.sb-ios .sb-wide-img::before,
+  html.sb-ios .sb-tape::before,
+  html.sb-ios .episode-thumb::before,
+  .sp-skel::before { animation-duration: 3s; }
+}
+
+/* ── Brand identity ─────────────────────────────────────────────────────── */
+/* The "S" mark, primary actions and progress share the ember gradient. */
+html.sb-ios .sp-topbar-s,
+html.sb-ios .sb-bill-n {
+  background: var(--sp-brand-gradient);
+  box-shadow: 0 4px 14px var(--sp-accent-glow), inset 0 1px 0 rgba(255, 255, 255, .25);
+}
+html.sb-ios .sb-bill-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  font-size: 18px;
+  line-height: 1;
+  color: #fff;
+}
+html.sb-ios .btn-primary {
+  background: var(--sp-brand-gradient);
+  box-shadow: 0 6px 20px var(--sp-accent-glow), inset 0 1px 0 rgba(255, 255, 255, .18);
+}
+html.sb-ios .card-progress-fill,
+html.sb-ios .sb-wide-bar div {
+  background: linear-gradient(90deg, var(--sp-accent) 0%, var(--sp-accent-warm) 100%);
+  box-shadow: 0 0 8px var(--sp-accent-glow);
+}
+html.sb-ios .sb-rank-num { -webkit-text-stroke-color: var(--sp-accent); }
+html.sb-ios .hero-type,
+html.sb-ios .sb-nostalgia-kicker { color: var(--sp-accent-2); }
+html.sb-ios ::selection { background: var(--sp-accent-soft); }
+html.sb-ios { accent-color: var(--sp-accent); caret-color: var(--sp-accent); }
+
+/* ── Tab bar: springy indicator and icon pop on the active tab ──────────── */
+@media (max-width: 760px) and (orientation: portrait) {
+  html.sb-ios .sidebar-btn.active::after {
+    background: var(--sp-brand-gradient);
+    box-shadow: 0 0 10px var(--sp-accent-glow);
+    animation: spTabIn .38s var(--sp-spring) both;
+  }
+  html.sb-ios .sidebar-btn.active svg { animation: spTabPop .32s var(--sp-spring) both; }
+}
+@keyframes spTabIn { from { opacity: 0; transform: scaleX(.2); } to { opacity: 1; transform: none; } }
+@keyframes spTabPop { 0% { transform: scale(.86); } 100% { transform: none; } }
+
+/* ── Press states (haptic-style feedback: a quick dip, a springy return) ─ */
+html.sb-ios .season-btn,
+html.sb-ios .sp-cell,
+html.sb-ios .sp-btn,
+html.sb-ios .sb-dub-btn,
+html.sb-ios .api-status-btn,
+html.sb-ios .context-menu-item { transition: transform .22s var(--sp-spring), opacity .15s ease, background-color .2s ease; }
+html.sb-ios .season-btn:active,
+html.sb-ios .sp-btn:active,
+html.sb-ios .api-status-btn:active { transform: scale(.95); transition-duration: var(--sp-dur-fast); }
+html.sb-ios .sp-cell:active,
+html.sb-ios .context-menu-item:active { background-color: var(--sp-press); transition-duration: 0s; }
+
+/* Billboard pager: transform-only indicator and 44 pt tap targets */
+html.sb-ios .sb-bill-dots { gap: 4px; }
+html.sb-ios .sb-bill-dots i {
+  position: relative;
+  width: 26px;
+  height: 3px;
+  background: #fff;
+  opacity: .3;
+  transform: scaleX(.7);
+  transition: transform .3s var(--sp-ease-out), opacity .3s ease;
+}
+html.sb-ios .sb-bill-dots i.on { width: 26px; opacity: 1; transform: none; }
+html.sb-ios .sb-bill-dots i::after { content: ""; position: absolute; left: -2px; right: -2px; top: -20px; bottom: -20px; }
+
+/* ── Empty and error states ─────────────────────────────────────────────── */
+html.sb-ios .empty-state {
+  gap: var(--sp-space-2);
+  padding: 72px var(--sp-space-4) var(--sp-space-6);
+  animation: spEmptyIn .4s var(--sp-ease-out) both;
+}
+html.sb-ios .empty-state svg {
+  width: 72px;
+  height: 72px;
+  padding: 20px;
+  margin-bottom: var(--sp-space-2);
+  border-radius: 50%;
+  color: var(--sp-accent);
+  opacity: 1;
+  background: radial-gradient(circle at 30% 25%, var(--sp-accent-soft), rgba(255, 255, 255, .04) 70%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06);
+}
+html.sb-ios .empty-state h3 {
+  font: 700 var(--fs-title3) -apple-system, system-ui, sans-serif;
+  letter-spacing: -.2px;
+  color: var(--sp-label);
+}
+html.sb-ios .empty-state p { max-width: 300px; font-size: var(--fs-subhead); line-height: 1.45; color: var(--sp-secondary); }
+@keyframes spEmptyIn { from { opacity: 0; transform: translate3d(0, 10px, 0); } to { opacity: 1; transform: none; } }
+
+.sp-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 60vh;
+  padding: 48px 24px;
+  text-align: center;
+  font-family: -apple-system, system-ui, sans-serif;
+  animation: spEmptyIn .4s var(--sp-ease-out, ease-out) both;
+}
+.sp-error-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  margin-bottom: 6px;
+  border-radius: 50%;
+  font-size: 30px;
+  color: var(--sp-accent, #e50914);
+  background: radial-gradient(circle at 30% 25%, var(--sp-accent-soft, rgba(229, 9, 20, .16)), rgba(255, 255, 255, .04) 70%);
+}
+.sp-error-title { font: 700 20px -apple-system, system-ui, sans-serif; color: #fff; }
+.sp-error-text { max-width: 320px; font: 400 15px/1.45 -apple-system, system-ui, sans-serif; color: var(--sp-secondary, rgba(235, 235, 245, .6)); }
+.sp-error-detail { max-width: 320px; margin: 4px 0 0; font: 12px/1.4 ui-monospace, Menlo, monospace; color: var(--sp-tertiary, rgba(235, 235, 245, .3)); white-space: pre-wrap; word-break: break-word; }
+.sp-error-actions { display: flex; gap: 10px; margin-top: 14px; }
+.sp-error-actions button {
+  min-height: 44px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: var(--sp-radius-pill, 999px);
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+  font: 600 16px -apple-system, system-ui, sans-serif;
+  transition: transform .2s var(--sp-spring, ease);
+}
+.sp-error-actions button.is-primary { background: var(--sp-brand-gradient, #e50914); box-shadow: 0 6px 20px var(--sp-accent-glow, rgba(229, 9, 20, .35)); }
+.sp-error-actions button:active { transform: scale(.95); }
+
+/* Lazy page chunk loading (Suspense fallback) */
+.sp-page-loading { display: flex; align-items: center; justify-content: center; min-height: 50vh; }
+.sp-page-loading span {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255, 255, 255, .12);
+  border-top-color: var(--sp-accent, #e50914);
+  animation: spSpin .8s linear infinite;
+}
+@keyframes spSpin { to { transform: rotate(360deg); } }
+
+/* ── Reduce Motion (Settings switch) mirrors the system setting ─────────── */
+body.no-anim .main > div,
+body.no-anim .modal-overlay,
+body.no-anim .modal-overlay > div,
+body.no-anim .empty-state,
+body.no-anim .sp-error,
+body.no-anim .sidebar-btn.active::after,
+body.no-anim .sidebar-btn.active svg,
+body.no-anim .sp-img-ready > img { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  html.sb-ios .empty-state,
+  .sp-error,
+  html.sb-ios .sidebar-btn.active::after,
+  html.sb-ios .sidebar-btn.active svg { animation: none; }
 }
