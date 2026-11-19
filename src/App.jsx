@@ -515,11 +515,31 @@ export default function App() {
           return [update, ...prev];
         }
         const updated = [...prev];
-        updated[idx] = { ...updated[idx], ...update };
+        // iOS: the native downloader's record is the whole truth; nothing
+        // from an earlier render is kept on top of it.
+        updated[idx] = IS_IOS ? update : { ...updated[idx], ...update };
         return updated;
       });
     });
     return () => window.electron.offDownloadProgress(handler);
+  }, []);
+
+  // iOS: re-read every download from the native downloader when the app
+  // comes back to the foreground (events can't reach a suspended page).
+  useEffect(() => {
+    if (!IS_IOS || !window.electron?.getDownloads) return;
+    const sync = () => {
+      if (document.visibilityState !== "visible") return;
+      window.electron.getDownloads().then((list) => {
+        if (Array.isArray(list)) setDownloads(list);
+      });
+    };
+    document.addEventListener("visibilitychange", sync);
+    window.addEventListener("pageshow", sync);
+    return () => {
+      document.removeEventListener("visibilitychange", sync);
+      window.removeEventListener("pageshow", sync);
+    };
   }, []);
 
   const handleDownloadStarted = useCallback((newEntry) => {

@@ -430,3 +430,9 @@ export function installWebviewPolyfill() {
   );
   scan(document.documentElement);
 }
+
+/** Audio of the title on screen, for the download picker's subtitle default. */
+export const currentAudioMode = () => {
+  const c = currentCtx();
+  return { isAnime: !!c.isAnime, dub: dubModeOf(c) === "dub" };
+};

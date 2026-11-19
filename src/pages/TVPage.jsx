@@ -3097,7 +3097,6 @@ export default function TVPage({
           mediaType="tv"
           season={downloadTarget?.season ?? selectedSeason}
           episode={downloadTarget?.episode ?? selectedEp?.episode_number}
-          runtimeMin={d.episode_run_time?.[0] || 0}
           posterPath={d.poster_path}
           tmdbId={item.id}
         />

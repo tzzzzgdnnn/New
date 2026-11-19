@@ -1520,7 +1520,6 @@ export default function MoviePage({
           onDownloadStarted={onDownloadStarted}
           mediaId={item.id}
           mediaType="movie"
-          runtimeMin={d.runtime || 0}
           posterPath={d.poster_path}
           tmdbId={item.id}
         />
