@@ -1,26 +1,61 @@
-// <webview> stand-in for iOS: the desktop app renders Electron <webview> tags;
-// in WKWebView we fill each one with a sandboxed <iframe> inside the element's
-// own box (no native view stacked over the web view). Sandbox without
-// allow-popups / allow-top-navigation blocks popups and top-frame redirects.
+// <webview> stand-in for iOS. The desktop app renders Electron <webview> tags;
+// in WKWebView each one gets a sandboxed <iframe> inside the element's own box
+// (no native view stacked over the web view). The sandbox has no
+// allow-popups / allow-top-navigation, which blocks popups and redirects.
+//
+// When the native bridge is available, every play is handed to the native
+// player instead: it loads the embeds in a hidden web view, captures the
+// stream and plays it in StreambertPlayer. The iframe is only the fallback.
 import { mirrorsFor } from "./servers";
 import { PLAYER_SOURCES, sourcesForContent, nativeServerList } from "../../utils/api";
+
+const LOAD_TIMEOUT_MS = 8000;
+const MAX_CANDIDATES = 10;
+const SELECT_RETRY_MS = 700;
+const SELECT_RETRIES = 4;
+
+const log = (...args) => console.log("[native]", ...args);
+
+/** Read a JSON value the app stored with storage.set (streambert_ prefix). */
+function readStored(key, fallback = null) {
+  try {
+    const raw = localStorage.getItem("streambert_" + key);
+    return raw ? (JSON.parse(raw) ?? fallback) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const currentCtx = () => window.__sbCtx || {};
+const dubModeOf = (ctx) => (ctx.dubMode === "dub" ? "dub" : "sub");
+const isBlank = (url) => !url || url === "about:blank";
+const nativeAvailable = () => !!window.webkit?.messageHandlers?.sbResolve;
+
+/** Server list for the native server menu, built from the latest context. */
+function serverListFor(ctx) {
+  return nativeServerList(!!ctx.isAnime, dubModeOf(ctx));
+}
+
+/**
+ * Id of the playing server as the native menu knows it: anime servers carry
+ * the audio mode ("vidnest:dub"), everything else is the plain id.
+ */
+function menuId(sourceId, ctx) {
+  return ctx.isAnime && sourceId ? `${sourceId}:${dubModeOf(ctx)}` : sourceId;
+}
 
 // Tell the native player what is playing (title, type, episode) and which
 // servers it may offer in its own server switcher.
 function postContext(url) {
   const h = window.webkit?.messageHandlers?.sbContext;
-  if (!h || !url || url === "about:blank") return;
-  let current = null;
-  try {
-    const raw = localStorage.getItem("streambert_playerSource");
-    current = raw ? JSON.parse(raw) : null;
-  } catch {}
+  if (!h || isBlank(url)) return;
+  const ctx = currentCtx();
   try {
     h.postMessage({
       url,
-      current,
-      ctx: window.__sbCtx || {},
-      servers: nativeServerList(!!(window.__sbCtx || {}).isAnime),
+      current: menuId(readStored("playerSource"), ctx),
+      ctx,
+      servers: serverListFor(ctx),
     });
   } catch {}
 }
@@ -32,31 +67,8 @@ async function subtitleContext() {
   try {
     wyzieKey = (await window.electron?.secureGet?.("wyzieApiKey")) || null;
   } catch {}
-  let subLang = "en";
-  try {
-    const raw = localStorage.getItem("streambert_subtitleLang");
-    if (raw) subLang = JSON.parse(raw) || "en";
-  } catch {}
-  return { wyzieKey, subLang };
+  return { wyzieKey, subLang: readStored("subtitleLang", "en") || "en" };
 }
-
-const LOAD_TIMEOUT_MS = 8000;
-const MAX_CANDIDATES = 7;
-
-// ── Native playback ──────────────────────────────────────────────────────
-// Every play goes to the native player: native loads the embed in a hidden
-// web view, captures the stream and opens StreambertPlayer. Candidates are
-// the chosen server first, then other enabled servers for the same title.
-const pending = new Map(); // token -> callback(result)
-window.__sbNativeResult = (r) => {
-  const cb = r && pending.get(r.token);
-  if (cb) {
-    pending.delete(r.token);
-    cb(r);
-  }
-};
-let _onNativeClosed = null;
-window.__sbNativeClosed = () => _onNativeClosed && _onNativeClosed();
 
 const withParams = (src, url) => {
   try {
@@ -68,188 +80,214 @@ const withParams = (src, url) => {
   }
 };
 
-function buildCandidates(url) {
-  const ctx = window.__sbCtx || {};
-  let current = null;
+/** TMDB-route URL of a source for the current title, or null. */
+function tmdbUrl(src, ctx) {
+  const id = ctx.tmdbId;
+  if (!id) return null;
   try {
-    current = JSON.parse(localStorage.getItem("streambert_playerSource") || "null");
-  } catch {}
-  const cur = PLAYER_SOURCES.find((s) => s.id === current);
+    if (ctx.type === "tv") {
+      if (src.movieOnly || !src.tvUrl) return null;
+      const season = ctx.tmdbSeason ?? ctx.season ?? 1;
+      const episode = ctx.tmdbEpisode ?? ctx.episode ?? 1;
+      return withParams(src, src.tvUrl(id, season, episode));
+    }
+    return withParams(src, src.movieUrl(id));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ordered list of embeds the native player tries: the page's current server
+ * (and its mirrors) first, then the anime routes for the chosen Sub/Dub mode,
+ * then every other server for this kind of content. Ids match the native
+ * server menu so the playing server gets its checkmark.
+ */
+function buildCandidates(url) {
+  const ctx = currentCtx();
   const isAnime = !!ctx.isAnime;
-  const mode = ctx.dubMode === "dub" ? "dub" : "sub";
+  const mode = dubModeOf(ctx);
+  const suffix = mode === "dub" ? " · Dub" : " · Sub";
+  const cur = PLAYER_SOURCES.find((s) => s.id === readStored("playerSource"));
   const list = [];
   const seen = new Set();
-  const add = (id, label, u) => {
+  const add = (src, u) => {
     if (!u || !/^https?:/.test(u) || seen.has(u) || list.length >= MAX_CANDIDATES) return;
     seen.add(u);
+    const id = src ? menuId(src.id, ctx) : "current";
+    const label = (src?.label || "Server") + (isAnime && src ? suffix : "");
     list.push({ id, label, url: u });
   };
   const sources = sourcesForContent(isAnime).filter((s) => !s.async && !s.idType);
-  const ep = ctx.episode ?? 1;
+  const animeRoute = (s) => {
+    if (!isAnime || !s.animeUrl || !ctx.anilistId) return null;
+    try {
+      return s.animeUrl(ctx.anilistId, ctx.episode ?? 1, mode);
+    } catch {
+      return null;
+    }
+  };
 
-  // Anime: the dedicated anime routes (AniList id, chosen Sub/Dub) go first,
-  // so Dub really plays dubbed instead of a TMDB server's subbed stream.
-  if (isAnime && ctx.anilistId) {
-    for (const s of sources) {
-      if (!s.animeUrl) continue;
-      try {
-        add(`${s.id}:${mode}`, `${s.label} · ${mode === "dub" ? "Dub" : "Sub"}`, s.animeUrl(ctx.anilistId, ep, mode));
-      } catch {}
-    }
+  // 1. The server the viewer picked (the page already built its URL).
+  if (!isBlank(url)) {
+    add(cur, url);
+    for (const m of mirrorsFor(url)) add(cur, m);
   }
-  // The page's own URL (current server) and its mirrors. Skipped for Dub when
-  // it is a TMDB-route server, since those only carry the subbed version.
-  const curIsAnimeRoute = !!(cur?.animeUrl && ctx.anilistId);
-  if (!(isAnime && mode === "dub" && !curIsAnimeRoute)) {
-    const curId = cur ? (curIsAnimeRoute && isAnime ? `${cur.id}:${mode}` : cur.id) : "current";
-    add(curId, cur?.label || "Server", url);
-    for (const m of mirrorsFor(url)) add(curId, cur?.label || "Server", m);
+  // 2. Anime routes (AniList id + chosen mode) carry real dubs.
+  for (const s of sources) add(s, animeRoute(s));
+  // 3. Every other server by TMDB id.
+  for (const s of sources) {
+    if (!animeRoute(s)) add(s, tmdbUrl(s, ctx));
   }
-  // Remaining servers via TMDB ids (Sub only for anime).
-  const id = ctx.tmdbId;
-  if (id && !(isAnime && mode === "dub")) {
-    for (const s of sources) {
-      if (isAnime && s.animeUrl && ctx.anilistId) continue;
-      let u = null;
-      try {
-        if (ctx.type === "tv") {
-          if (s.movieOnly || !s.tvUrl) continue;
-          u = s.tvUrl(id, ctx.tmdbSeason ?? ctx.season ?? 1, ctx.tmdbEpisode ?? ctx.episode ?? 1);
-        } else {
-          u = s.movieUrl(id);
-        }
-      } catch {}
-      if (u) add(s.id, s.label, withParams(s, u));
-    }
-  }
-  if (!list.length) add(cur?.id || "current", cur?.label || "Server", url);
   return list;
 }
 
-const nativeAvailable = () => !!window.webkit?.messageHandlers?.sbResolve;
+// ── Native playback bookkeeping ──────────────────────────────────────────
+const pending = new Map(); // token -> callback(result)
+window.__sbNativeResult = (r) => {
+  const cb = r && pending.get(r.token);
+  if (!cb) return;
+  pending.delete(r.token);
+  cb(r);
+};
+let onNativeClosed = null;
+window.__sbNativeClosed = () => onNativeClosed?.();
+
+// One window listener for servers picked in the native player; it serves the
+// most recently upgraded <webview> that is still in the page.
+const selectTargets = new Set();
+window.addEventListener("sb-select-server", () => {
+  for (const t of [...selectTargets]) {
+    if (!t.wv.isConnected) selectTargets.delete(t);
+    else t.onSelect();
+  }
+});
 
 function upgrade(wv) {
   if (wv.__sbUpgraded) return;
   wv.__sbUpgraded = true;
   const iframe = document.createElement("iframe");
-  iframe.setAttribute(
-    "sandbox",
-    "allow-scripts allow-same-origin allow-forms allow-presentation",
-  );
-  iframe.setAttribute(
-    "allow",
-    "autoplay; fullscreen; picture-in-picture; encrypted-media",
-  );
+  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-presentation");
+  iframe.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media");
   iframe.setAttribute("allowfullscreen", "");
   iframe.setAttribute("playsinline", "");
   iframe.setAttribute("referrerpolicy", "origin");
-  iframe.style.cssText =
-    "position:absolute;inset:0;width:100%;height:100%;border:0;background:#000";
+  iframe.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;background:#000";
   wv.appendChild(iframe);
 
   let timer = null;
-  let candidates = [];
+  let mirrors = [];
   const fire = (name) => wv.dispatchEvent(new Event(name));
 
   // Placeholder shown in the web player box while/after native playback.
   const card = document.createElement("div");
   card.className = "sb-native-card";
-  card.style.cssText =
-    "position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#000;color:#d4d4d4;font:500 14px -apple-system,system-ui,sans-serif;text-align:center;padding:16px";
   const cardText = document.createElement("div");
   const cardBtn = document.createElement("button");
+  cardBtn.className = "sb-native-play";
   cardBtn.textContent = "▶  Play";
-  cardBtn.style.cssText =
-    "min-height:44px;min-width:120px;padding:0 22px;border:0;border-radius:22px;background:#e50914;color:#fff;font:600 16px -apple-system,system-ui,sans-serif";
   card.append(cardText, cardBtn);
   wv.appendChild(card);
   const note = document.createElement("div");
+  note.className = "sb-native-note";
   note.textContent = "Native player unavailable for this source";
-  note.style.cssText =
-    "position:absolute;left:8px;bottom:8px;padding:4px 10px;border-radius:12px;background:rgba(0,0,0,.7);color:#d4d4d4;font:500 12px -apple-system,system-ui,sans-serif;pointer-events:none;display:none";
   wv.appendChild(note);
-  const showCard = (text, btn) => {
+  const showCard = (text, withButton) => {
     cardText.textContent = text;
-    cardBtn.style.display = btn ? "" : "none";
+    cardBtn.style.display = withButton ? "" : "none";
     card.style.display = "flex";
   };
   const hideCard = () => (card.style.display = "none");
 
-  let nativeFor = null;
+  let nativeFor = null; // URL the native player is handling
+  let nativeToken = null;
   let lastNativeAt = 0;
+
   const playNative = (url) => {
-    lastNativeAt = Date.now();
+    // A newer play replaces the previous request; drop its callback.
+    if (nativeToken) pending.delete(nativeToken);
     const token = Math.random().toString(36).slice(2);
+    nativeToken = token;
+    lastNativeAt = Date.now();
     nativeFor = url;
+    clearTimeout(timer);
     iframe.src = "about:blank";
     showCard("Opening the native player…", false);
     note.style.display = "none";
     fire("dom-ready");
     fire("did-finish-load");
     pending.set(token, (r) => {
-      if (nativeFor !== url) return;
+      if (nativeFor !== url || nativeToken !== token) return;
       if (r.ok) {
+        log("playing", r.server);
         showCard("Playing in the native player", true);
-      } else {
-        // Every server failed natively: visible web player + small note.
-        hideCard();
-        nativeFor = null;
-        loadUrl(url, false, true);
-        note.style.display = "";
-        setTimeout(() => (note.style.display = "none"), 5000);
+        return;
       }
+      // Every server failed natively: visible web player + a short note.
+      log("all servers failed, showing the web player");
+      hideCard();
+      nativeFor = null;
+      loadUrl(url, { webOnly: true });
+      note.style.display = "";
+      setTimeout(() => (note.style.display = "none"), 5000);
     });
-    _onNativeClosed = () => {
+    onNativeClosed = () => {
       if (nativeFor === url) showCard("Playback closed", true);
     };
-    // Let the page publish its context (title, ids) first.
+    // Give the page a tick to publish its context (title, ids, Sub/Dub).
     setTimeout(async () => {
+      if (nativeToken !== token) return;
       postContext(url);
       const subCtx = await subtitleContext();
+      if (nativeToken !== token) return;
+      const ctx = currentCtx();
+      const candidates = buildCandidates(url);
+      log("resolve", candidates.map((c) => `${c.id} ${c.url}`));
       try {
         window.webkit.messageHandlers.sbResolve.postMessage({
           token,
-          candidates: buildCandidates(url),
-          ctx: { ...(window.__sbCtx || {}), ...subCtx },
-          servers: nativeServerList(!!(window.__sbCtx || {}).isAnime),
+          candidates,
+          ctx: { ...ctx, ...subCtx },
+          current: candidates[0]?.id ?? null,
+          servers: serverListFor(ctx),
         });
       } catch {
         pending.delete(token);
         hideCard();
-        loadUrl(url, false, true);
+        loadUrl(url, { webOnly: true });
       }
     }, 60);
   };
+
   cardBtn.addEventListener("click", () => {
     const u = wv.getAttribute("src");
-    if (u && u !== "about:blank") playNative(u);
+    if (!isBlank(u)) playNative(u);
   });
 
-  const loadUrl = (url, isRetry, webOnly) => {
-    if (!isRetry && !webOnly && url && url !== "about:blank" && nativeAvailable()) {
-      clearTimeout(timer);
+  const loadUrl = (url, { isMirror = false, webOnly = false } = {}) => {
+    clearTimeout(timer);
+    if (!isMirror && !webOnly && !isBlank(url) && nativeAvailable()) {
       playNative(url);
       return;
     }
-    if (!url || url === "about:blank") {
+    if (isBlank(url)) {
       nativeFor = null;
       hideCard();
     }
-    clearTimeout(timer);
-    if (!isRetry) candidates = mirrorsFor(url);
+    if (!isMirror) mirrors = mirrorsFor(url);
     iframe.src = url || "about:blank";
-    if (!url || url === "about:blank") return;
+    if (isBlank(url)) return;
     postContext(url);
     timer = setTimeout(() => {
-      // no load event in time -> next mirror, else report failure
-      const next = candidates.shift();
-      if (next) loadUrl(next, true);
+      // No load event in time: next mirror, else report the failure.
+      const next = mirrors.shift();
+      if (next) loadUrl(next, { isMirror: true });
       else fire("did-fail-load");
     }, LOAD_TIMEOUT_MS);
   };
 
   iframe.addEventListener("load", () => {
-    if (!iframe.src || iframe.src === "about:blank") return;
+    if (isBlank(iframe.src)) return;
     clearTimeout(timer);
     fire("dom-ready");
     fire("did-finish-load");
@@ -261,10 +299,9 @@ function upgrade(wv) {
     set: (v) => wv.setAttribute("src", v),
   });
   wv.executeJavaScript = (code) => {
-    // Works only for same-origin frames; cross-origin embeds reject (callers catch).
+    // Same-origin frames only; cross-origin embeds reject (callers catch).
     try {
-      const w = iframe.contentWindow;
-      return Promise.resolve(w.eval(code));
+      return Promise.resolve(iframe.contentWindow.eval(code));
     } catch (e) {
       return Promise.reject(e);
     }
@@ -274,20 +311,25 @@ function upgrade(wv) {
   wv.getURL = () => iframe.src;
   wv.reload = () => loadUrl(wv.getAttribute("src"));
 
-  // Server picked in the native player: the page swaps the URL, which
-  // reopens the player. If the URL didn't change (same server, or the page
-  // was still waiting on anime data), reopen it ourselves so one tap is enough.
-  window.addEventListener("sb-select-server", () => {
-    if (!wv.isConnected) return;
-    const picked = Date.now();
-    const retry = (left) =>
-      setTimeout(() => {
-        if (lastNativeAt >= picked) return;
-        const u = wv.getAttribute("src");
-        if (u && u !== "about:blank" && nativeAvailable()) playNative(u);
-        else if (left > 0) retry(left - 1);
-      }, 700);
-    retry(4);
+  // Server picked in the native player: the page swaps the URL, which reopens
+  // the player through the src observer. When the URL does not change (same
+  // server, or the page is still waiting on anime data) reopen it here, once.
+  let selectTimer = null;
+  selectTargets.add({
+    wv,
+    onSelect: () => {
+      clearTimeout(selectTimer);
+      const picked = Date.now();
+      const retry = (left) => {
+        selectTimer = setTimeout(() => {
+          if (lastNativeAt >= picked || !wv.isConnected) return;
+          const u = wv.getAttribute("src");
+          if (!isBlank(u) && nativeAvailable()) playNative(u);
+          else if (left > 0) retry(left - 1);
+        }, SELECT_RETRY_MS);
+      };
+      retry(SELECT_RETRIES);
+    },
   });
 
   new MutationObserver(() => loadUrl(wv.getAttribute("src"))).observe(wv, {
@@ -303,8 +345,9 @@ export function installWebviewPolyfill() {
     if (root.tagName === "WEBVIEW") upgrade(root);
     root.querySelectorAll?.("webview").forEach(upgrade);
   };
-  new MutationObserver((muts) =>
-    muts.forEach((m) => m.addedNodes.forEach(scan)),
-  ).observe(document.documentElement, { childList: true, subtree: true });
+  new MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach(scan))).observe(
+    document.documentElement,
+    { childList: true, subtree: true },
+  );
   scan(document.documentElement);
 }

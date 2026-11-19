@@ -775,23 +775,27 @@ export const fetchEpisodeGroup = async (groupId, apiKey) => {
   return data;
 };
 
+// Native player server list. Anime titles list only the viewer's chosen
+// audio mode: anime-route servers appear once as "Vidnest · Sub" or
+// "Vidnest · Dub". In Dub mode the TMDB-route servers are left out because
+// they only carry the subbed version (unless no anime route exists at all).
+export const nativeServerList = (isAnime, dubMode = "sub") => {
+  const mode = dubMode === "dub" ? "dub" : "sub";
+  const suffix = mode === "dub" ? "Dub" : "Sub";
+  const usable = sourcesForContent(isAnime).filter((s) => !s.async);
+  if (!isAnime) return usable.map((s) => ({ id: s.id, label: s.label }));
+  const animeRoutes = usable.filter((s) => s.animeUrl);
+  const list = mode === "dub" && animeRoutes.length ? animeRoutes : usable;
+  return list.map((s) =>
+    s.animeUrl
+      ? { id: `${s.id}:${mode}`, label: `${s.label} · ${suffix}` }
+      : { id: s.id, label: s.label },
+  );
+};
+
 // Server list split by content type: anime titles get anime servers only,
 // movies/series get the regular servers only (anime-only ones hidden).
 // Falls back to everything if a type would end up with no servers.
-// Native server list. Anime: dedicated anime routes are split into Sub and Dub
-// entries ("vidnest:sub" / "vidnest:dub") so dub is one tap away.
-export const nativeServerList = (isAnime) => {
-  const out = [];
-  for (const s of sourcesForContent(isAnime)) {
-    if (s.async) continue;
-    if (isAnime && s.animeUrl) {
-      out.push({ id: `${s.id}:sub`, label: `${s.label} · Sub` });
-      out.push({ id: `${s.id}:dub`, label: `${s.label} · Dub` });
-    } else out.push({ id: s.id, label: s.label });
-  }
-  return out;
-};
-
 export const sourcesForContent = (isAnime, list = PLAYER_SOURCES) => {
   const animeOk = (s) => !!(s.tag || s.supportsAnime || s.animeTmdb);
   const out = isAnime ? list.filter(animeOk) : list.filter((s) => !s.tag);
