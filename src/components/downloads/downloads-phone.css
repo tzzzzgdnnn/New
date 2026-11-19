@@ -341,3 +341,6 @@
 /* Anime audio: Dub / Sub copies told apart at a glance. */
 .pd-chip--dub { background: #e50914; color: #fff; }
 .pd-chip--sub { background: #2a62d6; color: #fff; }
+
+/* Resolutions the stream doesn't offer. */
+.pd-row--off { opacity: .4; }
