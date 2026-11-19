@@ -57,6 +57,8 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <!-- Runs on phones and on TVs (Fire TV Stick, Android TV): no touchscreen needed. -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />

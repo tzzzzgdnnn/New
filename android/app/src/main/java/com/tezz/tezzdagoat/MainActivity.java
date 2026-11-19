@@ -6,7 +6,13 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.os.Bundle;
+import android.Manifest;
+import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import org.json.JSONArray;
 import android.view.KeyEvent;
 import android.webkit.JavascriptInterface;
 import android.view.View;
@@ -53,6 +59,8 @@ public class MainActivity extends BridgeActivity {
                     Pattern.CASE_INSENSITIVE);
     private final Set<String> seen = Collections.synchronizedSet(new HashSet<>());
     private static final int VOICE_REQ = 4711;
+    private static final int MIC_PERM_REQ = 4712;
+    private SpeechRecognizer recognizer;
     private boolean tv;
     private View fullView;
     private WebChromeClient.CustomViewCallback fullCallback;
@@ -66,6 +74,13 @@ public class MainActivity extends BridgeActivity {
         tv = isTv();
         if (!tv) setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
         if (tv) setupTv(wv, ws); else requestHighRefreshRate();
+        wv.addJavascriptInterface(new Object() {
+            @JavascriptInterface public boolean available() { return true; }
+            @JavascriptInterface public void start() { runOnUiThread(MainActivity.this::startVoice); }
+            @JavascriptInterface public void stop() { runOnUiThread(MainActivity.this::stopVoice); }
+        }, "SbVoice");
+        // The page was already loading before these bridges (and the TV user agent) were added: load it once more.
+        wv.post(wv::reload);
         ws.setMediaPlaybackRequiresUserGesture(false);
         ws.setSupportMultipleWindows(false);
         ws.setJavaScriptCanOpenWindowsAutomatically(false);
@@ -139,8 +154,6 @@ public class MainActivity extends BridgeActivity {
             @JavascriptInterface public boolean hasVoice() { return voiceAvailable(); }
             @JavascriptInterface public void startVoice() { runOnUiThread(MainActivity.this::startVoice); }
         }, "SbTV");
-        // The page was already loading before the UA changed: load it once more.
-        wv.post(wv::reload);
     }
 
     private boolean voiceAvailable() {
@@ -150,29 +163,89 @@ public class MainActivity extends BridgeActivity {
         } catch (Throwable t) { return false; }
     }
 
-    private void startVoice() {
+    private void js(String code) {
         WebView wv = getBridge().getWebView();
-        if (!voiceAvailable()) {
-            // Fire TV: no speech screen for apps; the on-screen keyboard's mic
-            // dictates into the focused search box instead.
-            wv.evaluateJavascript("(function(){var i=document.querySelector('.nfs input');if(i){i.focus();i.click();}})()", null);
+        wv.post(() -> wv.evaluateJavascript(code, null));
+    }
+    private void voiceState(String st) { js("window.__sbVoiceState&&window.__sbVoiceState(" + JSONObject.quote(st) + ")"); }
+
+    /** Mic search: asks for the mic once, listens in-app, sends live words and the alternatives back. */
+    private void startVoice() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.RECORD_AUDIO}, MIC_PERM_REQ);
             return;
         }
+        if (SpeechRecognizer.isRecognitionAvailable(this)) { listenInApp(); return; }
+        if (voiceAvailable()) {
+            Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH);
+            i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
+            i.putExtra(RecognizerIntent.EXTRA_PROMPT, "Search movies, shows, anime");
+            try { startActivityForResult(i, VOICE_REQ); return; } catch (Throwable ignored) {}
+        }
+        // Fire TV: no speech service for apps; the keyboard's mic dictates into the search box.
+        voiceState("keyboard");
+        js("(function(){var i=document.querySelector('.nfs input');if(i){i.focus();i.click();}})()");
+    }
+
+    private void listenInApp() {
+        stopVoice();
+        recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+        recognizer.setRecognitionListener(new RecognitionListener() {
+            @Override public void onReadyForSpeech(Bundle b) { voiceState("listening"); }
+            @Override public void onBeginningOfSpeech() {}
+            @Override public void onRmsChanged(float v) {}
+            @Override public void onBufferReceived(byte[] b) {}
+            @Override public void onEndOfSpeech() { voiceState("thinking"); }
+            @Override public void onError(int e) {
+                voiceState(e == SpeechRecognizer.ERROR_NO_MATCH || e == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ? "nomatch"
+                        : e == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ? "denied" : "error");
+                stopVoice();
+            }
+            @Override public void onResults(Bundle b) { sendResults(b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)); stopVoice(); }
+            @Override public void onPartialResults(Bundle b) {
+                java.util.ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                if (r != null && !r.isEmpty()) js("window.__sbVoicePartial&&window.__sbVoicePartial(" + JSONObject.quote(r.get(0)) + ")");
+            }
+            @Override public void onEvent(int t, Bundle b) {}
+        });
         Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH);
-        i.putExtra(RecognizerIntent.EXTRA_PROMPT, "Search movies, shows, anime");
-        try { startActivityForResult(i, VOICE_REQ); } catch (Throwable ignored) {}
+        i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
+        i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
+        try { recognizer.startListening(i); } catch (Throwable t) { voiceState("error"); stopVoice(); }
+    }
+
+    private void stopVoice() {
+        if (recognizer != null) { try { recognizer.cancel(); recognizer.destroy(); } catch (Throwable ignored) {} recognizer = null; }
+    }
+
+    private void sendResults(java.util.List<String> r) {
+        if (r == null || r.isEmpty()) { voiceState("nomatch"); return; }
+        JSONArray alts = new JSONArray();
+        for (String x : r) if (x != null && !x.trim().isEmpty()) alts.put(x.trim());
+        js("window.__sbVoiceResult&&window.__sbVoiceResult(" + JSONObject.quote(r.get(0)) + "," + alts + ")");
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+        super.onRequestPermissionsResult(req, perms, res);
+        if (req != MIC_PERM_REQ) return;
+        if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) startVoice();
+        else voiceState("denied");
     }
 
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
-        if (req != VOICE_REQ || res != RESULT_OK || data == null) return;
-        java.util.ArrayList<String> r = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
-        if (r == null || r.isEmpty()) return;
-        getBridge().getWebView().evaluateJavascript(
-                "window.__sbVoiceResult&&window.__sbVoiceResult(" + JSONObject.quote(r.get(0)) + ")", null);
+        if (req != VOICE_REQ) return;
+        if (res != RESULT_OK || data == null) { voiceState("cancel"); return; }
+        sendResults(data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS));
     }
+
+    @Override
+    public void onDestroy() { stopVoice(); super.onDestroy(); }
 
     // Remote's Search / voice key opens search (and voice input when the TV has it).
     @Override

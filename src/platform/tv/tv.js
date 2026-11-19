@@ -161,7 +161,9 @@ function onKey(e) {
 export function tvVoiceSearch() {
   window.dispatchEvent(new CustomEvent("sb-tv-open-search"));
   setTimeout(() => {
-    if (window.SbTV?.startVoice) window.SbTV.startVoice();
+    const mic = document.querySelector(".nfs-mic");
+    if (mic) mic.click();
+    else if (window.SbTV?.startVoice) window.SbTV.startVoice();
     else document.querySelector(".nfs input")?.focus();
   }, 250);
 }
@@ -192,7 +194,7 @@ export function installTV() {
 
   // Native side: Search key / voice result.
   window.__sbTvSearch = tvVoiceSearch;
-  window.__sbVoiceResult = (text) => window.dispatchEvent(new CustomEvent("sb-voice-query", { detail: String(text || "") }));
+  if (!window.__sbVoiceResult) window.__sbVoiceResult = (text, alts) => window.dispatchEvent(new CustomEvent("sb-voice-query", { detail: { text, alts } }));
 
   // Low memory: images load lazily and decode off the main thread.
   const lazy = (root) => root.querySelectorAll?.("img:not([loading])").forEach((i) => { i.loading = "lazy"; i.decoding = "async"; });
