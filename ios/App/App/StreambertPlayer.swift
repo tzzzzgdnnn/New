@@ -3011,6 +3011,10 @@ extension StreambertPlayerViewController {
         let sub = (info["subtitle"] as? String) ?? ""
         let title = (info["title"] as? String) ?? "Next episode"
         upNextTitle.text = sub.isEmpty ? title : "\(sub) · \(title)"
+        // Shuffle: Cancel also stops shuffling.
+        var cancel = upNextCancelButton.configuration ?? UIButton.Configuration.gray()
+        cancel.title = (info["shuffle"] as? Bool) == true ? "Stop Shuffle" : "Cancel"
+        upNextCancelButton.configuration = cancel
         upNextImage.image = nil
         if let s = info["thumb"] as? String, let u = URL(string: s) {
             URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
@@ -3032,6 +3036,7 @@ extension StreambertPlayerViewController {
     }
 
     @objc fileprivate func upNextCancelTapped() {
+        if (upNext?["shuffle"] as? Bool) == true { onPref?("stopShuffle", true) }
         upNextDismissed = true
         hideUpNext()
     }

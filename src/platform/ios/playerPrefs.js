@@ -57,6 +57,9 @@ window.__sbPlayerPref = ({ key, value } = {}) => {
     case "subLang":
       if (value) storage.set(STORAGE_KEYS.SUBTITLE_LANG, langCode(value));
       break;
+    case "stopShuffle":
+      window.dispatchEvent(new CustomEvent("sb-stop-shuffle"));
+      break;
     case "loadTiming":
       try {
         const list = [value, ...getLoadTimes()].slice(0, 10);

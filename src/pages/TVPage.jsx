@@ -414,6 +414,46 @@ function startOfToday() {
 
 // True only if the air date lies strictly in the future. Episodes without a
 // known air date are treated as released.
+// Shuffle history per show for this session: no repeats until every aired
+// episode has played, then it starts over.
+const _shuffleHistory = new Map(); // showId -> Set("season_episode")
+const shuffleHistoryFor = (id) => {
+  if (!_shuffleHistory.has(id)) _shuffleHistory.set(id, new Set());
+  return _shuffleHistory.get(id);
+};
+const shuffleAvoidList = (id, current) => {
+  const list = [...shuffleHistoryFor(id)].map((k) => {
+    const [season, episode] = k.split("_").map(Number);
+    return { season, episode };
+  });
+  if (current) list.push(current);
+  return list;
+};
+/** Random episode avoiding the history; a retry, and a fresh cycle once all have played. */
+async function pickShuffle(show, apiKey, id, avoid) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const pick = await pickRandomEpisode(show, apiKey, avoid);
+      if (pick) return pick;
+    } catch (err) {
+      console.warn("[shuffle] pick failed", err);
+    }
+  }
+  // Start a new cycle only once every aired episode has played; otherwise
+  // the caller falls back to the next episode in order.
+  const total = (show?.seasons || [])
+    .filter((x) => x.season_number > 0)
+    .reduce((n, x) => n + (x.episode_count || 0), 0);
+  if (!total || shuffleHistoryFor(id).size < total) return null;
+  const current = avoid[avoid.length - 1] || null;
+  shuffleHistoryFor(id).clear();
+  try {
+    return await pickRandomEpisode(show, apiKey, current);
+  } catch {
+    return null;
+  }
+}
+
 function isUnreleased(airDate) {
   const target = parseAirDate(airDate);
   return !!target && target > startOfToday();
@@ -1831,15 +1871,26 @@ export default function TVPage({
   // as tapping an episode.
   const canShuffle = useMemo(() => isShuffleable(d, { isAnime }), [d, isAnime]);
   const [shuffling, setShuffling] = useState(false);
+  // Shuffle chain: Random Episode starts it, Up Next keeps it going (random
+  // after random) until Stop Shuffle, a normal episode pick, or leaving the
+  // show. Page state only: survives the player closing, not a new visit.
   const [shuffleOn, setShuffleOn] = useState(false);
+  const shuffleNavRef = useRef(false); // next episode change comes from the chain
+  useEffect(() => {
+    if (!currentProgressKey) return; // season switch in between: wait for the episode
+    if (shuffleNavRef.current) shuffleNavRef.current = false;
+    else if (shuffleOn) setShuffleOn(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProgressKey]);
   const shuffle = useCallback(async () => {
     if (shuffling) return;
     setShuffling(true);
     try {
-      const avoid = playing && selectedEp ? { season: selectedSeason, episode: selectedEp.episode_number } : null;
-      const pickEp = await pickRandomEpisode(d, apiKey, avoid);
+      const avoid = shuffleAvoidList(item.id, playing && selectedEp ? { season: selectedSeason, episode: selectedEp.episode_number } : null);
+      const pickEp = await pickShuffle(d, apiKey, item.id, avoid);
       if (pickEp) {
         setShuffleOn(true);
+        shuffleNavRef.current = true;
         startEpisode(pickEp.season, pickEp.episode);
       }
     } catch (err) {
@@ -1847,7 +1898,7 @@ export default function TVPage({
     } finally {
       setShuffling(false);
     }
-  }, [shuffling, playing, selectedEp, selectedSeason, d, apiKey, startEpisode]);
+  }, [shuffling, playing, selectedEp, selectedSeason, d, apiKey, startEpisode, item.id]);
 
   // ── iOS native player: Up Next card ─────────────────────────────────────
   // The native player shows the card (at the outro or the end) with a
@@ -1864,19 +1915,24 @@ export default function TVPage({
     if (!IS_IOS || !playing || !selectedEp || !currentProgressKey) return;
     let cancelled = false;
     upNextRef.current = null;
-    const enabled = storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_ENABLED) ?? true;
+    // Shuffle implies continuous play, even with Autoplay Next off.
+    const shuffling = shuffleOn && canShuffle;
+    if (shuffling) shuffleHistoryFor(item.id).add(`${selectedSeason}_${selectedEp.episode_number}`);
+    const enabled = shuffling || (storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_ENABLED) ?? true);
     if (!enabled || restricted) {
       postUpNext(null);
       return;
     }
     const countdown = Number(storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_DURATION) ?? 10);
-    const offer = (season, ep, fallbackName) => {
+    const offer = (season, ep, fallbackName, shuffled = false) => {
       if (cancelled) return;
-      upNextRef.current = { season, episode: ep?.episode_number ?? 1 };
+      upNextRef.current = { season, episode: ep?.episode_number ?? 1, shuffle: shuffling };
+      const se = `S${season} E${upNextRef.current.episode}`;
       postUpNext({
         progressKey: currentProgressKey,
+        shuffle: shuffled,
         title: ep?.name || fallbackName || `Episode ${upNextRef.current.episode}`,
-        subtitle: `S${season} · E${upNextRef.current.episode}`,
+        subtitle: shuffled ? `Shuffle · ${se}` : `S${season} · E${upNextRef.current.episode}`,
         thumb: imgUrl(ep?.still_path, "w300") || imgUrl(d.backdrop_path, "w780") || undefined,
         countdown: Number.isFinite(countdown) ? countdown : 10,
       });
@@ -1889,11 +1945,12 @@ export default function TVPage({
     };
     (async () => {
       try {
-        if (shuffleOn && canShuffle) {
-          const avoid = { season: selectedSeason, episode: selectedEp.episode_number };
-          const pick = await pickRandomEpisode(d, apiKey, avoid);
-          if (!pick) return postUpNext(null);
-          return offer(pick.season, (await fetchEp(pick.season, pick.episode)) || { episode_number: pick.episode });
+        if (shuffling) {
+          const avoid = shuffleAvoidList(item.id, { season: selectedSeason, episode: selectedEp.episode_number });
+          const pick = await pickShuffle(d, apiKey, item.id, avoid);
+          if (cancelled) return;
+          // No pick after a retry: carry on with the next episode in order.
+          if (pick) return offer(pick.season, (await fetchEp(pick.season, pick.episode)) || { episode_number: pick.episode }, null, true);
         }
         if (nextEp) return offer(selectedSeason, nextEp);
         // Last episode of the season: S+1 E1 if it has aired, else the finale.
@@ -1919,11 +1976,18 @@ export default function TVPage({
     const onPlay = () => {
       const target = upNextRef.current;
       upNextRef.current = null;
-      if (target) startEpisode(target.season, target.episode);
+      if (!target) return;
+      if (target.shuffle) shuffleNavRef.current = true;
+      startEpisode(target.season, target.episode);
     };
+    const onStop = () => setShuffleOn(false);
     window.addEventListener("sb-up-next-play", onPlay);
-    return () => window.removeEventListener("sb-up-next-play", onPlay);
-  }, [startEpisode]);
+    window.addEventListener("sb-stop-shuffle", onStop);
+    return () => {
+      window.removeEventListener("sb-up-next-play", onPlay);
+      window.removeEventListener("sb-stop-shuffle", onStop);
+    };
+  }, [startEpisode, setShuffleOn]);
 
   // Continue Watching opens straight into the episode it was left on.
   const autoResumedRef = useRef(null);

@@ -35,6 +35,8 @@ export async function pickRandomEpisode(show, apiKey, avoid = null) {
     (s) => s.season_number > 0 && s.episode_count > 0 && (!s.air_date || aired(s.air_date)),
   );
   if (!seasons.length) return null;
+  // `avoid`: one {season, episode} or a list of them (shuffle history).
+  const avoidList = Array.isArray(avoid) ? avoid : avoid ? [avoid] : [];
   for (let attempt = 0; attempt < 3; attempt++) {
     const total = seasons.reduce((n, s) => n + s.episode_count, 0);
     let r = Math.random() * total;
@@ -44,7 +46,7 @@ export async function pickRandomEpisode(show, apiKey, avoid = null) {
       (e) =>
         e.episode_number > 0 &&
         aired(e.air_date) &&
-        !(avoid && avoid.season === season.season_number && avoid.episode === e.episode_number),
+        !avoidList.some((a) => a && a.season === season.season_number && a.episode === e.episode_number),
     );
     if (eps.length) return { season: season.season_number, episode: pick(eps).episode_number };
   }
