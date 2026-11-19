@@ -539,7 +539,15 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
             let dir = folder(j)
             dt.cancel(byProducingResumeData: { [weak self] data in
                 guard let data = data else { return }
-                DispatchQueue.main.async { self?.storeResumeData(data, dir: dir, unit: i) }
+                DispatchQueue.main.async {
+                    // This lands after pause() returned. If the download was
+                    // removed meanwhile, writing would recreate its folder; if it
+                    // was resumed and the unit is already being fetched again
+                    // (or is done), this data is stale and must not be kept.
+                    guard let self = self, let job = self.jobs[id], i < job.units.count,
+                          !job.units[i].done, self.inflight[id]?[i] == nil else { return }
+                    self.storeResumeData(data, dir: dir, unit: i)
+                }
             })
         }
         inflight[id] = nil
@@ -707,6 +715,12 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         liveBytes[task.taskIdentifier] = nil
         guard let (id, i) = Self.ids(task) else { return }
+        // Only the task the job is tracking for this unit counts. pause(),
+        // remove() and fail() let go of their tasks before the cancellation
+        // arrives here; after a quick Pause → Resume, fill() has already put a
+        // new task in the same slot, and clearing it would orphan that task
+        // (a later Pause could no longer cancel it) and start a duplicate.
+        guard inflight[id]?[i] === task else { return }
         inflight[id]?[i] = nil
         if let error = error as NSError? {
             if error.code == NSURLErrorCancelled { return }
