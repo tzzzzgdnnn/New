@@ -3,7 +3,7 @@
 // own box (no native view stacked over the web view). Sandbox without
 // allow-popups / allow-top-navigation blocks popups and top-frame redirects.
 import { mirrorsFor } from "./servers";
-import { PLAYER_SOURCES, sourcesForContent } from "../../utils/api";
+import { PLAYER_SOURCES, sourcesForContent, nativeServerList } from "../../utils/api";
 
 // Tell the native player what is playing (title, type, episode) and which
 // servers it may offer in its own server switcher.
@@ -20,10 +20,7 @@ function postContext(url) {
       url,
       current,
       ctx: window.__sbCtx || {},
-      servers: sourcesForContent(!!(window.__sbCtx || {}).isAnime).filter((s) => !s.async).map((s) => ({
-        id: s.id,
-        label: s.label,
-      })),
+      servers: nativeServerList(!!(window.__sbCtx || {}).isAnime),
     });
   } catch {}
 }
@@ -44,7 +41,7 @@ async function subtitleContext() {
 }
 
 const LOAD_TIMEOUT_MS = 8000;
-const MAX_CANDIDATES = 5;
+const MAX_CANDIDATES = 7;
 
 // ── Native playback ──────────────────────────────────────────────────────
 // Every play goes to the native player: native loads the embed in a hidden
@@ -78,13 +75,31 @@ function buildCandidates(url) {
     current = JSON.parse(localStorage.getItem("streambert_playerSource") || "null");
   } catch {}
   const cur = PLAYER_SOURCES.find((s) => s.id === current);
-  const list = [{ id: cur?.id || "current", label: cur?.label || "Server", url }];
-  for (const m of mirrorsFor(url)) list.push({ id: cur?.id || "current", label: cur?.label || "Server", url: m });
+  const isAnime = !!ctx.isAnime;
+  const mode = ctx.dubMode === "dub" ? "dub" : "sub";
+  const curId = cur ? (isAnime && cur.animeUrl ? `${cur.id}:${mode}` : cur.id) : "current";
+  const list = [{ id: curId, label: cur?.label || "Server", url }];
+  for (const m of mirrorsFor(url)) list.push({ id: curId, label: cur?.label || "Server", url: m });
+  const seen = new Set(list.map((c) => c.url));
+  const add = (id, label, u) => {
+    if (!u || !/^https?:/.test(u) || seen.has(u) || list.length >= MAX_CANDIDATES) return;
+    seen.add(u);
+    list.push({ id, label, url: u });
+  };
   const id = ctx.tmdbId;
+  const sources = sourcesForContent(isAnime).filter((s) => !s.async && !s.idType);
+  // Anime: dedicated anime routes first, in the chosen language (Sub/Dub).
+  if (isAnime && ctx.anilistId) {
+    const ep = ctx.episode ?? 1;
+    for (const s of sources) {
+      if (!s.animeUrl) continue;
+      try { add(`${s.id}:${mode}`, `${s.label} · ${mode === "dub" ? "Dub" : "Sub"}`, s.animeUrl(ctx.anilistId, ep, mode)); } catch {}
+    }
+  }
   if (id) {
-    for (const s of sourcesForContent(!!ctx.isAnime)) {
-      if (list.length >= MAX_CANDIDATES) break;
-      if (s.id === cur?.id || s.async || s.idType) continue;
+    for (const s of sources) {
+      if (s.id === cur?.id && !isAnime) continue;
+      if (isAnime && s.animeUrl && ctx.anilistId) continue;
       let u = null;
       try {
         if (ctx.type === "tv") {
@@ -94,7 +109,7 @@ function buildCandidates(url) {
           u = s.movieUrl(id);
         }
       } catch {}
-      if (u && /^https?:/.test(u)) list.push({ id: s.id, label: s.label, url: withParams(s, u) });
+      if (u) add(s.id, s.label, withParams(s, u));
     }
   }
   return list;
@@ -183,7 +198,7 @@ function upgrade(wv) {
           token,
           candidates: buildCandidates(url),
           ctx: { ...(window.__sbCtx || {}), ...subCtx },
-          servers: sourcesForContent(!!(window.__sbCtx || {}).isAnime).filter((s) => !s.async).map((s) => ({ id: s.id, label: s.label })),
+          servers: nativeServerList(!!(window.__sbCtx || {}).isAnime),
         });
       } catch {
         pending.delete(token);

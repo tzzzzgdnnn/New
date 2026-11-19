@@ -773,7 +773,7 @@ export default function MoviePage({
   useEffect(() => {
     if (!IS_IOS) return;
     const onSelect = (e) => {
-      const id = e?.detail;
+      const id = typeof e?.detail === "string" ? e.detail.replace(/:(sub|dub)$/, "") : e?.detail;
       if (!id || !PLAYER_SOURCES.some((s) => s.id === id)) return;
       setPlayerSource(id);
       storage.set(STORAGE_KEYS.PLAYER_SOURCE, id);

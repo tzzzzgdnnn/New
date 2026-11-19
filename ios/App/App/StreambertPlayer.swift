@@ -736,6 +736,11 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         let asset = AVURLAsset(url: url, options: opts)
         let item = AVPlayerItem(asset: asset)
         item.preferredPeakBitRate = qualityCap
+        // Max quality: no resolution cap, and start on the best variant
+        // instead of climbing up from the lowest one.
+        item.preferredMaximumResolution = .zero
+        if #available(iOS 14.0, *) { item.startsOnFirstEligibleVariant = false }
+        item.preferredForwardBufferDuration = 0
         let p = player ?? AVPlayer()
         p.replaceCurrentItem(with: item)
         p.automaticallyWaitsToMinimizeStalling = true
@@ -1542,8 +1547,14 @@ extension StreambertPlayerViewController {
 
     fileprivate func qualityMenuItems() -> [UIMenuElement] {
         // Caps the bit rate the HLS player may pick; Auto lets it adapt.
+        // This screen's own pixels (iPhone 16e: 2532×1170), long side first.
+        let nb = UIScreen.main.nativeBounds.size
+        let native = CGSize(width: max(nb.width, nb.height), height: min(nb.width, nb.height))
         let options: [(String, Double, CGSize)] = [
-            ("Auto", 0, .zero),
+            ("Max (best the stream has)", 0, .zero),
+            ("Native screen (\(Int(native.width))×\(Int(native.height)))", 30_000_000, native),
+            ("4K (2160p)", 40_000_000, CGSize(width: 3840, height: 2160)),
+            ("1440p", 20_000_000, CGSize(width: 2560, height: 1440)),
             ("1080p", 8_000_000, CGSize(width: 1920, height: 1080)),
             ("720p", 4_000_000, CGSize(width: 1280, height: 720)),
             ("480p", 1_500_000, CGSize(width: 854, height: 480)),
@@ -1556,7 +1567,7 @@ extension StreambertPlayerViewController {
                 item.preferredPeakBitRate = o.1
                 item.preferredMaximumResolution = o.2
                 let sym = UIImage(systemName: "sparkles.tv") == nil ? "tv" : "sparkles.tv"
-                self.pill(self.qualityButton, symbol: sym, title: o.1 == 0 ? "Quality" : o.0.components(separatedBy: " ").first ?? o.0)
+                self.pill(self.qualityButton, symbol: sym, title: o.1 == 0 ? "Max" : (o.0.hasPrefix("Native") ? "Native" : o.0.components(separatedBy: " ").first ?? o.0))
             }
         }
         if let size = player?.currentItem?.presentationSize, size.height > 0 {

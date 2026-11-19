@@ -1691,15 +1691,31 @@ export default function TVPage({
   const autoplayNextLayout =
     storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_LAYOUT) || "right";
 
+  // ── iOS: anime titles always start on an anime server ──────────────────
+  useEffect(() => {
+    if (!IS_IOS || !isAnime) return;
+    const ok = sourcesForContent(true).filter((s) => !s.async);
+    if (!ok.some((s) => s.id === playerSource) && ok.length) {
+      const pick = ok.find((s) => s.animeUrl) || ok[0];
+      setPlayerSource(pick.id);
+    }
+  }, [isAnime, playerSource]);
+
   // ── iOS: context for the native player + its server switcher ──────────
   useEffect(() => {
     if (!IS_IOS) return;
-    window.__sbCtx = { type: "tv", title: item.name || item.title, isAnime: !!isAnime, season: selectedSeason, episode: selectedEp?.episode_number ?? null, tmdbId: item.id, tmdbSeason: playerEp?.season ?? selectedSeason, tmdbEpisode: playerEp?.episode ?? selectedEp?.episode_number ?? null };
-  }, [item.name, item.title, item.id, isAnime, selectedSeason, selectedEp?.episode_number, playerEp]);
+    window.__sbCtx = { type: "tv", title: item.name || item.title, isAnime: !!isAnime, season: selectedSeason, episode: selectedEp?.episode_number ?? null, tmdbId: item.id, tmdbSeason: playerEp?.season ?? selectedSeason, tmdbEpisode: playerEp?.episode ?? selectedEp?.episode_number ?? null, anilistId: (anilistSeasons?.find((s) => s.seasonNum === selectedSeason)?.id ?? anilistData?.id) || null, dubMode };
+  }, [item.name, item.title, item.id, isAnime, selectedSeason, selectedEp?.episode_number, playerEp, anilistSeasons, anilistData, dubMode]);
   useEffect(() => {
     if (!IS_IOS) return;
     const onSelect = (e) => {
-      const id = e?.detail;
+      let id = e?.detail;
+      if (typeof id === "string" && /:(sub|dub)$/.test(id)) {
+        const mode = id.endsWith(":dub") ? "dub" : "sub";
+        id = id.replace(/:(sub|dub)$/, "");
+        setDubMode(mode);
+        storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, mode);
+      }
       if (!id || !PLAYER_SOURCES.some((s) => s.id === id)) return;
       setPlayerSource(id);
       storage.set(STORAGE_KEYS.PLAYER_SOURCE, id);

@@ -136,6 +136,7 @@ export const tmdbFetch = async (path, apiKey) => {
 export const PLAYER_SOURCES = [
   {
     id: "vidsrc",
+    animeTmdb: true, // carries anime under its TMDB id
     label: "VidSrc",
     tag: null,
     note: null,
@@ -152,6 +153,7 @@ export const PLAYER_SOURCES = [
   },
   {
     id: "vidfast",
+    animeTmdb: true, // carries anime under its TMDB id
     label: "Vidfast",
     tag: null,
     note: null,
@@ -171,6 +173,7 @@ export const PLAYER_SOURCES = [
   },
   {
     id: "vidlove",
+    animeTmdb: true, // carries anime under its TMDB id
     label: "Vidlove",
     tag: null,
     note: null,
@@ -203,6 +206,7 @@ export const PLAYER_SOURCES = [
   },
   {
     id: "vidrift",
+    animeTmdb: true, // carries anime under its TMDB id
     label: "Vidrift",
     tag: null,
     note: "Multi Lang, Anime ✓", // Has Anime sub/dub and multi language support but not with anilistId
@@ -774,8 +778,22 @@ export const fetchEpisodeGroup = async (groupId, apiKey) => {
 // Server list split by content type: anime titles get anime servers only,
 // movies/series get the regular servers only (anime-only ones hidden).
 // Falls back to everything if a type would end up with no servers.
+// Native server list. Anime: dedicated anime routes are split into Sub and Dub
+// entries ("vidnest:sub" / "vidnest:dub") so dub is one tap away.
+export const nativeServerList = (isAnime) => {
+  const out = [];
+  for (const s of sourcesForContent(isAnime)) {
+    if (s.async) continue;
+    if (isAnime && s.animeUrl) {
+      out.push({ id: `${s.id}:sub`, label: `${s.label} · Sub` });
+      out.push({ id: `${s.id}:dub`, label: `${s.label} · Dub` });
+    } else out.push({ id: s.id, label: s.label });
+  }
+  return out;
+};
+
 export const sourcesForContent = (isAnime, list = PLAYER_SOURCES) => {
-  const animeOk = (s) => !!(s.tag || s.supportsAnime);
+  const animeOk = (s) => !!(s.tag || s.supportsAnime || s.animeTmdb);
   const out = isAnime ? list.filter(animeOk) : list.filter((s) => !s.tag);
   return out.length ? out : list;
 };
