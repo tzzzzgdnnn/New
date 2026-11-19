@@ -1,10 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { tmdbFetch, imgUrl } from "../utils/api";
+import { tmdbFetch, imgUrl, describeTmdbError } from "../utils/api";
+import { IS_IOS } from "../platform/target";
+import { diag } from "../utils/diag";
 import { SearchIcon, CloseIcon } from "./Icons";
 import { storage } from "../utils/storage";
 
 const HISTORY_KEY = "searchHistory";
 const MAX_HISTORY = 12;
+const DEBOUNCE_MS = 380;
+const MAX_RESULTS = 12;
 
 function loadHistory() {
   return storage.get(HISTORY_KEY) || [];
@@ -18,42 +22,106 @@ export default function SearchModal({ apiKey, onSelect, onClose, offline }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  // Query the shown results belong to: "No results" only for a finished
+  // search of exactly what is typed (not while the debounce is pending).
+  const [searched, setSearched] = useState("");
   const [history, setHistory] = useState(loadHistory);
   const inputRef = useRef();
+  const reqRef = useRef({ id: 0, ctl: null });
+  const timerRef = useRef(null);
 
   useEffect(() => {
     const tid = setTimeout(() => inputRef.current?.focus(), 50);
     return () => clearTimeout(tid);
   }, []);
 
+  // iOS: size the sheet to the *visible* viewport (above the keyboard) and
+  // follow WKWebView's focus scroll, so the field is never under the top bar
+  // or the keyboard and the results end where the keyboard begins.
+  const overlayRef = useRef(null);
   useEffect(() => {
-    if (!query.trim()) {
-      setResults([]);
-      return;
-    }
-    let mounted = true;
-    const timer = setTimeout(async () => {
+    const vv = window.visualViewport;
+    const el = overlayRef.current;
+    if (!IS_IOS || !vv || !el) return;
+    let raf = 0;
+    const apply = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        el.style.setProperty("--sp-vvh", `${Math.round(vv.height)}px`);
+        el.style.setProperty("--sp-vvtop", `${Math.round(vv.offsetTop)}px`);
+      });
+    };
+    apply();
+    vv.addEventListener("resize", apply);
+    vv.addEventListener("scroll", apply);
+    return () => {
+      cancelAnimationFrame(raf);
+      vv.removeEventListener("resize", apply);
+      vv.removeEventListener("scroll", apply);
+    };
+  }, []);
+
+  // Cancel whatever is pending or in flight (also on close).
+  const cancelSearch = useCallback(() => {
+    clearTimeout(timerRef.current);
+    reqRef.current.ctl?.abort();
+    reqRef.current = { id: reqRef.current.id + 1, ctl: null };
+  }, []);
+  useEffect(() => cancelSearch, [cancelSearch]);
+
+  const runSearch = useCallback(
+    async (raw) => {
+      const q = raw.trim();
+      cancelSearch();
+      if (!q) {
+        setResults([]);
+        setLoading(false);
+        setError(null);
+        setSearched("");
+        return;
+      }
+      const ctl = new AbortController();
+      const id = reqRef.current.id;
+      reqRef.current = { id, ctl };
       setLoading(true);
+      setError(null);
       try {
         const data = await tmdbFetch(
-          `/search/multi?query=${encodeURIComponent(query)}&page=1`,
+          `/search/multi?query=${encodeURIComponent(q)}&page=1`,
           apiKey,
+          { signal: ctl.signal },
         );
-        if (mounted) {
-          setResults(
-            (data.results || [])
-              .filter((r) => r.media_type !== "person")
-              .slice(0, 12),
-          );
-        }
-      } catch {}
-      if (mounted) setLoading(false);
-    }, 380);
-    return () => {
-      mounted = false;
-      clearTimeout(timer);
-    };
-  }, [query, apiKey]);
+        if (reqRef.current.id !== id) return; // a newer search owns the UI
+        setResults(
+          (data.results || [])
+            .filter((r) => r.media_type !== "person")
+            .slice(0, MAX_RESULTS),
+        );
+        setSearched(q);
+      } catch (e) {
+        if (reqRef.current.id !== id || e?.name === "AbortError") return;
+        diag("net", `search "${q}" failed:`, e);
+        setResults([]);
+        setSearched(q);
+        setError(describeTmdbError(e));
+      } finally {
+        if (reqRef.current.id === id) setLoading(false);
+      }
+    },
+    [apiKey, cancelSearch],
+  );
+
+  // Typing: debounce. Clearing: abort at once and reset loading.
+  useEffect(() => {
+    if (!query.trim()) {
+      runSearch("");
+      return;
+    }
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => runSearch(query), DEBOUNCE_MS);
+    return () => clearTimeout(timerRef.current);
+  }, [query, runSearch]);
 
   const addToHistory = useCallback((term) => {
     const trimmed = term.trim();
@@ -103,14 +171,20 @@ export default function SearchModal({ apiKey, onSelect, onClose, offline }) {
 
   const handleKey = (e) => {
     if (e.key === "Escape") onClose();
-    if (e.key === "Enter" && query.trim()) addToHistory(query);
+    if (e.key === "Enter" && query.trim()) {
+      // Enter searches now instead of waiting for the debounce.
+      addToHistory(query);
+      runSearch(query);
+      if (IS_IOS) inputRef.current?.blur(); // hide the keyboard to show results
+    }
   };
 
   const showHistory = !query && history.length > 0;
 
   return (
     <div
-      className="modal-overlay"
+      ref={overlayRef}
+      className="modal-overlay search-overlay"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div className="search-box">
@@ -119,6 +193,11 @@ export default function SearchModal({ apiKey, onSelect, onClose, offline }) {
           <input
             ref={inputRef}
             className="search-input"
+            type="search"
+            enterKeyHint="search"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
             placeholder="Search movies and series..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -162,8 +241,19 @@ export default function SearchModal({ apiKey, onSelect, onClose, offline }) {
             </div>
           )}
 
-          {!loading && query && results.length === 0 && (
-            <div className="search-empty">No results for "{query}"</div>
+          {!offline && !loading && error && query.trim() && (
+            <div className="search-empty search-error" role="alert">
+              {error}
+              <div>
+                <button className="btn btn-ghost" onClick={() => runSearch(query)}>
+                  Try again
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!loading && !error && query.trim() && searched === query.trim() && results.length === 0 && (
+            <div className="search-empty">No results for "{query.trim()}"</div>
           )}
 
           {!loading &&

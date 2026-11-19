@@ -449,3 +449,35 @@ html.sb-ios body::before {
 
 /* Resume button: primary action keeps its label on one line */
 html.sb-ios .sb-resume-btn { white-space: nowrap; }
+
+/* ── Search sheet (iOS) ──────────────────────────────────────────────────
+   Above the profile top bar (z 9001) and the status-bar shield (z 9000),
+   sized to the visible viewport (--sp-vvh / --sp-vvtop, set from
+   visualViewport by SearchModal) so the field sits below the notch /
+   Dynamic Island and the results end at the keyboard. */
+html.sb-ios .modal-overlay.search-overlay {
+  z-index: 9500;
+  top: var(--sp-vvtop, 0px);
+  bottom: auto;
+  height: var(--sp-vvh, 100dvh);
+  padding: calc(10px + env(safe-area-inset-top)) 12px 10px;
+  box-sizing: border-box;
+}
+html.sb-ios .search-overlay .search-box {
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  min-height: 0;
+}
+html.sb-ios .search-overlay .search-input-wrap { flex: 0 0 auto; padding: 12px 14px; }
+html.sb-ios .search-overlay .search-input { font-size: 17px; min-width: 0; }
+html.sb-ios .search-overlay .search-input::-webkit-search-cancel-button { display: none; }
+html.sb-ios .search-overlay .search-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+html.sb-ios .search-error { color: #ff9f0a; }
