@@ -1221,12 +1221,12 @@ export default function App() {
         </div>
 
         {showSearch && (
-          <SearchModal
+          <Suspense fallback={null}><SearchModal
             apiKey={apiKey}
             onSelect={handleSelectResult}
             onClose={() => setShowSearch(false)}
             offline={offline}
-          />
+          /></Suspense>
         )}
         {updateBanner && (
           <div
@@ -1283,11 +1283,11 @@ export default function App() {
           </div>
         )}
         {showUpdateModal && updateBanner && (
-          <UpdateModal
+          <Suspense fallback={null}><UpdateModal
             updateInfo={updateBanner}
             activeDownloads={activeDownloadCount}
             onClose={() => setShowUpdateModal(false)}
-          />
+          /></Suspense>
         )}
         {toast && <div className="toast">{toast}</div>}
 
@@ -1477,7 +1477,7 @@ export default function App() {
           </div>
         )}
         {closeConfirm && (
-          <CloseConfirmModal
+          <Suspense fallback={null}><CloseConfirmModal
             count={closeConfirm.count}
             onConfirm={() => {
               setCloseConfirm(null);
@@ -1487,10 +1487,10 @@ export default function App() {
               setCloseConfirm(null);
               window.electron.respondClose(false);
             }}
-          />
+          /></Suspense>
         )}
         {showShortcuts && (
-          <KeyboardShortcutsModal onClose={() => setShowShortcuts(false)} />
+          <Suspense fallback={null}><KeyboardShortcutsModal onClose={() => setShowShortcuts(false)} /></Suspense>
         )}
       </div>
     </ErrorBoundary>
