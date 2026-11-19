@@ -51,6 +51,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(SbPlayerPlugin.class);
         super.onCreate(savedInstanceState);
+        requestHighRefreshRate();
         WebView wv = getBridge().getWebView();
         WebSettings ws = wv.getSettings();
         ws.setMediaPlaybackRequiresUserGesture(false);
@@ -106,6 +107,33 @@ public class MainActivity extends BridgeActivity {
     // While the app is hidden (or the built-in player is on top), the web view
     // stops drawing and running animations, and its renderer may be dropped
     // first when the phone needs memory.
+    // Many phones (Samsung, Xiaomi, OnePlus...) keep apps at 60 Hz unless the
+    // app asks for the fast mode. Ask for the highest refresh rate at the
+    // current resolution so scrolling and transitions run at 90/120 Hz.
+    private void requestHighRefreshRate() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT < 23) return;
+            android.view.Display d = getWindowManager().getDefaultDisplay();
+            android.view.Display.Mode cur = d.getMode();
+            android.view.Display.Mode best = cur;
+            for (android.view.Display.Mode m : d.getSupportedModes()) {
+                if (m.getPhysicalWidth() == cur.getPhysicalWidth()
+                        && m.getPhysicalHeight() == cur.getPhysicalHeight()
+                        && m.getRefreshRate() > best.getRefreshRate()) best = m;
+            }
+            WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.preferredDisplayModeId = best.getModeId();
+            lp.preferredRefreshRate = best.getRefreshRate();
+            getWindow().setAttributes(lp);
+        } catch (Throwable ignored) {}
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        requestHighRefreshRate();
+    }
+
     @Override
     public void onStop() {
         super.onStop();

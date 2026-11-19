@@ -23,7 +23,14 @@ if (import.meta.env.VITE_WEB) {
     document.documentElement.classList.add("sb-android");
     // Light on GPU: no live blur layers (the costliest effect on Android).
     const st = document.createElement("style");
-    st.textContent = ".sb-android *{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}";
+    // Smooth 90/120 Hz: no blur layers, scroll areas on their own GPU layer,
+    // off-screen rows skipped, and no tap-highlight repaints.
+    st.textContent = [
+      ".sb-android *{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;-webkit-tap-highlight-color:transparent}",
+      ".sb-android [class*=scroll],.sb-android [class*=Scroll],.sb-android [class*=row],.sb-android [class*=Row]{transform:translateZ(0);overscroll-behavior:contain}",
+      ".sb-android [class*=row],.sb-android [class*=Row],.sb-android section{content-visibility:auto;contain-intrinsic-size:auto 260px}",
+      ".sb-android img{content-visibility:auto}",
+    ].join("");
     document.head.appendChild(st);
   }
   // Cinejoy (direct, no ads) becomes the default server once on the web app.
