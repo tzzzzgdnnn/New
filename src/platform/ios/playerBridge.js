@@ -29,7 +29,11 @@ export function setAnimeDubMode(mode) {
 
 /** Publish the playing title for the native player (read by webview.js). */
 export function publishPlayerContext(ctx) {
-  if (IS_IOS) window.__sbCtx = ctx;
+  if (!IS_IOS) return;
+  window.__sbCtx = ctx;
+  // Anime: look the episode up on ani.pm now, so Play starts on it at once.
+  // (Dynamic import: keeps ani.pm and the native HTTP client out of desktop.)
+  if (ctx?.isAnime && ctx.anilistId) import("./anipm").then((m) => m.prefetchAnipm(ctx)).catch(() => {});
 }
 
 /**

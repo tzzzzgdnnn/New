@@ -434,6 +434,22 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     private func launch(_ i: Int) {
         guard let container = container else { return }
         let c = candidates[i]
+        // A stream the page already resolved (ani.pm: "<master>#sb-direct"):
+        // no embed page to load, it is ready at once.
+        if c.url.fragment == "sb-direct" {
+            var parts = URLComponents(url: c.url, resolvingAgainstBaseURL: false)
+            parts?.fragment = nil
+            let direct = parts?.url ?? c.url
+            sbLog("direct stream from \(c.id)")
+            let slot = Slot(index: i, webView: WKWebView(frame: .zero))
+            slots[i] = slot
+            slot.streams.append((direct, nil))
+            DispatchQueue.main.async { [weak self, weak slot] in
+                guard let self = self, let slot = slot else { return }
+                self.markReady(slot)
+            }
+            return
+        }
         sbLog("trying \(c.id) \(c.url.absoluteString) (slot \(slots.count + 1)/\(Self.parallel))")
         let cfg = WKWebViewConfiguration()
         cfg.allowsInlineMediaPlayback = true
