@@ -877,7 +877,14 @@ export const anilistSearchTitles = (title) => {
     .replace(/Ā/g, "Aa").replace(/Ī/g, "Ii").replace(/Ū/g, "Uu")
     .replace(/Ē/g, "Ee").replace(/Ō/g, "Ou");
   const plain = raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
-  return [...new Set([plain, doubled, raw])];
+  // Last resorts: no punctuation ("Food Wars! Shokugeki no Soma" finds
+  // nothing on AniList, "Food Wars Shokugeki no Soma" does) and no
+  // ": The Movie" suffix ("A Silent Voice: The Movie").
+  const bare = plain.replace(/[!?:;,.~]+/g, " ").replace(/\s+/g, " ").trim();
+  const noSuffix = plain.replace(/\s*[:\-–]?\s*the movie$/i, "").trim();
+  // ...and the main title before "!" or ":" ("Food Wars! Shokugeki no Soma").
+  const head = plain.split(/[!:]/)[0].trim();
+  return [...new Set([plain, doubled, raw, bare, noSuffix, head.length >= 4 ? head : ""].filter(Boolean))];
 };
 
 // tmdbId is used as the cache key (unique per show) while title is used for the AniList search query.

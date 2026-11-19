@@ -2,77 +2,105 @@
   "version": 1,
   "updated": "2026-11-19",
   "servers": [
-    { "id": "hexa", "name": "Hexa", "enabled": true, "verified": true,
+    {
+      "id": "hexa",
+      "name": "Hexa",
+      "enabled": true,
+      "verified": true,
       "movie": "https://hexa.su/watch/movie/{tmdb}",
       "tv": "https://hexa.su/watch/tv/{tmdb}/{season}/{episode}",
-      "mirrors": [] },
-    { "id": "flixer", "name": "Flixer", "enabled": true, "verified": true,
+      "mirrors": []
+    },
+    {
+      "id": "flixer",
+      "name": "Flixer",
+      "enabled": true,
+      "verified": true,
       "movie": "https://flixer.gd/watch/movie/{tmdb}",
       "tv": "https://flixer.gd/watch/tv/{tmdb}/{season}/{episode}",
-      "mirrors": ["https://flixer.su"] },
-    { "id": "7movies", "name": "7Movies", "enabled": true, "verified": true,
+      "mirrors": [
+        "https://flixer.su"
+      ]
+    },
+    {
+      "id": "7movies",
+      "name": "7Movies",
+      "enabled": true,
+      "verified": true,
       "movie": "https://7movies.ac/movie/{tmdb}/watch",
       "tv": "https://7movies.ac/tv/{tmdb}/watch?season={season}&episode={episode}",
-      "mirrors": ["https://7movies.ws", "https://7shows.st"] },
-    { "id": "cinezo", "name": "Cinezo", "enabled": true, "verified": true,
+      "mirrors": [
+        "https://7movies.ws",
+        "https://7shows.st"
+      ]
+    },
+    {
+      "id": "cinezo",
+      "name": "Cinezo",
+      "enabled": true,
+      "verified": true,
       "movie": "https://www.cinezo.st/watch/movie/{tmdb}",
       "tv": "https://www.cinezo.st/watch/tv/{tmdb}?season={season}&episode={episode}",
-      "mirrors": ["https://www.flikhub.net"] },
-
-    { "id": "arrowtv", "name": "ArrowTV", "enabled": false, "verified": true,
-      "movie": "https://arrowtv.net/watch/movie/{tmdb}",
-      "tv": "https://arrowtv.net/watch/tv/{tmdb}?season={season}&episode={episode}",
-      "mirrors": ["https://arrowtv.st"] },
-    { "id": "fprime", "name": "fprime", "enabled": false, "verified": true,
-      "movie": "https://fprime.at/watch/movie/{tmdb}",
-      "tv": "https://fprime.at/watch/tv/{tmdb}/{season}/{episode}",
-      "mirrors": [] },
-    { "id": "atlantic", "name": "Atlantic", "enabled": false, "verified": true,
-      "movie": "https://atlantic.bz/embed/movie/{tmdb}",
-      "tv": "https://atlantic.bz/embed/tv/{tmdb}/{season}/{episode}",
-      "mirrors": [] },
-    { "id": "meowtv", "name": "MeowTV", "enabled": false, "verified": true,
-      "movie": "https://meowtv.ru/play/movie/{tmdb}",
-      "tv": "https://meowtv.ru/play/tv/{tmdb}/{season}/{episode}",
-      "mirrors": [] },
-    { "id": "flickystream", "name": "FlickyStream", "enabled": false, "verified": true,
-      "movie": "https://flickystream.mov/play/movie/{tmdb}",
-      "tv": "https://flickystream.mov/play/tv/{tmdb}/{season}/{episode}",
-      "mirrors": [] },
-    { "id": "cinejoy", "name": "Cinejoy", "enabled": false, "verified": true,
-      "movie": "https://cinejoy.pk/watch/movie/{tmdb}",
-      "tv": "https://cinejoy.pk/watch/tv/{tmdb}/{season}/{episode}",
-      "mirrors": [] },
-    { "id": "movy", "name": "Movy", "enabled": false, "verified": true,
+      "mirrors": [
+        "https://www.flikhub.net"
+      ]
+    },
+    {
+      "id": "movy",
+      "name": "Movy",
+      "enabled": true,
+      "verified": true,
       "movie": "https://www.movy.sx/movie/{tmdb}?play=true",
       "tv": "https://www.movy.sx/tv/{tmdb}/{season}/{episode}?play=true",
-      "mirrors": [] },
-    { "id": "shuttletv", "name": "ShuttleTV", "enabled": false, "verified": true,
-      "movie": "https://shuttletv.pk/watch/{tmdb}",
-      "tv": "https://shuttletv.pk/watch/{tmdb}?s={season}&e={episode}",
-      "mirrors": [] },
-    { "id": "cinecat", "name": "Cinecat", "enabled": false, "verified": false,
-      "note": "movie route confirmed (/media/tmdb-movie-ID); TV route needs TMDB season/episode ids, so this opens the show page",
-      "movie": "https://cinecat.eu/media/tmdb-movie-{tmdb}",
-      "tv": "https://cinecat.eu/media/tmdb-tv-{tmdb}",
-      "mirrors": ["https://beta.cinecat.eu"] },
-    { "id": "flystream", "name": "FlyStream", "enabled": false, "verified": false,
-      "note": "bot challenge; route not confirmed",
-      "movie": "https://flystream.net/watch/movie/{tmdb}",
-      "tv": "https://flystream.net/watch/tv/{tmdb}/{season}/{episode}",
-      "mirrors": [] }
+      "mirrors": []
+    },
+    {
+      "id": "popcornmovies",
+      "name": "PopcornMovies",
+      "enabled": true,
+      "verified": true,
+      "movie": "https://popcornmovies.st/watch/movie/{tmdb}",
+      "tv": "https://popcornmovies.st/watch/tv/{tmdb}/{season}/{episode}",
+      "mirrors": []
+    }
   ],
   "builtin": {
     "_comment": "Overrides for the app's built-in sources by id: set enabled:false to hide one, movie/tv templates to move it to a new domain, or an anime template ({anilist}, {episode}, {lang} = sub|dub) to list it under Dub as well as Sub. Entries in servers[] take the same optional anime template.",
-    "vidsrc": { "enabled": true },
-    "vidfast": { "enabled": true },
-    "vidlove": { "enabled": true },
-    "aether": { "enabled": true },
-    "vidrift": { "enabled": true },
-    "vidnest": { "enabled": true },
-    "devideosrc": { "enabled": true },
-    "frembed": { "enabled": true },
-    "kinohub": { "enabled": true },
-    "hianime": { "enabled": false, "_note": "needs the native HTTP resolver (desktop main process); not ported yet" }
+    "vidsrc": {
+      "enabled": false,
+      "_note": "Cloudflare challenge before every play (not instant)"
+    },
+    "vidfast": {
+      "enabled": true
+    },
+    "vidlove": {
+      "enabled": false,
+      "_note": "domain does not answer"
+    },
+    "aether": {
+      "enabled": true
+    },
+    "vidrift": {
+      "enabled": true
+    },
+    "vidnest": {
+      "enabled": true
+    },
+    "devideosrc": {
+      "enabled": false,
+      "_note": "German audio; needs an IMDb lookup first"
+    },
+    "frembed": {
+      "enabled": false,
+      "_note": "French audio"
+    },
+    "kinohub": {
+      "enabled": false,
+      "_note": "Russian audio, movies only; needs a Kinopoisk lookup first"
+    },
+    "hianime": {
+      "enabled": false,
+      "_note": "needs the native HTTP resolver (desktop main process); not ported yet"
+    }
   }
 }
