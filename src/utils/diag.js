@@ -31,6 +31,14 @@ function loadMirror() {
   return mirror;
 }
 
+// Secrets never reach the log: API keys and tokens in URLs or text are masked
+// before a line is written to the native file or the localStorage mirror.
+const SECRET_PARAM = /([?&;]|\b)((?:api[_-]?key|apikey|key|token|access[_-]?token|auth|password|secret|sig|signature)=)[^&\s"']+/gi;
+const BEARER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/g;
+export function redact(text) {
+  return String(text).replace(SECRET_PARAM, "$1$2[redacted]").replace(BEARER, "$1 [redacted]");
+}
+
 function str(v) {
   try {
     if (v instanceof Error) return `${v.name}: ${v.message}${v.stack ? ` | ${v.stack.split("\n").slice(0, 3).join(" < ")}` : ""}`;
@@ -48,7 +56,7 @@ function str(v) {
  */
 export function diag(type, ...parts) {
   try {
-    const msg = parts.map(str).join(" ").replace(/\s+/g, " ").slice(0, MAX_MSG);
+    const msg = redact(parts.map(str).join(" ").replace(/\s+/g, " ")).slice(0, MAX_MSG);
     const line = `${new Date().toISOString()} [${type}] ${msg}`;
     const h = native();
     if (h) {

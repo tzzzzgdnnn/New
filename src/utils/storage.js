@@ -6,9 +6,17 @@ import { diag } from "./diag";
 // ("sb-storage-error") so the app can tell the viewer, instead of the old
 // silent catch {} that dropped progress/history writes without a trace.
 let _lastStorageEvent = 0;
+// The log names ordinary settings keys, but never the keys that hold
+// credentials (API keys, tokens, PINs): those show as "a secure key".
+const SENSITIVE_KEY = /key|token|secret|pass|pin|auth/i;
+function logLabel(key) {
+  const name = String(key ?? "");
+  if (SENSITIVE_KEY.test(name)) return "a secure key";
+  return name.replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 64);
+}
 function reportStorageProblem(kind, key, err) {
   try {
-    diag("storage", `${kind} ${key}: ${err?.name || ""} ${err?.message || err || ""}`);
+    diag("storage", `${kind} ${logLabel(key)}: ${err?.name || ""}`);
     const now = Date.now();
     if (now - _lastStorageEvent < 2000) return;
     _lastStorageEvent = now;

@@ -53,4 +53,15 @@ await t("JS errors and unhandled rejections are captured", async () => {
   assert.ok(log.includes("[error] TypeError: x is undefined"));
   assert.ok(log.includes("unhandled rejection: Error: fetch blew up"));
 });
+await t("API keys and tokens are masked before anything is stored", async () => {
+  window.webkit.messageHandlers.sbDiag.postMessage = async (m) => { if (m.op === "append") appended.push(m.line); return true; };
+  d.diag("net", "GET https://api.themoviedb.org/3/movie/1?api_key=abc123SECRET&language=en failed", new Error("401 for ?token=tok_999 Bearer eyJhbGciOiJIUzI1NiJ9.x"));
+  const log = mem.get("sb_diag_log");
+  for (const secret of ["abc123SECRET", "tok_999", "eyJhbGciOiJIUzI1NiJ9"]) {
+    assert.ok(!log.includes(secret), `${secret} leaked into the mirror`);
+    assert.ok(!appended.join("\n").includes(secret), `${secret} leaked into the native file`);
+  }
+  assert.ok(log.includes("api_key=[redacted]&language=en"));
+  assert.equal(d.redact("plain text, key ideas"), "plain text, key ideas");
+});
 console.log(`\n${pass} diagnostics tests passed`);
