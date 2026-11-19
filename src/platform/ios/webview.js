@@ -133,12 +133,25 @@ function buildCandidates(url) {
     }
   };
 
+  // Dub for anime: only the anime routes (AniList id + "dub") carry dubbed
+  // audio. TMDB-route servers only have the subbed version, so they are
+  // never tried in Dub mode, or Dub would silently play Sub.
+  const dubOnly = isAnime && mode === "dub";
+  const curIsAnimeRoute = !!(cur?.animeUrl && ctx.anilistId);
+
+  if (dubOnly) {
+    // The picked server first, only when it is an anime route.
+    if (cur && curIsAnimeRoute) add(cur, animeRoute(cur));
+    for (const s of sources) add(s, animeRoute(s));
+    return list;
+  }
+
   // 1. The server the viewer picked (the page already built its URL).
   if (!isBlank(url)) {
     add(cur, url);
     for (const m of mirrorsFor(url)) add(cur, m);
   }
-  // 2. Anime routes (AniList id + chosen mode) carry real dubs.
+  // 2. Anime routes (AniList id + chosen mode).
   for (const s of sources) add(s, animeRoute(s));
   // 3. Every other server by TMDB id.
   for (const s of sources) {
