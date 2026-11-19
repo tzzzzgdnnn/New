@@ -9,6 +9,12 @@ import { storage } from "../../../utils/storage";
 import { resolveKidsVerdict } from "./kidsFilter";
 import { kidsFetcher } from "./useKidsFilter";
 
+// The catalog points at TVmaze "original_untouched" art (~530x745, ~160 KB).
+// The avatars are 68-88 pt circles, so the 210x295 "medium_portrait" copy is
+// plenty and about 4x lighter to download and decode on old phones.
+export const smallArt = (url) =>
+  typeof url === "string" ? url.replace("/uploads/images/original_untouched/", "/uploads/images/medium_portrait/") : url;
+
 const SKIP_CHANNELS = new Set(["Toonami"]);
 const PER_SHOW = 2;
 
@@ -20,7 +26,7 @@ export const KIDS_CHARACTERS = (CATALOG.channels || [])
       (s.characters || []).slice(0, PER_SHOW).map((ch) => ({
         key: `${s.show}::${ch.name}`,
         name: ch.name,
-        img: ch.img,
+        img: smallArt(ch.img),
         show: s.show,
         channel: c.channel,
       })),
@@ -84,10 +90,17 @@ export function useKidsCharacters(apiKey) {
     const names = [...new Set(KIDS_CHARACTERS.map((c) => c.show))];
     const found = new Map();
     let i = 0;
-    const publish = () => {
+    // One re-render per batch of verified shows (at most every 400 ms), not
+    // one per show: the bar re-rendered ~100 times on first load.
+    let timer = null;
+    const flush = () => {
+      timer = null;
       if (!alive) return;
       const list = KIDS_CHARACTERS.filter((c) => found.get(c.show)).map((c) => ({ ...c, item: found.get(c.show) }));
-      setState({ ready: false, list });
+      setState((s) => ({ ready: s.ready, list }));
+    };
+    const publish = () => {
+      if (!timer) timer = setTimeout(flush, 400);
     };
     const worker = async () => {
       while (i < names.length && alive) {
@@ -100,10 +113,14 @@ export function useKidsCharacters(apiKey) {
       }
     };
     Promise.all(Array.from({ length: 4 }, worker)).then(() => {
-      if (alive) setState((s) => ({ ...s, ready: true }));
+      if (!alive) return;
+      if (timer) clearTimeout(timer);
+      flush();
+      setState((s) => ({ ...s, ready: true }));
     });
     return () => {
       alive = false;
+      if (timer) clearTimeout(timer);
     };
   }, [apiKey]);
   return state;

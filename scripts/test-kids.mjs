@@ -371,6 +371,25 @@ await t("every surface uses the kids filter", () => {
     assert.doesNotMatch(src(f), /filterKidSafeResults/, f);
 });
 
+await t("lite: character art uses the small TVmaze copy", async () => {
+  const { KIDS_CHARACTERS, smallArt } = await import("../src/platform/ios/kids/kidsCatalog.js");
+  assert.ok(KIDS_CHARACTERS.length > 0);
+  for (const c of KIDS_CHARACTERS) assert.ok(!String(c.img).includes("original_untouched"), c.img);
+  assert.equal(smallArt("https://static.tvmaze.com/uploads/images/original_untouched/1/2.jpg"), "https://static.tvmaze.com/uploads/images/medium_portrait/1/2.jpg");
+});
+
+await t("lite: kids theme has no fixed gradient, blur, shadows or animations", async () => {
+  const css = fs.readFileSync("src/platform/ios/kids/kids.css", "utf8");
+  assert.ok(!/\bfixed\s*;/.test(css.replace(/position:\s*fixed/g, "")), "no background-attachment fixed");
+  assert.ok(!/linear-gradient/.test(css), "no gradients");
+  assert.ok(!/box-shadow:\s*0 4px/.test(css) && !/text-shadow:\s*0/.test(css), "no soft shadows");
+  assert.ok(!/@keyframes/.test(css) && !/scroll-snap-type/.test(css));
+  assert.match(css, /backdrop-filter:\s*none/);
+  assert.match(css, /animation:\s*none !important/);
+  const home = fs.readFileSync("src/platform/ios/kids/KidsHome.jsx", "utf8");
+  assert.ok(!home.includes('"w342"') && !home.includes("fade-in"));
+});
+
 console.log(`\n${pass} kids filter tests passed`);
 await win.happyDOM.close();
 process.exit(0);
