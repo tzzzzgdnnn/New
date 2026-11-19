@@ -325,38 +325,6 @@ html.sb-ios .main > .sps { animation: none; }
 .sps-swatch.is-on { color: #fff; }
 .sps-swatch.is-on span { box-shadow: 0 0 0 2.5px var(--bg, #000), 0 0 0 4.5px var(--sw); transform: scale(1.04); }
 
-/* ── Action sheet ───────────────────────────────────────────────────────── */
-.sps-sheet-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 12000;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding: 0 8px calc(8px + env(safe-area-inset-bottom));
-  background: rgba(0, 0, 0, .42);
-  animation: spsFade .2s ease-out both;
-}
-.sps-sheet { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 8px; animation: spsSheetUp .32s var(--sp-ease-out, ease-out) both; }
-.sps-sheet-card { overflow: hidden; border-radius: 14px; background: rgba(44, 44, 46, .86); -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%); }
-.sps-sheet-msg { display: flex; flex-direction: column; gap: 4px; padding: 16px 20px; text-align: center; font: 400 13px/1.35 -apple-system, system-ui, sans-serif; color: rgba(235, 235, 245, .6); }
-.sps-sheet-msg strong { font-weight: 600; color: rgba(235, 235, 245, .75); }
-.sps-sheet-btn {
-  display: block;
-  width: 100%;
-  min-height: 57px;
-  border: 0;
-  background: transparent;
-  color: var(--sp-blue, #0a84ff);
-  font: 400 20px -apple-system, system-ui, sans-serif;
-  box-shadow: inset 0 .5px 0 rgba(255, 255, 255, .15);
-}
-.sps-sheet-btn.is-danger { color: var(--sp-danger, #ff453a); }
-.sps-sheet-btn:active { background: rgba(255, 255, 255, .1); }
-.sps-sheet-cancel { border-radius: 14px; background: rgba(44, 44, 46, .96); font-weight: 600; box-shadow: none; }
-@keyframes spsFade { from { opacity: 0; } to { opacity: 1; } }
-@keyframes spsSheetUp { from { transform: translate3d(0, 110%, 0); } to { transform: none; } }
-
 /* ── About ──────────────────────────────────────────────────────────────── */
 .sps-about-hero { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0 28px; text-align: center; }
 .sps-about-icon { width: 88px; height: 88px; border-radius: 20px; margin-bottom: 10px; box-shadow: 0 14px 40px var(--sp-accent-glow, rgba(229, 9, 20, .35)); }
@@ -371,9 +339,9 @@ html.sb-ios .main > .sps { animation: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sps-page.is-push, .sps-page.is-pop, .sps-sheet, .sps-sheet-scrim { animation: none; }
+  .sps-page.is-push, .sps-page.is-pop { animation: none; }
 }
-body.no-anim .sps-page, body.no-anim .sps-sheet, body.no-anim .sps-sheet-scrim { animation: none !important; }
+body.no-anim .sps-page { animation: none !important; }
 
 /* Nav bar scrolls with the page: no floating title or bar. */
 .sps-nav.is-collapsed { background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }

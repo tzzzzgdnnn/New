@@ -81,7 +81,6 @@ window.electron = {
   getBlockStats: resolved({ total: 0, domains: {} }),
 
   showNotification: resolved(undefined),
-  quitApp: resolved(undefined),
   playerStopped: noop,
 
   getCacheSize: resolved(-1),

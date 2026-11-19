@@ -16,19 +16,119 @@ html.sb-ios {
   -webkit-text-size-adjust: 100%;
 }
 
-/* Safe areas (notch / Dynamic Island / home indicator) */
-html.sb-ios .sidebar {
-  padding-top: calc(16px + env(safe-area-inset-top));
-  padding-bottom: calc(16px + env(safe-area-inset-bottom));
-  padding-left: env(safe-area-inset-left);
-  width: calc(var(--sidebar) + env(safe-area-inset-left));
-}
+/* Full-width content above the bottom tab bar; safe areas respected. */
+html.sb-ios { --sidebar: 0px; --sp-tabbar-h: 49px; }
 html.sb-ios .main {
-  margin-left: calc(var(--sidebar) + env(safe-area-inset-left));
   padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: calc(var(--sp-tabbar-h) + env(safe-area-inset-bottom));
 }
+
+/* ── Bottom tab bar (TabBar.jsx) ───────────────────────────────────────── */
+html.sb-ios .sp-tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 150;
+  display: flex;
+  height: calc(var(--sp-tabbar-h) + env(safe-area-inset-bottom));
+  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+html.sb-ios .sp-tab {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 0;
+  background: none;
+  color: var(--text3);
+  font: 500 10px/1 -apple-system, system-ui, sans-serif;
+  letter-spacing: .1px;
+}
+html.sb-ios .sp-tab svg { width: 24px; height: 24px; }
+html.sb-ios .sp-tab-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.sb-ios .sp-tab.is-active { color: #fff; }
+html.sb-ios .sp-tab-badge {
+  position: absolute;
+  top: 3px;
+  left: calc(50% + 6px);
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--red);
+  color: #fff;
+  font: 700 11px/17px -apple-system, system-ui, sans-serif;
+  text-align: center;
+}
+/* Landscape: icon and label side by side, as on iOS. */
+@media (orientation: landscape) and (max-height: 500px) {
+  html.sb-ios { --sp-tabbar-h: 44px; }
+  html.sb-ios .sp-tab { flex-direction: row; gap: 6px; font-size: 13px; }
+  html.sb-ios .sp-tab svg { width: 20px; height: 20px; }
+}
+
+/* Toasts sit above the tab bar. */
+html.sb-ios .toast { left: calc(16px + env(safe-area-inset-left)); right: calc(16px + env(safe-area-inset-right)); bottom: calc(var(--sp-tabbar-h) + 16px + env(safe-area-inset-bottom)); }
+
+/* ── Action sheet (ActionSheet.jsx): long-press menus and confirmations ── */
+html.sb-ios .sp-as-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0 calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
+  background: rgba(0, 0, 0, .5);
+  animation: sbFadeIn .2s ease-out both;
+}
+html.sb-ios .sp-as { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 8px; animation: spAsUp .32s var(--sp-ease-out, ease-out) both; }
+html.sb-ios .sp-as-card { overflow: hidden; border-radius: 14px; background: rgba(44, 44, 46, .86); -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%); }
+html.sb-ios .sp-as-msg { display: flex; flex-direction: column; gap: 4px; padding: 14px 20px; text-align: center; font: 400 13px/1.35 -apple-system, system-ui, sans-serif; color: rgba(235, 235, 245, .6); overflow-wrap: anywhere; }
+html.sb-ios .sp-as-msg strong { font-weight: 600; color: rgba(235, 235, 245, .75); }
+html.sb-ios .sp-as-btn {
+  display: block;
+  width: 100%;
+  min-height: 56px;
+  padding: 0 16px;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font: 400 clamp(17px, 5vw, 20px) -apple-system, system-ui, sans-serif;
+  box-shadow: inset 0 .5px 0 rgba(255, 255, 255, .15);
+}
+html.sb-ios .sp-as-card > .sp-as-btn:first-child { box-shadow: none; }
+html.sb-ios .sp-as-btn.is-danger { color: var(--sp-danger, #ff453a); }
+html.sb-ios .sp-as-btn:active { background: rgba(255, 255, 255, .1); }
+html.sb-ios .sp-as-cancel { border-radius: 14px; background: rgba(44, 44, 46, .96); font-weight: 600; box-shadow: none; }
+@keyframes spAsUp { from { transform: translate3d(0, 110%, 0); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  html.sb-ios .sp-as, html.sb-ios .sp-as-scrim { animation: none; }
+}
+body.no-anim .sp-as, body.no-anim .sp-as-scrim { animation: none !important; }
+
+/* Long-press targets: no iOS callout or text selection while holding. */
+html.sb-ios .card,
+html.sb-ios .episode-card,
+html.sb-ios .season-btn {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Touch has no hover: controls that desktop reveals on hover stay visible. */
+html.sb-ios .history-remove-btn,
+html.sb-ios .search-history-remove,
+html.sb-ios .player-wrap .player-overlay-btn,
+html.sb-ios .player-wrap .player-overlay-group { opacity: 1; }
 
 /* Features that don't exist on iOS */
 html.sb-ios .sb-download-btn,
@@ -137,67 +237,8 @@ html.sb-ios .sb-wide-meta { font-size: 11px; color: var(--text3); margin-top: 2p
 html.sb-ios .hero-title { text-shadow: 0 4px 30px rgba(0, 0, 0, 0.6); }
 html.sb-ios .hero-type { color: #ff3b45; }
 
-/* ── Portrait phones: bottom tab bar, full-width content ─────────────── */
+/* ── Portrait phones: full-width content ───────────────────────────────── */
 @media (max-width: 760px) and (orientation: portrait) {
-  html.sb-ios .sidebar {
-    top: auto;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    width: 100%;
-    height: calc(58px + env(safe-area-inset-bottom));
-    padding: 6px 12px env(safe-area-inset-bottom);
-    flex-direction: row;
-    justify-content: space-around;
-    align-items: flex-start;
-    gap: 0;
-    border-right: none;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-    background: rgba(8, 8, 8, 0.82);
-    -webkit-backdrop-filter: saturate(180%) blur(24px);
-    backdrop-filter: saturate(180%) blur(24px);
-    z-index: 150;
-  }
-  html.sb-ios .sidebar-logo,
-  html.sb-ios .sidebar-sep,
-  html.sb-ios .sidebar-saved,
-  html.sb-ios .saved-thumb-tooltip,
-  html.sb-ios .sidebar-btn .tooltip,
-  html.sb-ios .sidebar-bottom > .sidebar-btn:first-child,
-  html.sb-ios .sidebar-bottom > button:last-child {
-    display: none !important;
-  }
-  html.sb-ios .sidebar-bottom { display: contents; }
-  html.sb-ios .sidebar-btn {
-    width: 52px;
-    height: 44px;
-    border-radius: 12px;
-    background: none !important;
-    color: var(--text3);
-  }
-  html.sb-ios .sidebar-btn.active { color: #fff; }
-  html.sb-ios .sidebar-btn.active::after {
-    content: "";
-    position: absolute;
-    bottom: 2px;
-    left: 50%;
-    width: 18px;
-    height: 3px;
-    margin-left: -9px;
-    border-radius: 2px;
-    background: var(--red);
-    box-shadow: 0 0 10px var(--red);
-  }
-  html.sb-ios .sidebar-btn svg { width: 24px; height: 24px; }
-
-  html.sb-ios .main {
-    margin-left: 0;
-    padding-top: env(safe-area-inset-top);
-    padding-left: 0;
-    padding-right: 0;
-    padding-bottom: calc(70px + env(safe-area-inset-bottom));
-  }
-
   /* Hero: tall poster-style, content centered at the bottom */
   html.sb-ios .hero { height: min(78vh, 640px); }
   html.sb-ios .hero-bg { background-position: center 15%; }
@@ -283,10 +324,9 @@ html.sb-ios .hero-type { color: #ff3b45; }
   html.sb-ios .main [style*="padding: 0px 48px"],
   html.sb-ios .main [style*="padding: 0 48px"] { padding-left: 16px !important; padding-right: 16px !important; }
   html.sb-ios .library-header { padding-left: 16px; padding-right: 16px; }
-  html.sb-ios .toast { left: 16px !important; right: 16px; bottom: calc(76px + env(safe-area-inset-bottom)); }
 }
 
-/* Landscape phones: slim sidebar, roomy content */
+/* Landscape phones: roomy content */
 @media (max-height: 500px) and (orientation: landscape) {
   html.sb-ios .hero { height: 88vh; }
   html.sb-ios .hero-content { padding: 24px 32px; }
@@ -295,7 +335,6 @@ html.sb-ios .hero-type { color: #ff3b45; }
   html.sb-ios .detail-content { padding: 24px; gap: 24px; }
   html.sb-ios .detail-poster { width: 140px; }
   html.sb-ios .detail-title { font-size: 40px; }
-  html.sb-ios .sidebar-saved { display: none; }
 }
 
 /* Nostalgia block header */

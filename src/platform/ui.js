@@ -4,6 +4,10 @@
 import { lazy } from "react";
 import { IS_IOS } from "./target";
 import DesktopWindowTitlebar from "../components/WindowTitlebar";
+import Sidebar from "../components/Sidebar";
+import TabBar from "./ios/TabBar";
+import IOSActionSheet from "./ios/ActionSheet";
+import { longPressProps } from "./ios/longPress";
 
 // Desktop only (null on iOS).
 export const WindowTitlebar = IS_IOS ? null : DesktopWindowTitlebar;
@@ -21,3 +25,13 @@ export const UpdateModal = IS_IOS
 export const SettingsPage = IS_IOS
   ? lazy(() => import("./ios/settings/IOSSettings"))
   : lazy(() => import("../pages/SettingsPage"));
+
+// App navigation: the desktop sidebar, or the phone's bottom tab bar.
+export const Navigation = IS_IOS ? TabBar : Sidebar;
+
+// Secondary actions: right-click + context menu on desktop; long-press +
+// action sheet on iOS (ActionSheet is null on desktop).
+export const ActionSheet = IS_IOS ? IOSActionSheet : null;
+export const contextMenuProps = IS_IOS
+  ? longPressProps
+  : (open) => ({ onContextMenu: open });

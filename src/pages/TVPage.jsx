@@ -1,4 +1,5 @@
 import { IS_IOS } from "../platform/target";
+import { ActionSheet, contextMenuProps } from "../platform/ui";
 import AnimeDubPrompt, { shouldAskAnimeDub } from "../platform/ios/AnimeDubPrompt";
 import {
   getAnimeDubMode,
@@ -158,6 +159,7 @@ function PartialCircleIcon({ pct }) {
 function ContextMenu({
   x,
   y,
+  title,
   isWatched,
   hasProgress,
   watchedLabel,
@@ -178,6 +180,16 @@ function ContextMenu({
       window.removeEventListener("contextmenu", close);
     };
   }, []);
+  if (ActionSheet) {
+    const actions = [
+      isWatched
+        ? { label: unwatchedLabel, onSelect: onMarkUnwatched }
+        : { label: watchedLabel, onSelect: onMarkWatched },
+    ];
+    if (onMarkNotStarted && !isWatched && hasProgress)
+      actions.push({ label: "Mark as Not Started", onSelect: onMarkNotStarted });
+    return <ActionSheet title={title} actions={actions} onClose={onClose} />;
+  }
   return (
     <div
       className="context-menu"
@@ -2937,7 +2949,7 @@ export default function TVPage({
                       key={s.season_number}
                       className={`season-btn ${selectedSeason === s.season_number ? "active" : ""} ${sw === "all" ? "season-watched" : sw.startsWith("some") ? "season-partial" : ""}`}
                       onClick={() => setSelectedSeason(s.season_number)}
-                      onContextMenu={(e) => {
+                      {...contextMenuProps((e) => {
                         e.preventDefault();
                         e.stopPropagation();
                         setSeasonMenu({
@@ -2945,8 +2957,12 @@ export default function TVPage({
                           y: e.clientY,
                           seasonNum: s.season_number,
                         });
-                      }}
-                      title="Right-click to mark season as watched/unwatched"
+                      })}
+                      title={
+                        IS_IOS
+                          ? undefined
+                          : "Right-click to mark season as watched/unwatched"
+                      }
                     >
                       {sw === "all" && (
                         <span className="season-watched-icon">✓</span>
@@ -3060,6 +3076,7 @@ export default function TVPage({
         <ContextMenu
           x={seasonMenu.x}
           y={seasonMenu.y}
+          title={`Season ${seasonMenu.seasonNum}`}
           isWatched={isSeasonWatched(seasonMenu.seasonNum)}
           watchedLabel="Mark Season as Watched"
           unwatchedLabel="Mark Season as Unwatched"
@@ -3136,12 +3153,12 @@ const EpisodeCard = memo(function EpisodeCard({
     <div
       className={`episode-card ${isPlaying ? "playing" : ""} ${epWatched ? "ep-watched" : ""} ${restricted ? "episode-card--restricted" : ""} ${epUnreleased ? "episode-card--unreleased" : ""}`}
       onClick={() => (restricted || epUnreleased ? null : onPlay(ep))}
-      onContextMenu={(e) => {
+      {...contextMenuProps((e) => {
         e.preventDefault();
         e.stopPropagation();
         if (!restricted && !epUnreleased)
           onContextMenu({ x: e.clientX, y: e.clientY, pk });
-      }}
+      })}
       style={epUnreleased ? { cursor: "default" } : undefined}
     >
       <div className="episode-thumb">

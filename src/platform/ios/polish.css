@@ -107,24 +107,16 @@ html.sb-ios body { background: var(--bg); font-feature-settings: "kern"; -webkit
 
 /* ── Frosted chrome (top bar + bottom tab bar), safe areas respected ───── */
 html.sb-ios .sp-topbar,
+html.sb-ios .sp-tabbar,
 html.sb-ios body::before {
   background: var(--chrome-bg);
   -webkit-backdrop-filter: var(--chrome-blur);
   backdrop-filter: var(--chrome-blur);
 }
 html.sb-ios .sp-topbar { border-bottom: .5px solid var(--hairline); }
-@media (max-width: 760px) and (orientation: portrait) {
-  html.sb-ios .sidebar {
-    background: var(--chrome-bg);
-    -webkit-backdrop-filter: var(--chrome-blur);
-    backdrop-filter: var(--chrome-blur);
-    border-top: .5px solid var(--hairline);
-  }
-  html.sb-ios .sidebar-btn { transition: color .2s ease, transform .15s ease; }
-  html.sb-ios .sidebar-btn:active { transform: scale(.9); }
-  /* The tab's color and underline mark it; no desktop outline box. */
-  html.sb-ios .sidebar-btn.active { box-shadow: none; }
-}
+html.sb-ios .sp-tabbar { border-top: .5px solid var(--hairline); }
+html.sb-ios .sp-tab { transition: color .2s ease, transform .15s ease; }
+html.sb-ios .sp-tab:active { transform: scale(.9); }
 
 /* ── Type scale + spacing ───────────────────────────────────────────────── */
 html.sb-ios .section-title {
@@ -279,16 +271,8 @@ html.sb-ios .sb-nostalgia-kicker { color: var(--sp-accent-2); }
 html.sb-ios ::selection { background: var(--sp-accent-soft); }
 html.sb-ios { accent-color: var(--sp-accent); caret-color: var(--sp-accent); }
 
-/* ── Tab bar: springy indicator and icon pop on the active tab ──────────── */
-@media (max-width: 760px) and (orientation: portrait) {
-  html.sb-ios .sidebar-btn.active::after {
-    background: var(--sp-brand-gradient);
-    box-shadow: 0 0 10px var(--sp-accent-glow);
-    animation: spTabIn .38s var(--sp-spring) both;
-  }
-  html.sb-ios .sidebar-btn.active svg { animation: spTabPop .32s var(--sp-spring) both; }
-}
-@keyframes spTabIn { from { opacity: 0; transform: scaleX(.2); } to { opacity: 1; transform: none; } }
+/* ── Tab bar: icon pop on the active tab ────────────────────────────────── */
+html.sb-ios .sp-tab.is-active svg { animation: spTabPop .32s var(--sp-spring) both; }
 @keyframes spTabPop { 0% { transform: scale(.86); } 100% { transform: none; } }
 
 /* ── Press states (haptic-style feedback: a quick dip, a springy return) ─ */
@@ -402,12 +386,10 @@ body.no-anim .modal-overlay,
 body.no-anim .modal-overlay > div,
 body.no-anim .empty-state,
 body.no-anim .sp-error,
-body.no-anim .sidebar-btn.active::after,
-body.no-anim .sidebar-btn.active svg,
+body.no-anim .sp-tab.is-active svg,
 body.no-anim .sp-img-ready > img { animation: none !important; }
 @media (prefers-reduced-motion: reduce) {
   html.sb-ios .empty-state,
   .sp-error,
-  html.sb-ios .sidebar-btn.active::after,
-  html.sb-ios .sidebar-btn.active svg { animation: none; }
+  html.sb-ios .sp-tab.is-active svg { animation: none; }
 }

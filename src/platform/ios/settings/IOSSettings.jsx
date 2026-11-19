@@ -4,7 +4,8 @@
 // Settings page uses, so the rest of the app behaves exactly as before.
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import "./settings.css";
-import { Group, Row, SwitchRow, ChoiceList, Stepper, ActionSheet } from "./cells";
+import { Group, Row, SwitchRow, ChoiceList, Stepper } from "./cells";
+import ActionSheet from "../ActionSheet";
 import ProfileAvatar from "../profiles/ProfileAvatar";
 import { useProfiles } from "../profiles/ProfileContext";
 import { getAnimeDubMode, setAnimeDubMode } from "../playerBridge";
@@ -757,18 +758,16 @@ function StoragePage() {
         <ActionSheet
           title="Clear watch progress?"
           message="History, resume points and watched marks will be deleted. This can't be undone."
-          confirmLabel="Clear Watch Progress"
-          onConfirm={clearProgress}
-          onCancel={() => setConfirm(null)}
+          actions={[{ label: "Clear Watch Progress", destructive: true, onSelect: clearProgress }]}
+          onClose={() => setConfirm(null)}
         />
       )}
       {confirm === "reset" && (
         <ActionSheet
           title="Reset Super Player?"
           message="Everything on this device returns to factory defaults. This can't be undone."
-          confirmLabel="Reset App"
-          onConfirm={reset}
-          onCancel={() => setConfirm(null)}
+          actions={[{ label: "Reset App", destructive: true, onSelect: reset }]}
+          onClose={() => setConfirm(null)}
         />
       )}
     </>

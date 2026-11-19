@@ -5,6 +5,7 @@ import {
   CloseConfirmModal,
   UpdateModal,
   SettingsPage,
+  Navigation,
 } from "./platform/ui";
 import { saveNativeProgress } from "./platform/ios/resume";
 import {
@@ -40,7 +41,6 @@ import {
   clearActivity as clearDiscordActivity,
 } from "./utils/discordPresence";
 
-import Sidebar from "./components/Sidebar";
 import SetupScreen from "./components/SetupScreen";
 
 // Build-time TMDB token (iOS CI injects VITE_TMDB_TOKEN from a repo secret).
@@ -1186,7 +1186,7 @@ export default function App() {
     <ErrorBoundary>
       {WindowTitlebar && hasCustomTitlebar && <WindowTitlebar />}
       <div>
-        <Sidebar
+        <Navigation
           page={page}
           onNavigate={navigate}
           onSearch={() => setShowSearch(true)}
