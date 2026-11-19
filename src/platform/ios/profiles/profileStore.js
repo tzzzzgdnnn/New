@@ -176,6 +176,24 @@ export async function loadProfiles() {
 export const getLastProfileId = () => storage.get(LAST_PROFILE_KEY);
 
 /**
+ * The profile to open at launch instead of the picker, or null for the picker.
+ * A reload in this session (`sessionId`) or a recovery reload goes straight
+ * back in. After an app restart the last profile used opens again; a locked
+ * one asks for its PIN first (`needsPin`).
+ * @param {object[]} profiles
+ * @param {{sessionId: string|null, recovery: boolean}} launch
+ * @returns {{profile: object, needsPin: boolean} | null}
+ */
+export function profileToResume(profiles, { sessionId, recovery }) {
+  const byId = (id) => (id && profiles.find((p) => p.id === id)) || null;
+  const current = byId(sessionId);
+  if (current) return { profile: current, needsPin: false };
+  const last = byId(getLastProfileId());
+  if (!last) return null;
+  return { profile: last, needsPin: !!last.pin && !recovery };
+}
+
+/**
  * Move per-person data written before profiles existed into a profile.
  * Mirrors for the native player keep their global copy.
  */

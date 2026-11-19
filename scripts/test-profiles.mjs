@@ -101,6 +101,32 @@ await t("persistence across reload (re-read from storage + Keychain)", async () 
   assert.deepEqual(storage.get("history"), [{ id: 2, title: "Kid show" }]);
 });
 
+await t("launch resumes the profile in use instead of the picker", async () => {
+  const list = store.listProfiles();
+  const locked = await store.updateProfile(second.id, { pin: "0420" });
+  const withLock = store.listProfiles();
+  const resume = (lastId, launch) => {
+    store.activateProfile(withLock.find((p) => p.id === lastId));
+    return store.profileToResume(withLock, launch);
+  };
+  // App restart: no session, no recovery -> last profile used.
+  assert.equal(resume(main.id, { sessionId: null, recovery: false })?.profile.id, main.id);
+  assert.equal(resume(main.id, { sessionId: null, recovery: false }).needsPin, false);
+  // A locked last profile asks for its PIN after a restart...
+  assert.deepEqual(resume(locked.id, { sessionId: null, recovery: false }), { profile: locked, needsPin: true });
+  // ...but not after a reload or a WebContent-kill recovery in the same session.
+  assert.equal(resume(locked.id, { sessionId: locked.id, recovery: false }).needsPin, false);
+  assert.equal(resume(locked.id, { sessionId: null, recovery: true }).needsPin, false);
+  // The session's profile wins over the last-used one; a stale id falls back.
+  assert.equal(resume(main.id, { sessionId: locked.id, recovery: false }).profile.id, locked.id);
+  assert.equal(resume(main.id, { sessionId: "gone", recovery: false }).profile.id, main.id);
+  // Nothing to resume -> the picker.
+  storage.remove("lastProfileId");
+  assert.equal(store.profileToResume(withLock, { sessionId: null, recovery: false }), null);
+  await store.updateProfile(second.id, { pin: null });
+  store.activateProfile(list.find((p) => p.id === main.id));
+});
+
 await t("profile list lost from localStorage is restored from the Keychain", async () => {
   const ids = store.listProfiles().map((p) => p.id);
   localStorage.removeItem("streambert_profiles");

@@ -1,6 +1,6 @@
-// Launch gate for iOS: "Who's watching?" until a profile is chosen, then the
-// app for that profile. Switching remounts the app so every screen re-reads
-// the new profile's history, lists, progress and settings.
+// Launch gate for iOS: the profile in use (or "Who's watching?" when there is
+// none), then the app for that profile. Switching remounts the app so every
+// screen re-reads the new profile's history, lists, progress and settings.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { ProfileContext } from "./ProfileContext";
@@ -14,9 +14,9 @@ import {
   createProfile,
   deleteProfile,
   ensureProfiles,
-  getLastProfileId,
   listProfiles,
   loadProfiles,
+  profileToResume,
   updateProfile,
 } from "./profileStore";
 import { isRecoveryBoot } from "../../../utils/navHistory";
@@ -29,47 +29,14 @@ const MANAGE = "manage";
 const SESSION_KEY = "sp_session_profile";
 
 export default function ProfileGate({ children }) {
-  // null until the list (and its PINs) is reconciled with the Keychain, so a
-  // locked profile can never be entered before its PIN is known.
-  const [profiles, setProfiles] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    loadProfiles()
-      .catch((err) => {
-        console.warn("[profiles] load failed", err);
-        return ensureProfiles();
-      })
-      .then((list) => {
-        if (!alive) return;
-        setProfiles(list);
-        // A reload or WebView back-navigation inside this session goes
-        // straight back into the profile already entered, not the picker.
-        try {
-          // After a WebContent-process kill sessionStorage may be gone with
-          // the process; the native side flags that reload, and the last
-          // profile used (already unlocked this session) is re-entered.
-          let sid = sessionStorage.getItem(SESSION_KEY);
-          if (!sid && isRecoveryBoot()) sid = getLastProfileId();
-          const p = sid && list.find((x) => x.id === sid);
-          if (p) {
-            diag("profile", `re-enter ${p.id} after reload${isRecoveryBoot() ? " (recovery)" : ""}`);
-            activateProfile(p);
-            try { sessionStorage.setItem(SESSION_KEY, p.id); } catch {}
-            activeRef.current = p;
-            setActive(p);
-            setOverlay(null);
-          }
-        } catch {}
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
   const [active, setActive] = useState(null);
   const [overlay, setOverlay] = useState(PICK);
   const [pinTarget, setPinTarget] = useState(null); // { profile, then }
   const [editing, setEditing] = useState(null); // profile | "new" | null
 
+  // null until the list (and its PINs) is reconciled with the Keychain, so a
+  // locked profile can never be entered before its PIN is known.
+  const [profiles, setProfiles] = useState(null);
   const refresh = () => setProfiles(listProfiles());
 
   const activeRef = useRef(null);
@@ -90,6 +57,34 @@ export default function ProfileGate({ children }) {
     setActive(profile);
     setOverlay(null);
   }, []);
+  // Launch: back into the profile in use (reload, WebContent-kill recovery,
+  // app restart) when there is one, else the picker.
+  useEffect(() => {
+    let alive = true;
+    loadProfiles()
+      .catch((err) => {
+        console.warn("[profiles] load failed", err);
+        return ensureProfiles();
+      })
+      .then((list) => {
+        if (!alive) return;
+        setProfiles(list);
+        let sessionId = null;
+        try { sessionId = sessionStorage.getItem(SESSION_KEY); } catch {}
+        const recovery = isRecoveryBoot();
+        const resume = profileToResume(list, { sessionId, recovery });
+        if (!resume) return;
+        const { profile, needsPin } = resume;
+        const how = profile.id === sessionId ? "reload" : recovery ? "recovery" : "restart";
+        diag("profile", `resume ${profile.id} after ${how}${needsPin ? ", asking for PIN" : ""}`);
+        if (needsPin) setPinTarget({ profile, then: enter });
+        else enter(profile);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [enter]);
+
   // Ignore the picker being reopened by a stray tap right after entering.
   const openPicker = useCallback(() => {
     diag("profile", "open picker");
