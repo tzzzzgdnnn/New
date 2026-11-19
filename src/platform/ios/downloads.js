@@ -6,21 +6,29 @@ import { downloadCandidates, downloadContext, currentAudioMode, directCandidates
 import { recordLookup } from "./autoServer";
 import { getResumeSeconds, progressKeyFor } from "./resume";
 import { diag } from "../../utils/diag";
-import { cinejoyCandidates } from "./cinejoy";
-import { prefetchAnipm } from "./anipm";
+import { cinejoyCandidates, prefetchCinejoy } from "./cinejoy";
+import { prefetchAnipm, ANIPM_RELAY } from "./anipm";
 
 // Web app: the browser can only save streams handed over directly (Cinejoy,
 // ani.pm), never embed pages, and a fresh lookup can take a while, so
 // it waits for them instead of giving up after 2.5 s.
 async function webCandidates(ctx) {
-  if (!ctx) return [];
+  if (!ctx) return { list: [], why: "Open the movie or episode first, then tap Download." };
   if (ctx.isAnime) {
+    if (!ANIPM_RELAY) return { list: [], why: "Anime downloads don't work on the web app yet. Use the iPhone or Android app for anime." };
     const want = ctx.dubMode === "dub" ? "dub" : "sub";
     const r = await Promise.race([prefetchAnipm(ctx).catch(() => null), new Promise((res) => setTimeout(() => res(null), 15000))]);
-    return r?.ok && r.lang === want ? [{ id: "anipm", label: "ani.pm", url: `${r.source}#sb-direct` }] : [];
+    if (r?.ok && r.lang === want) return { list: [{ id: "anipm", label: "ani.pm", url: `${r.source}#sb-direct` }] };
+    return { list: [], why: r?.ok ? `No ${want === "dub" ? "Dub" : "Sub"} for this episode on the web.` : "No stream for this episode right now. Try again in a minute." };
   }
-  // (Movy doesn't answer browsers, so the web uses Cinejoy.)
-  return cinejoyCandidates(ctx, { waitMs: 15000 }).catch(() => []);
+  // (Movy doesn't answer browsers, so the web uses Cinejoy.) A failed
+  // lookup from earlier is tried again fresh, never reused.
+  let list = await cinejoyCandidates(ctx, { waitMs: 15000 }).catch(() => []);
+  if (!list.length) {
+    await Promise.race([prefetchCinejoy(ctx, { now: () => Date.now() + 16 * 60_000 }).catch(() => null), new Promise((r) => setTimeout(r, 15000))]);
+    list = await cinejoyCandidates(ctx, { waitMs: 1000 }).catch(() => []);
+  }
+  return { list, why: "No stream for this title right now. Try again in a minute." };
 }
 import {
   applyMeasurements,
@@ -92,8 +100,9 @@ export async function probeDownload({ season = null, episode = null, ctx = null,
     season != null && episode != null ? { season, episode, tmdbSeason: season, tmdbEpisode: episode } : {};
   const context = ctx || downloadContext(override);
   if (import.meta.env.VITE_WEB) {
-    const candidates = (await webCandidates(context)).filter((c) => !exclude.includes(c.id));
-    if (!candidates.length) return { ok: false, error: "No stream for this title right now. Try again in a minute." };
+    const found = await webCandidates(context);
+    const candidates = found.list.filter((c) => !exclude.includes(c.id));
+    if (!candidates.length) return { ok: false, error: found.why };
     const res = await call("probe", { candidates });
     if (!res?.ok) return res || { ok: false, error: "Download lookup failed" };
     return {
