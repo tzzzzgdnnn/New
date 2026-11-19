@@ -55,6 +55,10 @@ import {
   sourceIsMovieOnly,
   getAnimeSourceUrl,
   fetchAnilistData,
+  fetchAnilistChain,
+  tmdbAbsoluteEpisode,
+  mapAbsoluteToAnilist,
+  ANILIST_TV_FORMATS,
   fetchEpisodeGroup,
   buildAnilistSeasons,
   cleanAnilistDescription,
@@ -565,6 +569,7 @@ export default function TVPage({
   const [anilistData, setAnilistData] = useState(null);
   const [anilistSeasons, setAnilistSeasons] = useState(null); // [{seasonNum, title, episodes, year}]
   const [anilistLoading, setAnilistLoading] = useState(false);
+  const [anilistChain, setAnilistChain] = useState(null); // [{id, episodes}] along TV sequels
   const [episodeGroupData, setEpisodeGroupData] = useState(null); // Raw TMDB episode group response
   const [episodeGroupMap, setEpisodeGroupMap] = useState(null); // Map built from TMDB episode group
   // Webview loading overlay
@@ -812,13 +817,20 @@ export default function TVPage({
     let mounted = true;
     setAnilistData(null);
     setAnilistSeasons(null);
+    setAnilistChain(null);
     if (isAnime) {
       setAnilistLoading(true);
-      fetchAnilistData(item.name || item.title, "ANIME", item.id)
+      fetchAnilistData(item.name || item.title, "ANIME", item.id, {
+        kind: "tv",
+        formats: ANILIST_TV_FORMATS,
+      })
         .then((data) => {
           if (!mounted) return;
           if (data) {
             setAnilistData(data);
+            fetchAnilistChain(data).then((chain) => {
+              if (mounted) setAnilistChain(chain);
+            });
             const seasons = buildAnilistSeasons(data);
             if (seasons?.length) setAnilistSeasons(seasons);
           }
@@ -1097,6 +1109,41 @@ export default function TVPage({
     return applyEpisodeMapping(item.id, rawSeason, rawEpisode, episodeGroupMap);
   }, [selectedEp, selectedSeason, item.id, episodeGroupMap]);
 
+  // ── AniList entry + episode for the anime routes (ani.pm, Vidnest, ...) ──
+  // AniList virtual seasons already are AniList entries. Otherwise a TMDB
+  // season/episode is turned into an absolute episode and walked along the
+  // AniList TV sequel chain (AoT S3E13 = absolute 50 = "Season 3 Part 2" ep 1;
+  // Naruto Shippuden S2E1 = absolute 33 of the single 500-episode entry).
+  const anilistTarget = useMemo(() => {
+    if (!isAnime || !selectedEp) return null;
+    if (useAnilistSeasons) {
+      const id =
+        anilistSeasons?.find((s) => s.seasonNum === selectedSeason)?.id ??
+        anilistData?.id;
+      return id ? { anilistId: id, episode: selectedEp.episode_number } : null;
+    }
+    if (!anilistData?.id) return null;
+    const season = playerEp?.season ?? selectedSeason;
+    const episode = playerEp?.episode ?? selectedEp.episode_number;
+    const absolute = tmdbAbsoluteEpisode(tmdbSeasons, season, episode);
+    const chain = anilistChain?.[0]?.id === anilistData.id ? anilistChain : null;
+    if (chain) return mapAbsoluteToAnilist(chain, absolute);
+    // Chain not loaded yet: only the first entry is certain.
+    if (anilistData.episodes && absolute && absolute <= anilistData.episodes)
+      return { anilistId: anilistData.id, episode: absolute };
+    return null;
+  }, [
+    isAnime,
+    selectedEp,
+    useAnilistSeasons,
+    anilistSeasons,
+    selectedSeason,
+    anilistData,
+    playerEp,
+    tmdbSeasons,
+    anilistChain,
+  ]);
+
   // ── Direct (non-async) player URL ─────────────────────────────────────────
   // Anime-capable sources (Vidnest) use their anime route: AniList id of the
   // selected season + episode number inside that entry + sub/dub.
@@ -1105,14 +1152,12 @@ export default function TVPage({
     if (isAnime && sourceSupportsAnime(playerSource)) {
       // Wait for AniList data instead of loading the wrong (TMDB) route first
       if (anilistLoading) return null;
-      const seasonEntry = anilistSeasons?.find(
-        (s) => s.seasonNum === selectedSeason,
-      );
-      const anilistId = seasonEntry?.id ?? (anilistData?.id || null);
+      // ...and for the sequel chain, so a later season doesn't start on the TMDB route
+      if (anilistData?.id && !useAnilistSeasons && !anilistChain) return null;
       const animeUrl = getAnimeSourceUrl(
         playerSource,
-        anilistId,
-        selectedEp?.episode_number,
+        anilistTarget?.anilistId,
+        anilistTarget?.episode,
         dubMode,
       );
       if (animeUrl) return animeUrl;
@@ -1131,10 +1176,10 @@ export default function TVPage({
     isAnime,
     playerSource,
     anilistLoading,
-    anilistSeasons,
     anilistData,
-    selectedSeason,
-    selectedEp,
+    anilistChain,
+    anilistTarget,
+    useAnilistSeasons,
     dubMode,
     srcId.id,
     playerEp,
@@ -1800,10 +1845,8 @@ export default function TVPage({
   // ── iOS: native player bridge ──────────────────────────────────────────
   useAnimeServerGuard({ isAnime, playerSource, dubMode, setPlayerSource });
 
-  const anilistIdForSeason =
-    (anilistSeasons?.find((s) => s.seasonNum === selectedSeason)?.id ??
-      anilistData?.id) ||
-    null;
+  const anilistIdForSeason = anilistTarget?.anilistId || null;
+  const anilistEpisode = anilistTarget?.episode ?? null;
   useEffect(() => {
     publishPlayerContext({
       type: "tv",
@@ -1815,6 +1858,7 @@ export default function TVPage({
       tmdbSeason: playerEp?.season ?? selectedSeason,
       tmdbEpisode: playerEp?.episode ?? selectedEp?.episode_number ?? null,
       anilistId: anilistIdForSeason,
+      anilistEpisode,
       dubMode,
       progressKey: currentProgressKey,
     });
@@ -1828,6 +1872,7 @@ export default function TVPage({
     selectedEp?.episode_number,
     playerEp,
     anilistIdForSeason,
+    anilistEpisode,
     dubMode,
   ]);
 

@@ -38,7 +38,7 @@ export default function ServerSheet({ title, sources, choice, type = "movie", on
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anime, ctx?.anilistId, ctx?.episode]);
+  }, [anime, ctx?.anilistId, ctx?.anilistEpisode, ctx?.episode]);
   const dub = dubControl(dubMode, avail);
   const [dragY, setDragY] = useState(0);
   const drag = useRef(null); // { startY, at, id }

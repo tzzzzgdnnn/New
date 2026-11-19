@@ -42,6 +42,7 @@ import {
   sourcesForContent,
   getAnimeSourceUrl,
   fetchAnilistData,
+  ANILIST_MOVIE_FORMATS,
   cleanAnilistDescription,
   isAnimeContent,
   ANIME_DEFAULT_SOURCE,
@@ -379,7 +380,10 @@ export default function MoviePage({
     let mounted = true;
     setAnilistData(null);
     if (isAnime) {
-      fetchAnilistData(item.title || item.name, "ANIME", item.id).then(
+      fetchAnilistData(item.title || item.name, "ANIME", item.id, {
+        kind: "movie",
+        formats: ANILIST_MOVIE_FORMATS,
+      }).then(
         (data) => {
           if (mounted && data) setAnilistData(data);
         },

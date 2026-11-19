@@ -759,10 +759,11 @@ export const cleanAnilistDescription = (desc) => {
 };
 
 const ANILIST_QUERY = `
-query ($search: String, $type: MediaType) {
-  Media(search: $search, type: $type, sort: SEARCH_MATCH) {
+query ($search: String, $type: MediaType, $formats: [MediaFormat]) {
+  Media(search: $search, type: $type, format_in: $formats, sort: SEARCH_MATCH) {
     id
     idMal
+    format
     title { romaji english native }
     description(asHtml: false)
     coverImage { extraLarge large }
@@ -793,7 +794,9 @@ query ($search: String, $type: MediaType) {
 }`;
 
 // ── AniList cache (localStorage + in-memory) ──────────────────────────────────
-const ANILIST_CACHE_KEY = "streambert_anilistCache";
+// v2: entries are keyed by page kind (tv/movie) and searched with a format
+// filter; v1 entries could hold a movie for a TV page (Naruto Shippuden).
+const ANILIST_CACHE_KEY = "streambert_anilistCache_v2";
 const ANILIST_CACHE_TTL = 1000 * 60 * 60 * 24 * 7; // 7 days
 
 // loaded once on first use, flushed to localStorage on write.
@@ -828,54 +831,76 @@ function flushAnilistCache() {
   }, 500);
 }
 
+// AniList formats a page may map to. A TV page must never land on a movie,
+// special or OVA (TMDB "Naruto Shippūden" searched unfiltered returns the
+// movie "Naruto Shippuden the Movie: Blood Prison").
+export const ANILIST_TV_FORMATS = ["TV", "TV_SHORT", "ONA"];
+// Anime films are sometimes filed as specials/OVAs/ONAs, never as TV series.
+export const ANILIST_MOVIE_FORMATS = ["MOVIE", "SPECIAL", "OVA", "ONA"];
+
+/**
+ * Search variants for a TMDB title, most AniList-friendly first. AniList's
+ * search mis-ranks romanized long vowels ("Shippūden"), so the accent-free
+ * spelling ("Shippuden") and the doubled-vowel romaji ("Shippuuden") go first.
+ */
+export const anilistSearchTitles = (title) => {
+  const raw = String(title || "").trim();
+  if (!raw) return [];
+  const doubled = raw
+    .replace(/ā/g, "aa").replace(/ī/g, "ii").replace(/ū/g, "uu")
+    .replace(/ē/g, "ee").replace(/ō/g, "ou")
+    .replace(/Ā/g, "Aa").replace(/Ī/g, "Ii").replace(/Ū/g, "Uu")
+    .replace(/Ē/g, "Ee").replace(/Ō/g, "Ou");
+  const plain = raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  return [...new Set([plain, doubled, raw])];
+};
+
 // tmdbId is used as the cache key (unique per show) while title is used for the AniList search query.
+// `kind` ("tv" | "movie") keeps TMDB TV and movie ids apart in the cache;
+// `formats` limits the AniList formats the search may return.
 export const fetchAnilistData = async (
   title,
   type = "ANIME",
   tmdbId = null,
+  { kind = "any", formats = null } = {},
 ) => {
   const cacheKey = tmdbId
-    ? `${type}__tmdb_${tmdbId}`
-    : `${type}__${title.toLowerCase().trim()}`;
+    ? `${type}__${kind}__tmdb_${tmdbId}`
+    : `${type}__${kind}__${title.toLowerCase().trim()}`;
 
   const cache = getAnilistCache();
   const entry = cache[cacheKey];
   if (entry && Date.now() - entry.ts <= ANILIST_CACHE_TTL) {
-    // Sanity-check: make sure cached data actually belongs to this title.
-    const cachedTitles = [
-      entry.data?.title?.romaji,
-      entry.data?.title?.english,
-      entry.data?.title?.native,
-    ]
-      .filter(Boolean)
-      .map((t) => t.toLowerCase());
-    const searchTitle = title.toLowerCase();
-    const isMismatch =
-      entry.data !== null &&
-      cachedTitles.length > 0 &&
-      !cachedTitles.some(
-        (t) => t.includes(searchTitle) || searchTitle.includes(t),
-      );
-    if (!isMismatch) return entry.data;
-    // Mismatch detected
+    const wrongFormat =
+      entry.data && formats && entry.data.format && !formats.includes(entry.data.format);
+    if (!wrongFormat) return entry.data;
     delete cache[cacheKey];
     flushAnilistCache();
   }
 
   try {
-    const res = await fetch(ANILIST_API, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        query: ANILIST_QUERY,
-        variables: { search: title, type },
-      }),
-    });
-    const json = await res.json();
-    const data = json?.data?.Media || null;
+    let data = null;
+    let answered = false;
+    for (const search of anilistSearchTitles(title)) {
+      const res = await fetch(ANILIST_API, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          query: ANILIST_QUERY,
+          variables: { search, type, formats: formats || undefined },
+        }),
+      });
+      const json = await res.json();
+      // A 404 "Not Found." answer means no hit for this spelling: try the next.
+      if (json?.data) answered = true;
+      data = json?.data?.Media || null;
+      if (data && formats && data.format && !formats.includes(data.format)) data = null;
+      if (data) break;
+    }
+    if (!answered) throw new Error("AniList: no answer");
 
     cache[cacheKey] = { data, ts: Date.now() };
     flushAnilistCache();
@@ -885,6 +910,81 @@ export const fetchAnilistData = async (
     if (entry) return entry.data;
     return null;
   }
+};
+
+// ── AniList sequel chain (TV entries only) ───────────────────────────────────
+// Long shows are one TMDB entry with many seasons, while AniList splits them
+// into one entry per cour (AoT: S1 25, S2 12, S3 12, S3 Part 2 10, ...).
+// The chain lets a TMDB season/episode be mapped onto the right AniList entry.
+const ANILIST_RELATIONS_QUERY = `
+query ($id: Int) {
+  Media(id: $id, type: ANIME) {
+    id
+    relations { edges { relationType node { id type format episodes } } }
+  }
+}`;
+const _chainCache = new Map();
+
+/** Next TV-format sequel from a Media's relations edges, or null. */
+export const nextTvSequel = (edges) =>
+  (edges || []).find(
+    (e) =>
+      e.relationType === "SEQUEL" &&
+      e.node?.type === "ANIME" &&
+      ANILIST_TV_FORMATS.includes(e.node.format),
+  )?.node || null;
+
+/**
+ * [{ id, episodes }] from `root` along TV sequels, at most `max` entries.
+ * The first hop comes from root's own relations (already fetched); later hops
+ * are one AniList request each. Stops at a sequel with an unknown episode count.
+ */
+export const fetchAnilistChain = async (root, { max = 12, fetchImpl = fetch } = {}) => {
+  if (!root?.id) return null;
+  if (_chainCache.has(root.id)) return _chainCache.get(root.id);
+  const chain = [{ id: root.id, episodes: root.episodes || null }];
+  let edges = root.relations?.edges;
+  try {
+    while (chain.length < max && chain[chain.length - 1].episodes) {
+      const next = nextTvSequel(edges);
+      if (!next || chain.some((c) => c.id === next.id)) break;
+      chain.push({ id: next.id, episodes: next.episodes || null });
+      const res = await fetchImpl(ANILIST_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ query: ANILIST_RELATIONS_QUERY, variables: { id: next.id } }),
+      });
+      edges = (await res.json())?.data?.Media?.relations?.edges;
+    }
+  } catch {}
+  _chainCache.set(root.id, chain);
+  return chain;
+};
+
+/** Absolute episode number of TMDB season/episode (specials not counted). */
+export const tmdbAbsoluteEpisode = (tmdbSeasons, season, episode) => {
+  const ep = Number(episode);
+  if (!ep || !Array.isArray(tmdbSeasons)) return null;
+  let offset = 0;
+  for (const s of tmdbSeasons) {
+    if (s.season_number > 0 && s.season_number < Number(season)) offset += s.episode_count || 0;
+  }
+  return offset + ep;
+};
+
+/**
+ * Map an absolute episode onto the chain: { anilistId, episode } where
+ * episode is the number inside that AniList entry, or null when it falls
+ * past the chain. An entry with an unknown count (still airing) takes the rest.
+ */
+export const mapAbsoluteToAnilist = (chain, absolute) => {
+  let left = Number(absolute);
+  if (!left || !Array.isArray(chain) || !chain.length) return null;
+  for (const c of chain) {
+    if (!c.episodes || left <= c.episodes) return { anilistId: c.id, episode: left };
+    left -= c.episodes;
+  }
+  return null;
 };
 
 /**

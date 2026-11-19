@@ -199,7 +199,7 @@ function buildCandidateList(url, ctx) {
   const animeRoute = (s) => {
     if (!isAnime || !s.animeUrl || !ctx.anilistId) return null;
     try {
-      return s.animeUrl(ctx.anilistId, ctx.episode ?? 1, mode);
+      return s.animeUrl(ctx.anilistId, ctx.anilistEpisode ?? ctx.episode ?? 1, mode);
     } catch {
       return null;
     }

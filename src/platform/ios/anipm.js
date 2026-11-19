@@ -38,7 +38,7 @@ const cache = new Map(); // key -> { at, promise, result?, error? }
 
 export const anipmKey = (ctx) => {
   if (!ctx?.isAnime || !ctx.anilistId) return null;
-  const ep = ctx.type === "movie" ? 1 : ctx.episode ?? 1;
+  const ep = ctx.type === "movie" ? 1 : ctx.anilistEpisode ?? ctx.episode ?? 1;
   return `${ctx.anilistId}:${ep}:${ctx.dubMode === "dub" ? "dub" : "sub"}`;
 };
 
@@ -60,7 +60,7 @@ export function prefetchAnipm(ctx, { now = Date.now } = {}) {
   const entry = { at: started };
   entry.promise = resolveAnipm(http, {
     anilistId: ctx.anilistId,
-    episode: ctx.type === "movie" ? 1 : ctx.episode ?? 1,
+    episode: ctx.type === "movie" ? 1 : ctx.anilistEpisode ?? ctx.episode ?? 1,
     lang: ctx.dubMode === "dub" ? "dub" : "sub",
   })
     .then((r) => {
