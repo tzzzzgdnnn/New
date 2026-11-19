@@ -1,4 +1,11 @@
-import { IS_IOS, IOS_APP_NAME } from "./platform/target";
+import { IS_IOS } from "./platform/target";
+import {
+  WindowTitlebar,
+  KeyboardShortcutsModal,
+  CloseConfirmModal,
+  UpdateModal,
+  SettingsPage,
+} from "./platform/ui";
 import { saveNativeProgress } from "./platform/ios/resume";
 import {
   useState,
@@ -10,7 +17,6 @@ import {
   Suspense,
 } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
-import WindowTitlebar from "./components/WindowTitlebar";
 import { storage, secureStorage, STORAGE_KEYS } from "./utils/storage";
 import {
   applyAccentColor,
@@ -55,17 +61,13 @@ import {
 import { diag } from "./utils/diag";
 import { getActiveProfileId } from "./utils/profileScope";
 
-const KeyboardShortcutsModal = lazy(() => import("./components/KeyboardShortcutsModal"));
 const SearchModal = lazy(() => import("./components/SearchModal"));
-const CloseConfirmModal = lazy(() => import("./components/CloseConfirmModal"));
-const UpdateModal = lazy(() => import("./components/UpdateModal"));
 // Modals and pages load on first use (route-level code splitting).
 // Lazy-loaded pages: each chunk is only downloaded when the user first visits
 const HomePage = lazy(() => import("./pages/HomePage"));
 const MoviePage = lazy(() => import("./pages/MoviePage"));
 const TVPage = lazy(() => import("./pages/TVPage"));
 const LibraryPage = lazy(() => import("./pages/LibraryPage"));
-const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const DownloadsPage = lazy(() => import("./pages/DownloadsPage"));
 
 // iOS: a crash inside one page shows an inline error under the tab bar and
@@ -82,6 +84,9 @@ import {
   checkForUpdatesWithFallback,
   DEFAULT_UPDATE_SOURCE,
 } from "./utils/updates";
+
+// iOS has no Discord client.
+const DISCORD_OFF = { enabled: false };
 
 export default function App() {
   // apiKey loaded async from secure storage (OS keychain)
@@ -148,14 +153,14 @@ export default function App() {
   // of whatever is currently open) via onEpisodeChange; MoviePage needs no
   // extra data since title/poster already live on `selected`.
   const [discordSettings, setDiscordSettings] = useState(
-    readDiscordRpcSettings,
+    IS_IOS ? DISCORD_OFF : readDiscordRpcSettings,
   );
   const [watchingEpisode, setWatchingEpisode] = useState(null);
   const watchStartRef = useRef(null);
 
   // ── Scheduled backup: run on startup if due ─────────────────────────────────
   useEffect(() => {
-    if (!window.electron?.onScheduledBackupRequested) return;
+    if (IS_IOS || !window.electron?.onScheduledBackupRequested) return;
     const handler = window.electron.onScheduledBackupRequested(async () => {
       try {
         const settings = await window.electron.getScheduledBackupSettings();
@@ -185,7 +190,7 @@ export default function App() {
 
   // ── Startup update check ─────────────────────────────────────────────────
   useEffect(() => {
-    if (!storage.get("autoCheckUpdates")) return;
+    if (IS_IOS || !storage.get("autoCheckUpdates")) return;
     const source =
       storage.get(STORAGE_KEYS.UPDATE_SOURCE) || DEFAULT_UPDATE_SOURCE;
     checkForUpdatesWithFallback(source)
@@ -395,7 +400,7 @@ export default function App() {
 
   // ── Detect platform for Windows titlebar ──────────────────────────────────
   useEffect(() => {
-    if (!window.electron?.getPlatform) return;
+    if (IS_IOS || !window.electron?.getPlatform) return;
     let mounted = true;
     window.electron.getPlatform().then((p) => {
       if (!mounted) return;
@@ -411,7 +416,7 @@ export default function App() {
 
   // Listen for close confirmation request from main process
   useEffect(() => {
-    if (!window.electron) return;
+    if (IS_IOS || !window.electron) return;
     const handler = window.electron.onConfirmClose((data) =>
       setCloseConfirm(data),
     );
@@ -627,11 +632,13 @@ export default function App() {
 
   // ── Discord Rich Presence: sync settings + connect/disconnect ─────────────
   useEffect(() => {
+    if (IS_IOS) return;
     applyDiscordRpcEnabled(discordSettings.enabled);
     if (!discordSettings.enabled) clearDiscordActivity();
   }, [discordSettings.enabled]);
 
   useEffect(() => {
+    if (IS_IOS) return;
     const handler = () => setDiscordSettings(readDiscordRpcSettings());
     window.addEventListener("streambert:discord-rpc-settings-changed", handler);
     return () =>
@@ -649,7 +656,7 @@ export default function App() {
 
   // Push the current activity to Discord whenever what's on screen changes
   useEffect(() => {
-    if (!discordSettings.enabled) return;
+    if (IS_IOS || !discordSettings.enabled) return;
     if ((page === "movie" || page === "tv") && selected) {
       const title = selected.title || selected.name || "";
       let subtitle = page === "movie" ? "Movie" : "Series";
@@ -823,6 +830,7 @@ export default function App() {
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
+    if (IS_IOS) return;
     const handler = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
         e.preventDefault();
@@ -1176,7 +1184,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      {hasCustomTitlebar && <WindowTitlebar />}
+      {WindowTitlebar && hasCustomTitlebar && <WindowTitlebar />}
       <div>
         <Sidebar
           page={page}
@@ -1363,7 +1371,7 @@ export default function App() {
             offline={offline}
           /></Suspense>
         )}
-        {updateBanner && (
+        {UpdateModal && updateBanner && (
           <div
             style={{
               position: "fixed",
@@ -1384,7 +1392,7 @@ export default function App() {
               color: "#fff",
             }}
           >
-            <span>🎉 {IS_IOS ? IOS_APP_NAME : "Super Player"} v{updateBanner.latest} is available!</span>
+            <span>🎉 Super Player v{updateBanner.latest} is available!</span>
             <button
               onClick={() => setShowUpdateModal(true)}
               style={{
@@ -1417,7 +1425,7 @@ export default function App() {
             </button>
           </div>
         )}
-        {showUpdateModal && updateBanner && (
+        {UpdateModal && showUpdateModal && updateBanner && (
           <Suspense fallback={null}><UpdateModal
             updateInfo={updateBanner}
             activeDownloads={activeDownloadCount}
@@ -1611,7 +1619,7 @@ export default function App() {
             )}
           </div>
         )}
-        {closeConfirm && (
+        {CloseConfirmModal && closeConfirm && (
           <Suspense fallback={null}><CloseConfirmModal
             count={closeConfirm.count}
             onConfirm={() => {
@@ -1624,7 +1632,7 @@ export default function App() {
             }}
           /></Suspense>
         )}
-        {showShortcuts && (
+        {KeyboardShortcutsModal && showShortcuts && (
           <Suspense fallback={null}><KeyboardShortcutsModal onClose={() => setShowShortcuts(false)} /></Suspense>
         )}
       </div>

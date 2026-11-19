@@ -17,6 +17,7 @@ import { RATING_COUNTRIES } from "../../../utils/ageRating";
 import { DEFAULT_INVIDIOUS_BASE } from "../../../components/TrailerModal";
 import { HOME_ROWS, loadHomeLayout, saveHomeLayout } from "../../../utils/homeLayout";
 import { collectBackupData, restoreBackupData } from "../../../utils/backup";
+import { AGE_LIMIT_OPTIONS, TMDB_LANGUAGES } from "../../../utils/settingsOptions";
 import { version as APP_VERSION } from "../../../../package.json";
 import { getLoadTimes } from "../playerPrefs";
 import { readDiag, clearDiag, diag } from "../../../utils/diag";
@@ -362,7 +363,7 @@ function SubtitlesPage() {
   );
 }
 
-function ParentalPage({ ageOptions }) {
+function ParentalPage() {
   const [country, setCountry] = useState(() => storage.get(STORAGE_KEYS.RATING_COUNTRY) || "US");
   const [age, setAge] = useState(() => {
     const v = storage.get(STORAGE_KEYS.AGE_LIMIT);
@@ -377,7 +378,7 @@ function ParentalPage({ ageOptions }) {
     <>
       <Group header="Maximum Age Rating" footer="Titles above this rating stay visible but can't be played.">
         <ChoiceList
-          options={ageOptions.map((o) => {
+          options={AGE_LIMIT_OPTIONS.map((o) => {
             const [n, ...rest] = String(o.label).split(" — ");
             return { value: o.value, label: o.value === "" ? o.label : `${n}+`, detail: rest.join(" — ") || undefined };
           })}
@@ -566,12 +567,12 @@ function LibraryPage() {
   );
 }
 
-function LanguagePage({ languages }) {
+function LanguagePage() {
   const [lang, setLang] = useState(() => storage.get(STORAGE_KEYS.TMDB_LANG) || "en-US");
   return (
     <Group header="Titles & Descriptions" footer="Changing the language clears the metadata cache so new text loads right away.">
       <ChoiceList
-        options={languages}
+        options={TMDB_LANGUAGES}
         value={lang}
         onChange={(v) => {
           setLang(v);
@@ -893,7 +894,7 @@ const PAGES = {
 
 const scroller = () => document.querySelector(".main");
 
-export default function IOSSettings({ apiKey, onChangeApiKey, initialSection, ageOptions, tmdbLanguages }) {
+export default function IOSSettings({ apiKey, onChangeApiKey, initialSection }) {
   const [route, setRoute] = useState(() => {
     const p = SECTION_TO_PAGE[initialSection];
     return { id: p || null, dir: null };
@@ -930,7 +931,7 @@ export default function IOSSettings({ apiKey, onChangeApiKey, initialSection, ag
     <div className="sps">
       {page ? (
         <Page key={route.id} title={page.title} backLabel="Settings" onBack={pop} dir={route.dir}>
-          <page.C apiKey={apiKey} onChangeApiKey={onChangeApiKey} ageOptions={ageOptions} languages={tmdbLanguages} />
+          <page.C apiKey={apiKey} onChangeApiKey={onChangeApiKey} />
         </Page>
       ) : (
         <Page key="root" title="Settings" dir={route.dir}>
