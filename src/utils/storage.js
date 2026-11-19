@@ -196,6 +196,7 @@ export const PROFILE_SCOPED_KEYS = new Set([
   STORAGE_KEYS.PLAYER_SUBS_ON,
   STORAGE_KEYS.PLAYER_SUB_SCALE,
   "searchHistory",
+  "kidsFavorites",
 ]);
 
 /**
