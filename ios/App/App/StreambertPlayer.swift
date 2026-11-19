@@ -3,6 +3,123 @@ import WebKit
 import AVKit
 import AVFoundation
 import Capacitor
+import os
+
+// MARK: - Diagnostics log
+//
+// Crash-proof event log shared by native and web code. Every entry is
+// appended to Application Support/sb-diagnostics.log and flushed to disk as
+// it is written, so it survives the app or its WebContent process being
+// killed. Kept as a ring of the last `maxLines` lines. Read, copied and
+// cleared from Settings -> About -> Diagnostics log. Never throws.
+
+final class DiagLog {
+    static let shared = DiagLog()
+    static let maxLines = 2000
+    private let queue = DispatchQueue(label: "superplayer.diaglog")
+    private let url: URL
+    private var handle: FileHandle?
+    private var sinceTrim = 0
+    private let stamp: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private init() {
+        let dir = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                appropriateFor: nil, create: true))
+            ?? FileManager.default.temporaryDirectory
+        url = dir.appendingPathComponent("sb-diagnostics.log")
+    }
+
+    /// Native event: timestamped and tagged [native].
+    func log(_ message: String) {
+        let line = "\(stamp.string(from: Date())) [native] \(message)"
+        appendLine(line)
+    }
+
+    /// Line already formatted by the web side.
+    func appendLine(_ raw: String) {
+        let line = raw.replacingOccurrences(of: "\n", with: " ")
+        queue.async { [weak self] in self?.write(line + "\n") }
+    }
+
+    private func write(_ text: String) {
+        guard let data = text.data(using: .utf8) else { return }
+        if handle == nil {
+            if !FileManager.default.fileExists(atPath: url.path) {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+            }
+            handle = try? FileHandle(forWritingTo: url)
+            _ = try? handle?.seekToEnd()
+        }
+        guard let h = handle else { return }
+        do {
+            try h.write(contentsOf: data)
+            try h.synchronize()
+        } catch {
+            handle = nil
+            return
+        }
+        sinceTrim += 1
+        if sinceTrim >= 200 { sinceTrim = 0; trim() }
+    }
+
+    private func trim() {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        guard lines.count > Self.maxLines else { return }
+        let kept = lines.suffix(Self.maxLines).joined(separator: "\n") + "\n"
+        try? handle?.close()
+        handle = nil
+        try? kept.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    func read() -> String {
+        queue.sync {
+            trim()
+            return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        }
+    }
+
+    func clear() {
+        queue.sync {
+            try? handle?.close()
+            handle = nil
+            try? "".write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+}
+
+/// Console + diagnostics log.
+func sbLog(_ message: String) {
+    print("[SuperPlayer] \(message)")
+    DiagLog.shared.log(message)
+}
+
+/// window.webkit.messageHandlers.sbDiag: {op:"append",line} | {op:"read"} | {op:"clear"}.
+final class DiagMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage,
+                               replyHandler: @escaping (Any?, String?) -> Void) {
+        guard let body = message.body as? [String: Any], let op = body["op"] as? String else {
+            replyHandler(nil, "bad message"); return
+        }
+        switch op {
+        case "append":
+            if let line = body["line"] as? String { DiagLog.shared.appendLine(line) }
+            replyHandler(true, nil)
+        case "read":
+            replyHandler(DiagLog.shared.read(), nil)
+        case "clear":
+            DiagLog.shared.clear()
+            replyHandler(true, nil)
+        default:
+            replyHandler(nil, "unknown op")
+        }
+    }
+}
 
 // MARK: - Stream sniffer script
 //
@@ -271,7 +388,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         index += 1
         guard index < candidates.count, let container = container else { finish(nil); return }
         let c = candidates[index]
-        print("[SuperPlayer] trying \(c.id) \(c.url.absoluteString)")
+        sbLog("trying \(c.id) \(c.url.absoluteString)")
         onAdvance?(c, index)
         let cfg = WKWebViewConfiguration()
         cfg.allowsInlineMediaPlayback = true
@@ -311,7 +428,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             let sub = SniffSub(url: u, label: b["label"] as? String)
             subs.append(sub)
             if lingering {
-                print("[SuperPlayer] late subtitle \(u.absoluteString)")
+                sbLog("late subtitle \(u.absoluteString)")
                 onLateSubtitle?(sub)
             }
             return
@@ -331,7 +448,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         guard let best = hls.first(where: { $0.url.absoluteString.lowercased().contains("master") })
             ?? hls.first(where: { !$0.url.absoluteString.lowercased().contains("audio") }) ?? hls.first ?? streams.first
         else { return }
-        print("[SuperPlayer] stream \(best.url.absoluteString) from \(candidates[index].id)")
+        sbLog("stream \(best.url.absoluteString) from \(candidates[index].id)")
         var headers: [String: String] = ["User-Agent": StreambertBridgeViewController.safariUserAgent]
         if let page = best.page, let scheme = page.scheme, let host = page.host {
             let origin = "\(scheme)://\(host)" + (page.port.map { ":\($0)" } ?? "")
@@ -370,7 +487,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
 
     // The hidden page's web content process died: move on, or stop lingering.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        print("[SuperPlayer] sniffer web process terminated")
+        sbLog("sniffer web process terminated")
         if lingering { teardown() } else if running { next() }
     }
 
@@ -457,7 +574,37 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     private var navProxy: NavigationDelegateProxy?
     private var memoryObserver: NSObjectProtocol?
 
+    private var lifecycleTokens: [NSObjectProtocol] = []
+    private static let sessionOpenKey = "sbSessionOpen"
+
+    /// Launch line with whether the previous run ended cleanly, plus app
+    /// lifecycle events, all into the diagnostics log.
+    private func installDiagnostics(_ wv: WKWebView) {
+        let d = UserDefaults.standard
+        let wasOpen = d.object(forKey: Self.sessionOpenKey) as? Bool ?? false
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        sbLog("app launch v\(v) iOS \(UIDevice.current.systemVersion) previous session ended cleanly: \(wasOpen ? "no (killed or crashed while active)" : "yes")")
+        d.set(true, forKey: Self.sessionOpenKey)
+        wv.configuration.userContentController.addScriptMessageHandler(
+            DiagMessageHandler(), contentWorld: .page, name: "sbDiag")
+        let nc = NotificationCenter.default
+        let events: [(Notification.Name, String, Bool?)] = [
+            (UIApplication.didEnterBackgroundNotification, "app background", false),
+            (UIApplication.willEnterForegroundNotification, "app foreground", true),
+            (UIApplication.willResignActiveNotification, "app inactive", nil),
+            (UIApplication.didBecomeActiveNotification, "app active", nil),
+            (UIApplication.willTerminateNotification, "app terminate", false),
+        ]
+        for (name, label, open) in events {
+            lifecycleTokens.append(nc.addObserver(forName: name, object: nil, queue: .main) { _ in
+                sbLog(label)
+                if let open = open { UserDefaults.standard.set(open, forKey: Self.sessionOpenKey) }
+            })
+        }
+    }
+
     private func installWebProcessRecovery(_ wv: WKWebView) {
+        installDiagnostics(wv)
         let proxy = NavigationDelegateProxy(inner: wv.navigationDelegate)
         proxy.onTerminate = { [weak self] webView in self?.webContentTerminated(webView) }
         navProxy = proxy
@@ -465,7 +612,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         memoryObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            print("[SuperPlayer] memory warning")
+            sbLog("memory warning (os_proc_available_memory: \(Self.availableMemoryMB()) MB)")
             self?.bridge?.webView?.evaluateJavaScript(
                 "window.dispatchEvent(new CustomEvent('sb-native-diag',{detail:{type:'memory-warning'}}))",
                 completionHandler: nil)
@@ -474,10 +621,15 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
 
     private var terminations = 0
 
+    static func availableMemoryMB() -> Int {
+        if #available(iOS 13.0, *) { return Int(os_proc_available_memory() / 1_048_576) }
+        return -1
+    }
+
     private func webContentTerminated(_ webView: WKWebView) {
         terminations += 1
         let state = UIApplication.shared.applicationState == .active ? "active" : "background"
-        print("[SuperPlayer] web content process terminated (\(terminations)) while \(state)")
+        sbLog("web content process terminated (\(terminations)) while \(state)")
         let payload: [String: Any] = [
             "reason": "webcontent-terminated",
             "at": Date().timeIntervalSince1970 * 1000,
@@ -493,6 +645,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
 
     deinit {
         if let o = memoryObserver { NotificationCenter.default.removeObserver(o) }
+        lifecycleTokens.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
@@ -603,7 +756,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         guard let r = r else {
             // Every server failed: keep the player up with Retry + server
             // picker. JS falls back to the web player once it is closed.
-            print("[SuperPlayer] every server failed")
+            sbLog("every server failed")
             if let vc = playerVC {
                 failedToken = token
                 vc.showFailure("Couldn't find a working stream on any server.")
@@ -630,11 +783,11 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         guard let wv = bridge?.webView,
               let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8) else {
-            print("[SuperPlayer] could not encode payload for \(function)")
+            sbLog("could not encode payload for \(function)")
             return
         }
         wv.evaluateJavaScript("window.\(function) && window.\(function)(\(json))") { _, error in
-            if let error = error { print("[SuperPlayer] \(function) failed: \(error.localizedDescription)") }
+            if let error = error { sbLog("\(function) failed: \(error.localizedDescription)") }
         }
     }
 
@@ -689,6 +842,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
             servers: serverList(),
             currentServer: currentServer)
         vc.keepOpenOnFail = sniffBased
+        sbLog("player open: \((ctx["title"] as? String) ?? "?") \((ctx["type"] as? String) ?? "") S\(ctx["season"] as? Int ?? 0)E\(ctx["episode"] as? Int ?? 0) server \(currentServer ?? "?")")
         vc.subtitleInfo = ctx
         vc.applyPrefs(playerPrefs)
         vc.setUpNext(upNextInfo)
@@ -734,6 +888,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
             // out: leave it alone, and don't tell the page this one closed.
             if let newer = self.playerVC, newer !== vc { return }
             if self.resolveToken != nil, self.resolveToken != self.closingToken { return }
+            sbLog("player closed at \(position.isFinite ? Int(position) : -1) s")
             self.sniffer.cancel()
             if let t = self.failedToken { self.notifyJS(token: t, ok: false, server: nil) }
             self.failedToken = nil
@@ -1242,7 +1397,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             guard let scene = view.window?.windowScene else { return }
             setNeedsUpdateOfSupportedInterfaceOrientations()
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: target)) { error in
-                print("[SuperPlayer] rotate failed: \(error.localizedDescription)")
+                sbLog("rotate failed: \(error.localizedDescription)")
             }
         } else {
             let orientation: UIInterfaceOrientation = target == .portrait ? .portrait : .landscapeRight
@@ -1381,7 +1536,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         resetStreamSubtitles()
         setStatus(nil)
         spinner.startAnimating()
-        print("[SuperPlayer] play \(url.absoluteString) on \(server ?? "?")")
+        sbLog("play \(url.absoluteString) on \(server ?? "?")")
         handoffAt = Date()
         firstFrameSeen = false
         startPlayback(url)
@@ -1471,7 +1626,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
                 if it.status == .readyToPlay {
                     self.spinner.stopAnimating()
                     if self.pendingSeek > 1 {
-                        print("[SuperPlayer] resuming at \(Int(self.pendingSeek)) s")
+                        sbLog("resuming at \(Int(self.pendingSeek)) s")
                         self.seek(to: self.pendingSeek)
                     }
                     self.pendingSeek = 0
@@ -1480,7 +1635,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
                     self.tick(self.player?.currentTime().seconds ?? 0)
                 }
                 if it.status == .failed {
-                    print("[SuperPlayer] item failed: \(it.error?.localizedDescription ?? "unknown")")
+                    sbLog("item failed: \(it.error?.localizedDescription ?? "unknown")")
                     self.failAndClose()
                 }
             }
@@ -1491,7 +1646,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             let ready = self.player?.currentItem?.status == .readyToPlay
             let t = self.player?.currentTime().seconds ?? 0
             guard !ready || !(t > 0.5) else { return }
-            print("[SuperPlayer] no playback after \(Int(Self.startWatchdog)) s (ready: \(ready))")
+            sbLog("no playback after \(Int(Self.startWatchdog)) s (ready: \(ready))")
             self.failAndClose()
         }
 
@@ -2086,7 +2241,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     /// Stay open and let the page resolve the picked server; the bridge then
     /// sends a new resolve to this same player. Fails visibly if nothing comes.
     private func switchServer(_ id: String) {
-        print("[SuperPlayer] server picked: \(id)")
+        sbLog("server picked: \(id)")
         generation += 1
         let gen = generation
         player?.pause()
@@ -2484,7 +2639,7 @@ extension StreambertPlayerViewController {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 if cues.isEmpty {
-                    print("[SuperPlayer] subtitle load failed (\(status)) \(error?.localizedDescription ?? "") \(track.url)")
+                    sbLog("subtitle load failed (\(status)) \(error?.localizedDescription ?? "") \(track.url)")
                     if self.activeSubId == id { self.showToast("Couldn't load \(track.label)") }
                     return
                 }
@@ -2571,7 +2726,7 @@ extension StreambertPlayerViewController {
                 guard let self = self else { return }
                 self.subSearching = false
                 if status != 200 {
-                    print("[SuperPlayer] Wyzie search failed (\(status)) \(error?.localizedDescription ?? "")")
+                    sbLog("Wyzie search failed (\(status)) \(error?.localizedDescription ?? "")")
                     if status == 401 || status == 403 { self.showToast("Wyzie key was rejected. Check it in Settings.") }
                 }
                 self.addWyzieResults(list, preferred: lang)
@@ -2856,7 +3011,7 @@ extension StreambertPlayerViewController {
                     self.variantHeights = heights.sorted(by: >)
                     self.variantPeaks = peaks
                     self.variantsKnown = ok
-                    print("[SuperPlayer] variants: \(self.variantHeights)")
+                    sbLog("variants: \(self.variantHeights)")
                     self.applyQuality(to: item)
                     self.refreshQualityButton()
                 }
@@ -3157,7 +3312,7 @@ extension StreambertPlayerViewController {
         let tapValid = tapAtMs > 0 && handoffMs - tapAtMs >= 0 && handoffMs - tapAtMs < 180_000
         let toFrame = Int(nowMs - handoffMs)
         let toHandoff = tapValid ? Int(handoffMs - tapAtMs) : -1
-        print("[SuperPlayer] load time: tap→url \(toHandoff) ms, url→first frame \(toFrame) ms")
+        sbLog("load time: tap→url \(toHandoff) ms, url→first frame \(toFrame) ms")
         onPref?("loadTiming", [
             "at": nowMs,
             "title": titleText,

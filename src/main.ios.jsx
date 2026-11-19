@@ -8,6 +8,9 @@ import "./platform/ios/polish.css";
 import { showLaunchSplash } from "./platform/ios/splash";
 import { installImageReadyMarker } from "./platform/ios/imageReady";
 
+import { installDiagnostics } from "./utils/diag";
+
+installDiagnostics();
 showLaunchSplash();
 installImageReadyMarker();
 

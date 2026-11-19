@@ -20,6 +20,7 @@ import {
   updateProfile,
 } from "./profileStore";
 import { isRecoveryBoot } from "../../../utils/navHistory";
+import { diag } from "../../../utils/diag";
 import "./profiles.css";
 
 // Overlay states: the picker, the picker in manage mode, or none.
@@ -51,6 +52,7 @@ export default function ProfileGate({ children }) {
           if (!sid && isRecoveryBoot()) sid = getLastProfileId();
           const p = sid && list.find((x) => x.id === sid);
           if (p) {
+            diag("profile", `re-enter ${p.id} after reload${isRecoveryBoot() ? " (recovery)" : ""}`);
             activateProfile(p);
             try { sessionStorage.setItem(SESSION_KEY, p.id); } catch {}
             activeRef.current = p;
@@ -80,6 +82,7 @@ export default function ProfileGate({ children }) {
     if (activeRef.current && activeRef.current.id !== profile.id) {
       flushSync(() => setActive(null));
     }
+    diag("profile", `enter ${profile.id}${profile.kids ? " (kids)" : ""} from ${activeRef.current?.id || "picker"}`);
     activeRef.current = profile;
     activateProfile(profile);
     try { sessionStorage.setItem(SESSION_KEY, profile.id); } catch {}
@@ -89,6 +92,7 @@ export default function ProfileGate({ children }) {
   }, []);
   // Ignore the picker being reopened by a stray tap right after entering.
   const openPicker = useCallback(() => {
+    diag("profile", "open picker");
     if (Date.now() - enteredAt.current < 800) return;
     setOverlay(PICK);
   }, []);

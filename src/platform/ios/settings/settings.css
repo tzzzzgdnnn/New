@@ -379,3 +379,18 @@ body.no-anim .sps-page, body.no-anim .sps-sheet, body.no-anim .sps-sheet-scrim {
 .sps-nav.is-collapsed { background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .sps-nav.is-collapsed::after { opacity: 0; }
 .sps-nav.is-collapsed .sps-nav-title, .sps-nav-title { opacity: 0 !important; }
+
+/* Diagnostics log viewer (About): newest first, selectable */
+.sps-diag-log {
+  margin: 0;
+  padding: 10px 14px;
+  max-height: 50vh;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  font: 11px/1.45 ui-monospace, Menlo, monospace;
+  color: rgba(255, 255, 255, 0.78);
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-user-select: text;
+  user-select: text;
+}

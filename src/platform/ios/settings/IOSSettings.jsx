@@ -19,6 +19,7 @@ import { HOME_ROWS, loadHomeLayout, saveHomeLayout } from "../../../utils/homeLa
 import { collectBackupData, restoreBackupData } from "../../../utils/backup";
 import { version as APP_VERSION } from "../../../../package.json";
 import { getLoadTimes } from "../playerPrefs";
+import { readDiag, clearDiag, diag } from "../../../utils/diag";
 
 // Tile colors: one accent family plus iOS system hues so rows scan quickly.
 const C = {
@@ -190,6 +191,7 @@ function Root({ push }) {
       <Group header="About" footer={`${IOS_APP_NAME} ${APP_VERSION} · Made by Tez · GPL-3.0`}>
         <Row icon="film" iconColor={C.orange} label="Trailers" onClick={() => push("trailers")} />
         <Row icon="info" iconColor={C.gray} label="About" value={APP_VERSION} onClick={() => push("about")} />
+        <Row icon="info" iconColor={C.indigo} label="Diagnostics log" onClick={() => push("diagnostics")} />
       </Group>
     </>
   );
@@ -771,6 +773,66 @@ function StoragePage() {
   );
 }
 
+// Copy plain text; navigator.clipboard first, then the textarea fallback.
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+// Diagnostics log: every crash-relevant event, written as it happens (see
+// utils/diag.js). View, Copy All (plain text) and Clear.
+function DiagnosticsLogGroup() {
+  const [text, setText] = useState(null); // null = hidden
+  const [msg, setMsg] = useState(null);
+  const refresh = async () => setText((await readDiag()) || "(empty)");
+  const lines = text ? text.split("\n").length : 0;
+  return (
+    <Group
+      header="Diagnostics log"
+      footer={msg || "Crashes, reloads, navigation, profile and player events, saved as they happen. Copy All and paste it to report a problem."}
+    >
+      <Row label={text == null ? "View" : "Hide"} value={text == null ? null : `${lines} lines`} onClick={() => (text == null ? refresh() : setText(null))} />
+      <Row
+        label="Copy All"
+        chevron={false}
+        onClick={async () => {
+          const all = await readDiag();
+          const ok = await copyText(all || "(empty)");
+          setMsg(ok ? `Copied ${all.split("\n").length} lines` : "Copy failed: open View and select the text");
+          diag("app", `diagnostics copy ${ok ? "ok" : "failed"}`);
+        }}
+      />
+      <Row
+        label="Clear"
+        danger
+        chevron={false}
+        onClick={async () => {
+          await clearDiag();
+          setMsg("Log cleared");
+          if (text != null) refresh();
+        }}
+      />
+      {text != null && <pre className="sps-diag-log">{text.split("\n").slice(-400).reverse().join("\n")}</pre>}
+    </Group>
+  );
+}
+
 function AboutPage({ apiKey, onChangeApiKey }) {
   // Hidden: tap the version 5 times for Diagnostics (native load times).
   const [taps, setTaps] = useState(0);
@@ -825,6 +887,7 @@ const PAGES = {
   backup: { title: "Backup & Restore", C: BackupPage },
   storage: { title: "Storage", C: StoragePage },
   about: { title: "About", C: AboutPage },
+  diagnostics: { title: "Diagnostics log", C: DiagnosticsLogGroup },
 };
 
 const scroller = () => document.querySelector(".main");
