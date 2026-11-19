@@ -7,6 +7,15 @@ import {
   useAnimeServerGuard,
   useNativeServerSelect,
 } from "../platform/ios/playerBridge";
+import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
+import {
+  clearResume,
+  formatClock,
+  getLastEpisode,
+  getResumeSeconds,
+  isFinished,
+  progressKeyFor,
+} from "../platform/ios/resume";
 import {
   useState,
   useEffect,
@@ -1731,8 +1740,10 @@ export default function TVPage({
       tmdbEpisode: playerEp?.episode ?? selectedEp?.episode_number ?? null,
       anilistId: anilistIdForSeason,
       dubMode,
+      progressKey: currentProgressKey,
     });
   }, [
+    currentProgressKey,
     item.name,
     item.title,
     item.id,
@@ -1753,6 +1764,71 @@ export default function TVPage({
     storage.set(STORAGE_KEYS.PLAYER_SOURCE, sourceId);
     resetPlayerResolution();
   });
+
+  // ── iOS: Resume / Play next / Restart ──────────────────────────────────
+  // Where the series was left: the last episode played, or the next one when
+  // that is finished, or the first episode of the selected season.
+  const resumePlan = useMemo(() => {
+    if (!IS_IOS) return null;
+    const firstEp = currentSeasonEpisodes[0]?.episode_number ?? 1;
+    const plan = (season, episode, seconds = 0) => ({
+      season,
+      episode,
+      seconds,
+      key: progressKeyFor({ type: "tv", id: item.id, season, episode }),
+      label:
+        seconds > 0
+          ? `Resume S${season}:E${episode} · ${formatClock(seconds)}`
+          : `Play S${season}:E${episode}`,
+    });
+    const last = getLastEpisode(item.id);
+    if (!last) return plan(selectedSeason, firstEp);
+    const lastKey = progressKeyFor({ type: "tv", id: item.id, ...last });
+    if (!isFinished(lastKey, progress, watched)) {
+      return plan(last.season, last.episode, getResumeSeconds(lastKey));
+    }
+    // Finished: offer the next episode (same season, else the next season).
+    const inView = last.season === selectedSeason;
+    const hasNextInSeason =
+      !inView || currentSeasonEpisodes.some((e) => e.episode_number === last.episode + 1);
+    if (hasNextInSeason) return plan(last.season, last.episode + 1);
+    if ((displaySeasonCount || 0) > last.season) return plan(last.season + 1, 1);
+    return plan(selectedSeason, firstEp);
+  }, [item.id, progress, watched, selectedSeason, currentSeasonEpisodes, displaySeasonCount]);
+
+  // Episode to start once its season's episode list is loaded.
+  const [pendingPlay, setPendingPlay] = useState(null);
+  const startEpisode = useCallback(
+    (season, episode, { restart = false } = {}) => {
+      if (restart) {
+        const key = progressKeyFor({ type: "tv", id: item.id, season, episode });
+        clearResume(key);
+        saveProgress?.(key, 0);
+      }
+      if (season !== selectedSeason) setSelectedSeason(season);
+      setPendingPlay({ season, episode });
+    },
+    [item.id, selectedSeason, saveProgress],
+  );
+  useEffect(() => {
+    if (!pendingPlay || pendingPlay.season !== selectedSeason) return;
+    if (!currentSeasonEpisodes.length) return;
+    const ep = currentSeasonEpisodes.find((e) => e.episode_number === pendingPlay.episode);
+    setPendingPlay(null);
+    if (!ep) return;
+    if (playing && selectedEp?.episode_number === ep.episode_number) replayNative();
+    else playEpisode(ep);
+  }, [pendingPlay, selectedSeason, currentSeasonEpisodes, playing, selectedEp, playEpisode]);
+
+  // Continue Watching opens straight into the episode it was left on.
+  const autoResumedRef = useRef(null);
+  useEffect(() => {
+    if (!IS_IOS || !item.autoResume || item.episode == null) return;
+    const key = `${item.id}_s${item.season}_e${item.episode}`;
+    if (autoResumedRef.current === key) return;
+    autoResumedRef.current = key;
+    startEpisode(Number(item.season ?? 1), Number(item.episode));
+  }, [item.id, item.autoResume, item.season, item.episode, startEpisode]);
 
   const handleSetDownloaderFolder = useCallback((folder) => {
     setDownloaderFolder(folder);
@@ -1912,6 +1988,20 @@ export default function TVPage({
                 )}
                 <p className="detail-overview">{displayOverview}</p>
                 <div className="detail-actions">
+                  {IS_IOS && resumePlan && (
+                    <ResumeButtons
+                      label={resumePlan.label}
+                      onPrimary={() => startEpisode(resumePlan.season, resumePlan.episode)}
+                      onRestart={
+                        resumePlan.seconds > 0
+                          ? () =>
+                              startEpisode(resumePlan.season, resumePlan.episode, {
+                                restart: true,
+                              })
+                          : null
+                      }
+                    />
+                  )}
                   {trailerKey &&
                     (restricted ? (
                       <button

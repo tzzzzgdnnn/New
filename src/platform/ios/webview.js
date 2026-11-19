@@ -8,6 +8,7 @@
 // stream and plays it in StreambertPlayer. The iframe is only the fallback.
 import { mirrorsFor } from "./servers";
 import { PLAYER_SOURCES, sourcesForContent, nativeServerList } from "../../utils/api";
+import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
 
 const LOAD_TIMEOUT_MS = 8000;
 const MAX_CANDIDATES = 10;
@@ -151,17 +152,24 @@ window.__sbNativeResult = (r) => {
   cb(r);
 };
 let onNativeClosed = null;
-window.__sbNativeClosed = () => onNativeClosed?.();
+/** Native player closed by the viewer; `info.time` is where it stopped. */
+window.__sbNativeClosed = (info) => onNativeClosed?.(info || {});
+/** Position reports from the native player; App.jsx saves them. */
+window.__sbNativeProgress = (report) =>
+  window.dispatchEvent(new CustomEvent("sb-native-progress", { detail: report }));
 
-// One window listener for servers picked in the native player; it serves the
-// most recently upgraded <webview> that is still in the page.
-const selectTargets = new Set();
-window.addEventListener("sb-select-server", () => {
-  for (const t of [...selectTargets]) {
-    if (!t.wv.isConnected) selectTargets.delete(t);
-    else t.onSelect();
+// Window-level events served by every upgraded <webview> still in the page:
+//  sb-select-server  a server was picked in the native player
+//  sb-replay         the page's Play/Resume button was pressed again
+const targets = new Set();
+const forEachTarget = (fn) => {
+  for (const t of [...targets]) {
+    if (!t.wv.isConnected) targets.delete(t);
+    else fn(t);
   }
-});
+};
+window.addEventListener("sb-select-server", () => forEachTarget((t) => t.onSelect()));
+window.addEventListener("sb-replay", () => forEachTarget((t) => t.onReplay()));
 
 function upgrade(wv) {
   if (wv.__sbUpgraded) return;
@@ -212,6 +220,7 @@ function upgrade(wv) {
     nativeFor = url;
     clearTimeout(timer);
     iframe.src = "about:blank";
+    cardBtn.textContent = "▶  Play";
     showCard("Opening the native player…", false);
     note.style.display = "none";
     fire("dom-ready");
@@ -231,8 +240,11 @@ function upgrade(wv) {
       note.style.display = "";
       setTimeout(() => (note.style.display = "none"), 5000);
     });
-    onNativeClosed = () => {
-      if (nativeFor === url) showCard("Playback closed", true);
+    onNativeClosed = ({ time }) => {
+      if (nativeFor !== url) return;
+      const t = Number(time) || 0;
+      showCard(t >= MIN_RESUME_SECONDS ? `Resume from ${formatClock(t)}` : "Ready to play", true);
+      cardBtn.textContent = t >= MIN_RESUME_SECONDS ? "▶  Resume" : "▶  Play";
     };
     // Give the page a tick to publish its context (title, ids, Sub/Dub).
     setTimeout(async () => {
@@ -241,13 +253,14 @@ function upgrade(wv) {
       const subCtx = await subtitleContext();
       if (nativeToken !== token) return;
       const ctx = currentCtx();
+      const startAt = getResumeSeconds(ctx.progressKey);
       const candidates = buildCandidates(url);
       log("resolve", candidates.map((c) => `${c.id} ${c.url}`));
       try {
         window.webkit.messageHandlers.sbResolve.postMessage({
           token,
           candidates,
-          ctx: { ...ctx, ...subCtx },
+          ctx: { ...ctx, ...subCtx, startAt },
           current: candidates[0]?.id ?? null,
           servers: serverListFor(ctx),
         });
@@ -315,8 +328,12 @@ function upgrade(wv) {
   // the player through the src observer. When the URL does not change (same
   // server, or the page is still waiting on anime data) reopen it here, once.
   let selectTimer = null;
-  selectTargets.add({
+  targets.add({
     wv,
+    onReplay: () => {
+      const u = wv.getAttribute("src");
+      if (!isBlank(u) && nativeAvailable()) playNative(u);
+    },
     onSelect: () => {
       clearTimeout(selectTimer);
       const picked = Date.now();

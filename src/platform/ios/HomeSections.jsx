@@ -96,7 +96,7 @@ export function WideRail({ title, items, progress, onSelect }) {
           const pct = Math.max(0, Math.min(100, progress?.[pk] || 0));
           const img = item.backdrop_path || item.still_path || item.poster_path;
           return (
-            <div className="sb-wide-item" key={`${item.media_type}_${item.id}`} onClick={() => onSelect(item)}>
+            <div className="sb-wide-item" key={`${item.media_type}_${item.id}`} onClick={() => onSelect({ ...item, autoResume: true })}>
               <div className="sb-wide-img">
                 {img && <img src={imgUrl(img, "w780")} alt="" loading="lazy" />}
                 <div className="sb-wide-play">

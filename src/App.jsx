@@ -1,4 +1,5 @@
 import { IS_IOS, IOS_APP_NAME } from "./platform/target";
+import { saveNativeProgress } from "./platform/ios/resume";
 import {
   useState,
   useEffect,
@@ -694,14 +695,6 @@ export default function App() {
     }
   }, []);
 
-  // iOS: the native player's subtitle menu links to Settings → Subtitles.
-  useEffect(() => {
-    if (!IS_IOS) return;
-    const open = (e) => navigate("settings", { section: e?.detail || "subtitles" });
-    window.addEventListener("sb-open-settings", open);
-    return () => window.removeEventListener("sb-open-settings", open);
-  }, [navigate]);
-
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e) => {
@@ -918,6 +911,27 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // iOS: the native player reports its position (every few seconds, on
+  // pause, on close and when the app goes to the background).
+  useEffect(() => {
+    if (!IS_IOS) return;
+    const onProgress = (e) => {
+      if (!saveNativeProgress(e?.detail, { saveProgress, markWatched })) {
+        console.warn("[native] ignored progress report", e?.detail);
+      }
+    };
+    window.addEventListener("sb-native-progress", onProgress);
+    return () => window.removeEventListener("sb-native-progress", onProgress);
+  }, [saveProgress, markWatched]);
+
+  // iOS: the native player's subtitle menu links to Settings → Subtitles.
+  useEffect(() => {
+    if (!IS_IOS) return;
+    const open = (e) => navigate("settings", { section: e?.detail || "subtitles" });
+    window.addEventListener("sb-open-settings", open);
+    return () => window.removeEventListener("sb-open-settings", open);
+  }, [navigate]);
 
   const removeHistory = useCallback((item) => {
     setHistory((prev) => {

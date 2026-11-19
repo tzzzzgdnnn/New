@@ -403,3 +403,19 @@ html.sb-ios .sb-dub-btn-title { font: 800 24px -apple-system, system-ui, sans-se
 html.sb-ios .sb-dub-btn-detail { font: 500 12px -apple-system, system-ui, sans-serif; color: #bdbdc2; line-height: 1.35; }
 @keyframes sbFadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes sbPopIn { from { opacity: 0; transform: translateY(12px) scale(.96); } to { opacity: 1; transform: none; } }
+
+/* ── Status bar shield: content never scrolls under the clock/battery ───── */
+html.sb-ios body::before {
+  content: "";
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: env(safe-area-inset-top);
+  z-index: 9000;
+  pointer-events: none;
+  background: rgba(10, 10, 10, .78);
+  -webkit-backdrop-filter: saturate(160%) blur(18px);
+  backdrop-filter: saturate(160%) blur(18px);
+}
+
+/* Resume button: primary action keeps its label on one line */
+html.sb-ios .sb-resume-btn { white-space: nowrap; }

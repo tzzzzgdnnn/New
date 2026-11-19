@@ -7,6 +7,8 @@ import {
   useAnimeServerGuard,
   useNativeServerSelect,
 } from "../platform/ios/playerBridge";
+import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
+import { clearResume, formatClock, getResumeSeconds } from "../platform/ios/resume";
 import {
   useState,
   useEffect,
@@ -801,8 +803,32 @@ export default function MoviePage({
       tmdbId: item.id,
       anilistId: (isAnime && anilistData?.id) || null,
       dubMode,
+      progressKey,
     });
-  }, [title, isAnime, item.id, anilistData?.id, dubMode]);
+  }, [title, isAnime, item.id, anilistData?.id, dubMode, progressKey]);
+
+  // iOS: Resume / Play / Restart. `pct` changes whenever progress is saved.
+  const resumeSeconds = useMemo(
+    () => (IS_IOS ? getResumeSeconds(progressKey) : 0),
+    [progressKey, pct],
+  );
+  const playOrReplay = useCallback(() => {
+    if (playing) replayNative();
+    else handlePlay();
+  }, [playing, handlePlay]);
+  const restartFromTop = useCallback(() => {
+    clearResume(progressKey);
+    saveProgress?.(progressKey, 0);
+    playOrReplay();
+  }, [progressKey, saveProgress, playOrReplay]);
+
+  // Continue Watching opens straight into playback.
+  const autoResumedRef = useRef(null);
+  useEffect(() => {
+    if (!IS_IOS || !item.autoResume || autoResumedRef.current === item.id) return;
+    autoResumedRef.current = item.id;
+    handlePlay();
+  }, [item.id, item.autoResume, handlePlay]);
 
   useNativeServerSelect(({ sourceId, dubMode: mode }) => {
     if (mode) {
@@ -969,9 +995,17 @@ export default function MoviePage({
                   🔒 Restricted
                 </button>
               ) : (
-                <button className="btn btn-primary" onClick={handlePlay}>
-                  <PlayIcon /> {playing ? "Restart" : "Play"}
-                </button>
+                IS_IOS ? (
+                  <ResumeButtons
+                    label={resumeSeconds > 0 ? `Resume · ${formatClock(resumeSeconds)}` : "Play"}
+                    onPrimary={playOrReplay}
+                    onRestart={resumeSeconds > 0 ? restartFromTop : null}
+                  />
+                ) : (
+                  <button className="btn btn-primary" onClick={handlePlay}>
+                    <PlayIcon /> {playing ? "Restart" : "Play"}
+                  </button>
+                )
               )}
               {trailerKey &&
                 (restricted ? (
