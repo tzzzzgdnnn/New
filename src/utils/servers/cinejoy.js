@@ -105,7 +105,7 @@ export function pickCinejoyStream(data) {
  * Ask every upstream at once; the first with a stream wins.
  * q: { type: "movie"|"tv", tmdbId, season?, episode?, imdbId?, year?, title? }
  */
-export function resolveCinejoy(fetchFn, q, servers = CINEJOY_SERVERS) {
+export function resolveCinejoy(fetchFn, q, servers = CINEJOY_SERVERS, verify = null) {
   return new Promise((resolve, reject) => {
     let left = servers.length;
     const miss = () => --left === 0 && reject(new Error("cinejoy: no server has this title"));
@@ -115,7 +115,12 @@ export function resolveCinejoy(fetchFn, q, servers = CINEJOY_SERVERS) {
         .then((env) => {
           const hit = env.status >= 200 && env.status < 300 && pickCinejoyStream(env.data);
           if (!hit) return miss();
-          resolve({ ok: true, server, ...hit });
+          if (!verify) return resolve({ ok: true, server, ...hit });
+          // Only a playlist this browser can actually read counts.
+          return Promise.resolve(verify(hit.source)).then(
+            (good) => (good ? resolve({ ok: true, server, ...hit }) : miss()),
+            miss,
+          );
         })
         .catch(miss);
     }

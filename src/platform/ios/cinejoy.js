@@ -24,6 +24,18 @@ export const setCinejoyHttp = (fn, imdb) => {
 
 const nativeHttpAvailable = () => typeof WebAssembly !== "undefined" && !!globalThis.crypto?.subtle;
 
+// Web app: a stream counts only if this browser can fetch its playlist (CORS,
+// not removed, not an anti-scrape redirect).
+const playableHere = async (url) => {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout?.(5000) });
+    if (!r.ok || /dontscrape/.test(r.url)) return false;
+    return (await r.text()).startsWith("#EXTM3U");
+  } catch {
+    return false;
+  }
+};
+
 const cache = new Map(); // key -> { at, promise, result?, error? }
 
 /** Cache key, or null when Cinejoy isn't used (anime has ani.pm). */
@@ -53,7 +65,7 @@ export function prefetchCinejoy(ctx, { now = Date.now } = {}) {
       imdbId,
       season: ctx.tmdbSeason ?? ctx.season ?? 1,
       episode: ctx.tmdbEpisode ?? ctx.episode ?? 1,
-    });
+    }, undefined, import.meta.env?.VITE_WEB ? playableHere : null);
   })()
     .then((r) => {
       entry.result = r;
