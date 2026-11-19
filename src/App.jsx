@@ -36,7 +36,15 @@ import SetupScreen from "./components/SetupScreen";
 // via Settings overrides it.
 const BUILTIN_TMDB_TOKEN = (import.meta.env.VITE_TMDB_TOKEN || "").trim();
 import { useGamepadNav } from "./utils/useGamepadNav";
-import { saveNavState, loadNavState, isRecoveryBoot } from "./utils/navHistory";
+import {
+  saveNavState,
+  loadNavState,
+  isRecoveryBoot,
+  pushNav,
+  popNav,
+  runBackHandlers,
+} from "./utils/navHistory";
+import { diag } from "./utils/diag";
 import { getActiveProfileId } from "./utils/profileScope";
 
 const KeyboardShortcutsModal = lazy(() => import("./components/KeyboardShortcutsModal"));
@@ -694,31 +702,108 @@ export default function App() {
     saveNavState({ profileId: getActiveProfileId(), page, selected, stack: navStack });
   }, [page, selected, navStack]);
 
-  const navigateBack = useCallback(() => {
-    setNavStack((prev) => {
-      if (prev.length === 0) return prev;
-      const last = prev[prev.length - 1];
-      setPage(last.page);
-      setSelected(last.selected);
-      if (typeof gc === "function") {
-        requestIdleCallback(() => gc(), { timeout: 2000 });
-      }
-      return prev.slice(0, -1);
-    });
+  // The stack lives in a ref as well, so several quick taps each act on the
+  // latest stack (React state updates are batched) and no side effects run
+  // inside a state updater (StrictMode runs those twice).
+  const navStackRef = useRef(navStack);
+  // Count of screens with an inner page open (Settings sub-page), so the
+  // tab bar shows Back there even when the app stack is empty.
+  const [nestedBack, setNestedBack] = useState(0);
+  useEffect(() => {
+    const on = (e) => setNestedBack(Number(e?.detail) || 0);
+    window.addEventListener("sb-nested-back", on);
+    return () => window.removeEventListener("sb-nested-back", on);
+  }, []);
+  const showSearchRef = useRef(false);
+  useEffect(() => {
+    showSearchRef.current = showSearch;
+  }, [showSearch]);
+
+  const navigateBack = useCallback((cause = "back") => {
+    // Inner navigation first (Settings sub-page), then an open Search sheet.
+    if (runBackHandlers()) {
+      diag("nav", `${cause}: inner page of ${pageRef.current}`);
+      return;
+    }
+    if (showSearchRef.current) {
+      showSearchRef.current = false;
+      setShowSearch(false);
+      diag("nav", `${cause}: close search`);
+      return;
+    }
+    const { stack, entry } = popNav(navStackRef.current);
+    if (!entry) {
+      diag("nav", `${cause}: nothing behind ${pageRef.current}, stay`);
+      return; // nothing behind this screen: stay, never reset
+    }
+    diag("nav", `${pageRef.current} -> ${entry.page}${entry.selected?.id ? ` #${entry.selected.id}` : ""} (${cause}, depth ${stack.length})`);
+    navStackRef.current = stack;
+    pageRef.current = entry.page;
+    selectedRef.current = entry.selected;
+    setNavStack(stack);
+    setPage(entry.page);
+    setSelected(entry.selected);
+    if (typeof gc === "function") {
+      requestIdleCallback(() => gc(), { timeout: 2000 });
+    }
   }, []);
 
   const navigate = useCallback((pg, data = null) => {
-    setNavStack((prev) => [
-      ...prev,
+    const stack = pushNav(
+      navStackRef.current,
       { page: pageRef.current, selected: selectedRef.current },
-    ]);
+      { page: pg, selected: data },
+    );
+    diag("nav", `${pageRef.current} -> ${pg}${data?.id ? ` #${data.id}` : ""} (navigate, depth ${stack.length})`);
+    navStackRef.current = stack;
+    pageRef.current = pg;
+    selectedRef.current = data;
+    setNavStack(stack);
     setSelected(data);
     setPage(pg);
+    showSearchRef.current = false;
     setShowSearch(false);
     // After navigating away, the previous page's component unmounts
     if (typeof gc === "function") {
       requestIdleCallback(() => gc(), { timeout: 2000 });
     }
+  }, []);
+
+  // In-page "Back" buttons (Movie / TV pages): previous screen, or Home only
+  // when the page was opened with nothing behind it.
+  const navigateBackOrHome = useCallback(() => {
+    if (navStackRef.current.length) navigateBack("page back button");
+    else navigate("home");
+  }, [navigateBack, navigate]);
+
+  // iOS: swipe in from the left edge = Back (WKWebView keeps no history of
+  // its own here). Settings sub-pages are handled through runBackHandlers.
+  useEffect(() => {
+    if (!IS_IOS) return;
+    let start = null;
+    const onStart = (e) => {
+      const t = e.touches[0];
+      start = e.touches.length === 1 && t.clientX <= 28 ? { x: t.clientX, y: t.clientY } : null;
+    };
+    const onEnd = (e) => {
+      if (!start) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - start.x;
+      const dy = Math.abs(t.clientY - start.y);
+      start = null;
+      if (dx > 70 && dy < 60) navigateBack("edge swipe");
+    };
+    window.addEventListener("touchstart", onStart, { passive: true });
+    window.addEventListener("touchend", onEnd, { passive: true });
+    return () => {
+      window.removeEventListener("touchstart", onStart);
+      window.removeEventListener("touchend", onEnd);
+    };
+  }, [navigateBack]);
+
+  useEffect(() => {
+    if (recovered) diag("nav", `restored ${recovered.page} with ${recovered.stack.length} back steps after WebContent reload`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
@@ -748,7 +833,7 @@ export default function App() {
       // Ctrl+Z / Cmd+Z → navigate back
       if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) {
         e.preventDefault();
-        navigateBack();
+        navigateBack("ctrl+z");
       }
       if ((e.metaKey || e.ctrlKey) && e.key === "r") {
         e.preventDefault();
@@ -776,7 +861,7 @@ export default function App() {
   const gamepadToastedRef = useRef(false);
   const { connected: gamepadConnected } = useGamepadNav({
     enabled: gamepadEnabled,
-    onBack: navigateBack,
+    onBack: () => navigateBack("gamepad"),
     onOpenSearch: () => setShowSearch(true),
   });
   useEffect(() => {
@@ -1066,8 +1151,8 @@ export default function App() {
           activeDownloads={activeDownloadCount}
           onReorderSaved={handleReorderSaved}
           onRemoveSaved={toggleSave}
-          canGoBack={navStack.length > 0}
-          onBack={navigateBack}
+          canGoBack={navStack.length > 0 || showSearch || nestedBack > 0}
+          onBack={() => navigateBack("tab bar back")}
           onShowShortcuts={() => setShowShortcuts(true)}
         />
 
@@ -1149,7 +1234,7 @@ export default function App() {
                 onHistory={addHistory}
                 progress={progress}
                 saveProgress={saveProgress}
-                onBack={() => navigate("home")}
+                onBack={navigateBackOrHome}
                 onSettings={(section) =>
                   navigate("settings", { section: section || null })
                 }
@@ -1172,7 +1257,7 @@ export default function App() {
                 onHistory={addHistory}
                 progress={progress}
                 saveProgress={saveProgress}
-                onBack={() => navigate("home")}
+                onBack={navigateBackOrHome}
                 onSettings={(section) =>
                   navigate("settings", { section: section || null })
                 }

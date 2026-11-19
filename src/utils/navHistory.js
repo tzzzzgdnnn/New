@@ -84,3 +84,39 @@ export function loadNavState(profileId, { now = Date.now(), store = globalThis.l
 
 /** True when this page load is the native side's reload after a WebContent crash. */
 export const isRecoveryBoot = () => typeof window !== "undefined" && !!window.__sbRecovered;
+
+// ── Nested back handlers ─────────────────────────────────────────────────
+// A screen with its own inner navigation (Settings sub-pages) registers a
+// handler; app-level Back (tab bar button, edge swipe, gamepad) asks the
+// newest one first, so Back leaves the sub-page before leaving the screen.
+const _backHandlers = [];
+
+/** Register `fn` (returns true when it handled Back). Returns an unregister. */
+const _announce = () => {
+  try {
+    window.dispatchEvent(new CustomEvent("sb-nested-back", { detail: _backHandlers.length }));
+  } catch {}
+};
+
+export function registerBackHandler(fn) {
+  _backHandlers.push(fn);
+  _announce();
+  return () => {
+    const i = _backHandlers.lastIndexOf(fn);
+    if (i >= 0) _backHandlers.splice(i, 1);
+    _announce();
+  };
+}
+
+/** Run the newest registered handler; true when it consumed Back. */
+export function runBackHandlers() {
+  for (let i = _backHandlers.length - 1; i >= 0; i--) {
+    try {
+      if (_backHandlers[i]()) return true;
+    } catch {}
+  }
+  return false;
+}
+
+/** True while some screen has an inner page to go back from. */
+export const hasNestedBack = () => _backHandlers.length > 0;

@@ -20,6 +20,7 @@ import { collectBackupData, restoreBackupData } from "../../../utils/backup";
 import { version as APP_VERSION } from "../../../../package.json";
 import { getLoadTimes } from "../playerPrefs";
 import { readDiag, clearDiag, diag } from "../../../utils/diag";
+import { registerBackHandler } from "../../../utils/navHistory";
 
 // Tile colors: one accent family plus iOS system hues so rows scan quickly.
 const C = {
@@ -898,7 +899,6 @@ export default function IOSSettings({ apiKey, onChangeApiKey, initialSection, ag
     return { id: p || null, dir: null };
   });
   const rootScroll = useRef(0);
-  const touch = useRef(null);
 
   const push = useCallback((id) => {
     rootScroll.current = scroller()?.scrollTop || 0;
@@ -913,22 +913,21 @@ export default function IOSSettings({ apiKey, onChangeApiKey, initialSection, ag
     el.scrollTop = route.id ? 0 : rootScroll.current;
   }, [route]);
 
-  // Swipe right from the left edge goes back, like a navigation controller.
-  const onTouchStart = (e) => {
-    const t = e.touches[0];
-    touch.current = route.id && t.clientX < 28 ? { x: t.clientX, y: t.clientY } : null;
-  };
-  const onTouchEnd = (e) => {
-    const s = touch.current;
-    touch.current = null;
-    if (!s) return;
-    const t = e.changedTouches[0];
-    if (t.clientX - s.x > 70 && Math.abs(t.clientY - s.y) < 60) pop();
-  };
+  // While a sub-page is open, app-level Back (tab bar button, left-edge
+  // swipe, gamepad) returns to the Settings list first, one step at a time.
+  // Before, the edge swipe was handled here and the tab bar Back skipped the
+  // sub-page and left Settings entirely.
+  useEffect(() => {
+    if (!route.id) return;
+    return registerBackHandler(() => {
+      pop();
+      return true;
+    });
+  }, [route.id, pop]);
 
   const page = route.id && PAGES[route.id];
   return (
-    <div className="sps" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+    <div className="sps">
       {page ? (
         <Page key={route.id} title={page.title} backLabel="Settings" onBack={pop} dir={route.dir}>
           <page.C apiKey={apiKey} onChangeApiKey={onChangeApiKey} ageOptions={ageOptions} languages={tmdbLanguages} />
