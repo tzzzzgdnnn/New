@@ -43,6 +43,13 @@ export function tierOf({ width = 0, height = 0 }) {
   return QUALITY_TIERS.find(([h]) => lines * 1.05 >= h) || null;
 }
 
+/** Best picture height a probed stream offers (tier lines), 0 when unknown. */
+export const streamHeight = (probe) =>
+  Math.max(0, ...(probe?.variants || []).map((v) => tierOf(v)?.[0] || 0));
+
+/** The option of the same tier as `option`, else the best one. */
+export const sameQuality = (options, option) => options.find((o) => o.name === option?.name) || options[0];
+
 /** "1080p · ~2.1 GB" (estimate) / "1080p · 2.1 GB" (exact), or just "1080p". */
 export const qualityLabel = (name, bytes, exact = false) =>
   bytes > 0 ? `${name} · ${exact ? "" : "~"}${formatBytes(bytes)}` : name;

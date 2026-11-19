@@ -6,6 +6,7 @@ import {
   useAnimeServerGuard,
   useNativeServerSelect,
 } from "../platform/ios/playerBridge";
+import { setAutoPick } from "../platform/ios/autoServer";
 import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
 import { syncPlayerPrefs, postUpNext } from "../platform/ios/playerPrefs";
 import {
@@ -1365,6 +1366,7 @@ export default function MoviePage({
                       // Manual selection wins over auto-failover
                       clearFailoverSource(`movie_${item.id}_${dubMode}`);
                       setPlayerSource(src.id);
+                      if (IS_IOS) setAutoPick(false);
                       storage.set(STORAGE_KEYS.PLAYER_SOURCE, src.id);
                       resetPlayerResolution();
                     }}

@@ -9,6 +9,10 @@
 import { mirrorsFor } from "./servers";
 import { PLAYER_SOURCES, sourcesForContent, nativeServerList } from "../../utils/api";
 import { serverKey } from "../../utils/servers/catalog";
+import { createFallback } from "../../utils/servers/fallback";
+import { probeAndRank } from "../../utils/servers/ranking";
+import { probeUrl } from "../../utils/servers/probe";
+import { isAutoPick, recordLookup, serverStats } from "./autoServer";
 import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
 
 const LOAD_TIMEOUT_MS = 8000;
@@ -138,12 +142,19 @@ function rememberLastGood(ctx, serverId) {
   } catch {}
 }
 
-function buildCandidates(url, ctx = currentCtx()) {
-  const list = buildCandidateList(url, ctx);
-  const good = readLastGood()[titleKey(ctx)];
-  const i = good ? list.findIndex((c) => c.id === good) : -1;
-  if (i > 0) list.unshift(...list.splice(i, 1));
-  return list;
+// Server that leads the list: the viewer's own pick, or in Auto the last
+// server that played this title; everything else is ranked by speed.
+function pinnedFor(ctx) {
+  return isAutoPick() ? readLastGood()[titleKey(ctx)] : menuId(readStored("playerSource"), ctx);
+}
+
+/**
+ * Candidates for `ctx`, best first: providers with no fresh stats are probed
+ * now (in parallel, short budget). Ids in `exclude` are left out.
+ */
+function rankedCandidates(url, ctx, { signal, exclude = [] } = {}) {
+  const list = buildCandidateList(url, ctx).filter((c) => !exclude.includes(c.id));
+  return probeAndRank(list, { stats: serverStats, probe: probeUrl, pinned: pinnedFor(ctx), signal });
 }
 
 function buildCandidateList(url, ctx) {
@@ -198,12 +209,16 @@ function buildCandidateList(url, ctx) {
 }
 
 /**
- * Servers for downloading one title/episode: the same list Play would try,
- * built for `override` (e.g. another episode) on top of the page's context.
+ * The page's context with `override` (e.g. another episode) on top, taken
+ * once per download so a retry later finds servers for the same title.
  */
-export function downloadCandidates(override = {}) {
-  return buildCandidates(null, { ...currentCtx(), ...override });
-}
+export const downloadContext = (override = {}) => ({ ...currentCtx(), ...override });
+
+/**
+ * Servers for downloading one title/episode (a downloadContext), best first:
+ * the same list Play would try. `opts.exclude` leaves out servers already tried.
+ */
+export const downloadCandidates = (ctx, opts) => rankedCandidates(null, ctx, opts);
 
 // ── Native playback bookkeeping ──────────────────────────────────────────
 const pending = new Map(); // token -> callback(result)
@@ -245,8 +260,8 @@ function upgrade(wv) {
   iframe.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;background:#000";
   wv.appendChild(iframe);
 
-  let timer = null;
-  let mirrors = [];
+  let webFallback = null; // the iframe's server + mirrors, one at a time
+  const stopWeb = () => webFallback?.stop();
   const fire = (name) => wv.dispatchEvent(new Event(name));
 
   // Placeholder shown in the web player box while/after native playback.
@@ -272,15 +287,19 @@ function upgrade(wv) {
   let nativeFor = null; // URL the native player is handling
   let nativeToken = null;
   let lastNativeAt = 0;
+  let probes = null; // aborts the server probes of a play that was replaced
 
   const playNative = (url) => {
     // A newer play replaces the previous request; drop its callback.
     if (nativeToken) pending.delete(nativeToken);
+    probes?.abort();
+    const probing = (probes = new AbortController());
+    let sent = null; // { candidates, at } once handed to the native player
     const token = Math.random().toString(36).slice(2);
     nativeToken = token;
     lastNativeAt = Date.now();
     nativeFor = url;
-    clearTimeout(timer);
+    stopWeb();
     iframe.src = "about:blank";
     cardBtn.textContent = "▶  Play";
     showCard("Opening the native player…", false);
@@ -289,6 +308,7 @@ function upgrade(wv) {
     fire("did-finish-load");
     pending.set(token, (r) => {
       if (nativeFor !== url || nativeToken !== token) return;
+      if (sent) recordLookup(r, sent.candidates, Date.now() - sent.at);
       if (r.ok) {
         log("playing", r.server);
         rememberLastGood(currentCtx(), r.server);
@@ -315,12 +335,17 @@ function upgrade(wv) {
     setTimeout(async () => {
       if (nativeToken !== token) return;
       postContext(url);
-      const subCtx = await subCtxReady;
-      if (nativeToken !== token) return;
       const ctx = currentCtx();
+      // Start on the fastest server: untested providers are probed at once,
+      // within a short budget, while the Keychain read finishes.
+      const [subCtx, candidates] = await Promise.all([
+        subCtxReady,
+        rankedCandidates(url, ctx, { signal: probing.signal }),
+      ]);
+      if (nativeToken !== token) return;
       const startAt = getResumeSeconds(ctx.progressKey);
-      const candidates = buildCandidates(url);
       log("resolve", candidates.map((c) => `${c.id} ${c.url}`));
+      sent = { candidates, at: Date.now() };
       try {
         window.webkit.messageHandlers.sbResolve.postMessage({
           token,
@@ -343,31 +368,34 @@ function upgrade(wv) {
     if (!isBlank(u)) playNative(u);
   });
 
-  const loadUrl = (url, { isMirror = false, webOnly = false } = {}) => {
-    clearTimeout(timer);
-    if (!isMirror && !webOnly && !isBlank(url) && nativeAvailable()) {
+  const loadUrl = (url, { webOnly = false } = {}) => {
+    stopWeb();
+    if (!webOnly && !isBlank(url) && nativeAvailable()) {
       playNative(url);
       return;
     }
     if (isBlank(url)) {
       nativeFor = null;
       hideCard();
+      iframe.src = "about:blank";
+      return;
     }
-    if (!isMirror) mirrors = mirrorsFor(url);
-    iframe.src = url || "about:blank";
-    if (isBlank(url)) return;
-    postContext(url);
-    timer = setTimeout(() => {
-      // No load event in time: next mirror, else report the failure.
-      const next = mirrors.shift();
-      if (next) loadUrl(next, { isMirror: true });
-      else fire("did-fail-load");
-    }, LOAD_TIMEOUT_MS);
+    // No load event in time: the next mirror takes over, else the page hears
+    // did-fail-load and fails over to another server.
+    webFallback = createFallback([url, ...mirrorsFor(url)], {
+      stallMs: LOAD_TIMEOUT_MS,
+      play: (u) => {
+        iframe.src = u;
+        postContext(u);
+      },
+      onExhausted: () => fire("did-fail-load"),
+    });
+    webFallback.start();
   };
 
   iframe.addEventListener("load", () => {
     if (isBlank(iframe.src)) return;
-    clearTimeout(timer);
+    stopWeb();
     fire("dom-ready");
     fire("did-finish-load");
   });

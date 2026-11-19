@@ -6,6 +6,7 @@ import { IS_IOS } from "../target";
 import { storage, STORAGE_KEYS } from "../../utils/storage";
 import { PLAYER_SOURCES, sourcesForContent } from "../../utils/api";
 import { parseServerKey } from "../../utils/servers/catalog";
+import { setAutoPick } from "./autoServer";
 
 export const normalizeDubMode = (mode) => (mode === "dub" ? "dub" : "sub");
 
@@ -34,8 +35,9 @@ export function publishPlayerContext(ctx) {
 /**
  * Listen for a server picked in the native player. Ids may carry the anime
  * audio mode ("vidnest:dub"); the handler gets `{ sourceId, dubMode }` with
- * dubMode null for plain ids. Unknown ids are ignored. The handler is kept in
- * a ref, so callers never see stale state.
+ * dubMode null for plain ids. Unknown ids are ignored. A pick by hand turns
+ * Auto off, so that server leads until the viewer chooses Auto again. The
+ * handler is kept in a ref, so callers never see stale state.
  */
 export function useNativeServerSelect(handler) {
   const ref = useRef(handler);
@@ -47,6 +49,7 @@ export function useNativeServerSelect(handler) {
       if (!raw) return;
       const { sourceId, mode } = parseServerKey(raw);
       if (!PLAYER_SOURCES.some((s) => s.id === sourceId)) return;
+      setAutoPick(false);
       ref.current?.({ sourceId, dubMode: mode });
     };
     window.addEventListener("sb-select-server", onSelect);

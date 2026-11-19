@@ -6,6 +6,7 @@ import {
   useAnimeServerGuard,
   useNativeServerSelect,
 } from "../platform/ios/playerBridge";
+import { setAutoPick } from "../platform/ios/autoServer";
 import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
 import { isShuffleable, pickRandomEpisode } from "../utils/shuffle";
 import { syncPlayerPrefs, postUpNext } from "../platform/ios/playerPrefs";
@@ -2722,6 +2723,7 @@ export default function TVPage({
                               );
                             }
                             setPlayerSource(src.id);
+                            if (IS_IOS) setAutoPick(false);
                             storage.set(STORAGE_KEYS.PLAYER_SOURCE, src.id);
                             resetPlayerResolution();
                           }}
