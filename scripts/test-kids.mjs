@@ -243,6 +243,112 @@ await t("kids: Downloads list only shows verified kid-rated downloads", async ()
   root.unmount();
 });
 
+// ── Kids Home UI (Netflix Kids look) ─────────────────────────────────────────
+await t("kids home: rows, genres and favorites helpers", async () => {
+  const H = await import("../src/platform/ios/kids/kidsHomeRows.js");
+  assert.deepEqual([...H.KIDS_HOME_ROWS], ["continue", "favorites", "myList", "watchAgain", "genres"]);
+  for (const bad of ["/trending/all/week", "/movie/now_playing", "/movie/upcoming", "/movie/popular", "/tv/top_rated", "/tv/airing_today"])
+    assert.match(bad, H.KIDS_HOME_BANNED, bad);
+  for (const ok of ["/discover/movie", "/search/tv", "/tv/12"]) assert.doesNotMatch(ok, H.KIDS_HOME_BANNED, ok);
+  const hist = [
+    { id: 1, media_type: "movie", watchedAt: 1 },
+    { id: 12, media_type: "tv", watchedAt: 5 },
+    { id: 1, media_type: "movie", watchedAt: 9 },
+  ];
+  assert.deepEqual(H.historyTitles(hist).map((i) => `${i.media_type}_${i.id}`), ["movie_1", "tv_12"]);
+  const chars = [{ key: "A::x", item: show(11) }, { key: "B::y", item: show(12) }, { key: "B::z", item: show(12) }];
+  assert.deepEqual(H.favoriteShows(chars, ["B::y", "B::z", "A::x", "nope"]).map((i) => i.id), [12, 11]);
+  assert.deepEqual(H.favoriteGenres([{ ...show(1), genre_ids: [10762] }, { ...show(2), genre_ids: [10762, 35] }], 2).map((g) => g.key), ["kids", "comedy"]);
+  assert.deepEqual(H.favoriteGenres([], 3).map((g) => g.key), ["animation", "family"]);
+  const kidsTv = H.KIDS_GENRES.find((g) => g.key === "kids");
+  assert.deepEqual(H.genrePaths(kidsTv).map((p) => p.type), ["tv"]);
+  // Discover genre rows still get the kids certifications from tmdbFetch.
+  assert.match(K.kidsRewritePath(H.genrePaths(kidsTv)[0].path), /certification=TV-Y/);
+});
+
+await t("kids home: favorites are saved per profile; theme follows the profile", async () => {
+  const C = await import("../src/platform/ios/kids/kidsCatalog.js");
+  setActiveProfileScope({ id: "k2", kids: true });
+  assert.equal(document.documentElement.getAttribute("data-profile"), "kids");
+  assert.equal(C.loadKidsFavorites(), null);
+  C.saveKidsFavorites(["S::a", "S::a", "S::b"]);
+  assert.deepEqual(C.loadKidsFavorites(), ["S::a", "S::b"]);
+  setActiveProfileScope({ id: "a", kids: false });
+  assert.equal(document.documentElement.hasAttribute("data-profile"), false);
+  assert.equal(C.loadKidsFavorites(), null);
+  setActiveProfileScope({ id: "k2", kids: true });
+  assert.deepEqual(C.loadKidsFavorites(), ["S::a", "S::b"]);
+  // Characters are left out when their show is not kid-rated.
+  assert.ok(C.KIDS_CHARACTERS.length > 0);
+  assert.ok(C.KIDS_CHARACTERS.every((c) => c.channel !== "Toonami"));
+});
+
+await t("kids home: new kids profile sees pick-favorites first, once", async () => {
+  const { default: HomePage } = await import("../src/pages/HomePage.jsx");
+  setActiveProfileScope({ id: "k3", kids: true });
+  urls.length = 0;
+  const props = { apiKey: "tok", offline: false, loading: false, onSelect() {}, progress: {}, inProgress: [], history: [], saved: [], trending: [movie(1)], trendingTV: [], watched: {}, isSaved: () => false, onToggleSave() {} };
+  let m = await mountEl(React.createElement(HomePage, props));
+  await flush(30);
+  assert.ok(m.host.querySelector(".kids-onb"), "pick-favorites screen");
+  const skip = m.host.querySelector(".kids-onb-skip");
+  await act(async () => skip.dispatchEvent(new win.MouseEvent("click", { bubbles: true })));
+  await flush(10);
+  assert.equal(m.host.querySelector(".kids-onb"), null);
+  assert.ok(m.host.querySelector(".kids-home"));
+  m.root.unmount();
+  m = await mountEl(React.createElement(HomePage, props));
+  await flush(10);
+  assert.equal(m.host.querySelector(".kids-onb"), null, "shown only once");
+  m.root.unmount();
+});
+
+await t("kids home: only history, My List, favorites and genre rows; all kid-filtered", async () => {
+  const { default: HomePage } = await import("../src/pages/HomePage.jsx");
+  const C = await import("../src/platform/ios/kids/kidsCatalog.js");
+  setActiveProfileScope({ id: "k4", kids: true });
+  C.saveKidsFavorites([]);
+  let searched = 0;
+  const props = {
+    apiKey: "tok", offline: false, loading: false, onSelect() {}, progress: {}, watched: {},
+    inProgress: [{ ...movie(2), season: null }, { ...movie(4) }],
+    history: [{ ...movie(1), watchedAt: 2 }, { ...show(15), watchedAt: 3 }, { ...show(13), watchedAt: 1 }],
+    saved: [movie(1), movie(4), show(12), show(16), movie(7)],
+    trending: [movie(1), movie(2)], trendingTV: [show(11)], isSaved: () => false, onToggleSave() {}, onSearch: () => searched++,
+  };
+  const { host, root } = await mountEl(React.createElement(HomePage, props));
+  await flush(400);
+  const titles = [...host.querySelectorAll(".section-title")].map((e) => e.textContent);
+  for (const bad of [/Top 10/i, /Trending/i, /Theaters/i, /Critically/i, /Recommended/i]) assert.ok(!titles.some((x) => bad.test(x)), `${bad} in ${titles}`);
+  assert.ok(titles.includes("Continue Watching"), titles.join("|"));
+  assert.ok(titles.includes("My List"));
+  assert.ok(titles.includes("Watch Again"));
+  assert.equal(host.querySelector(".sb-bill, .sb-billboard"), null, "no trending billboard");
+  const text = host.textContent;
+  for (const blocked of ["Movie 4", "Show 15", "Show 16", "Movie 7"]) assert.ok(!text.includes(blocked), blocked);
+  for (const ok of ["Movie 1", "Movie 2", "Show 12", "Show 13"]) assert.ok(text.includes(ok), ok);
+  const paths = urls.map((u) => new URL(u).pathname.replace(/^\/3/, ""));
+  const H = await import("../src/platform/ios/kids/kidsHomeRows.js");
+  assert.deepEqual(paths.filter((p) => H.KIDS_HOME_BANNED.test(p)), []);
+  // Genre rows come from discover with kids certifications.
+  // Genre rows come from discover with kids certifications (requested since
+  // the onboarding test above; later mounts read the cache).
+  assert.ok(titles.some((x) => /Cartoons|Family|Kids TV|Funny|Adventure|Magic|Music/.test(x)), "favorite-genre row");
+  assert.ok(urls.some((u) => /discover\/(movie|tv)/.test(u) && /with_genres=/.test(u) && /certification=/.test(u)), "genre discover");
+  // Top tabs: Characters · Genres · Search.
+  const tabs = [...host.querySelectorAll(".kids-tab")];
+  assert.deepEqual(tabs.map((b) => b.textContent), ["Characters", "Genres", "Search"]);
+  await act(async () => tabs[2].dispatchEvent(new win.MouseEvent("click", { bubbles: true })));
+  assert.equal(searched, 1);
+  await act(async () => tabs[1].dispatchEvent(new win.MouseEvent("click", { bubbles: true })));
+  await flush(40);
+  assert.equal(host.querySelectorAll(".kids-genre").length, 7);
+  const tiles = [...host.querySelectorAll(".kids-tile-name")].map((e) => e.textContent);
+  assert.ok(tiles.length > 0);
+  for (const name of tiles) assert.match(name, /^(Movie [12]|Show (11|12|13|19))$/, name);
+  root.unmount();
+});
+
 // ── Every surface goes through the kids module (static wiring check) ───────
 await t("every surface uses the kids filter", () => {
   const src = (f) => fs.readFileSync(`${process.cwd()}/${f}`, "utf8");
@@ -254,6 +360,8 @@ await t("every surface uses the kids filter", () => {
     "src/pages/LibraryPage.jsx": [/useKidsFilter\(historyAll\)/, /useKidsFilter\(inProgressAll\)/, /useKidsFilter\(savedAll\)/],
     "src/pages/DownloadsPage.jsx": [/useKidsFilter\(props\.downloads\)/, /downloads=\{downloads\}/],
     "src/components/SearchModal.jsx": [/useKidsFilter\(rawResults/],
+    "src/platform/ios/kids/KidsHome.jsx": [/useKidsFilter\(inProgress/, /useKidsFilter\(useMemo\(\(\) => uniqueItems\(saved\)/, /useKidsFilter\(useMemo\(\(\) => historyTitles/, /useKidsFilter\(useMemo\(\(\) => favoriteShows/, /useKidsFilter\(useGenreTitles/],
+    "src/platform/ios/kids/kidsCatalog.js": [/resolveKidsVerdict\(item/],
     "src/platform/ios/shim.js": [/resolveHiAnime:[\s\S]*?isKidsProfileActive\(\)/],
     "src/utils/kidsFilter.js": [/platform\/ios\/kids\/kidsFilter/],
   };

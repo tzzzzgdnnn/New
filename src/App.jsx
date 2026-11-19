@@ -1276,6 +1276,8 @@ export default function App() {
                 apiKey={apiKey}
                 isSaved={isSaved}
                 onToggleSave={toggleSave}
+                saved={savedList}
+                onSearch={() => setShowSearch(true)}
               />
             )}
             {page === "movie" && selected && (
