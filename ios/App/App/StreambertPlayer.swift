@@ -954,6 +954,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     fileprivate var startupWorkDone = false
     /// Page-side play tap (ms since 1970), for the load-time readout.
     fileprivate var tapAtMs: Double = 0
+    /// Audio label last shown on the Audio button.
+    fileprivate var shownAudioLabel = ""
     /// Height of the video last shown on the Quality button (0 = unknown).
     fileprivate var shownVideoHeight = 0
     /// Heights the loaded stream's variants confirm (read from the item).
@@ -1456,6 +1458,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         updateSubtitle(t)
         guard let item = player?.currentItem else { return }
         updateShownResolution(item)
+        refreshAudioLabel(item)
         checkUpNext(t, item: item)
         if item.status == .readyToPlay, t > 1, pendingSeek == 0 { lastPosition = t }
         if Date().timeIntervalSince(lastReportAt) >= Self.progressReportInterval,
@@ -2621,13 +2624,45 @@ extension StreambertPlayerViewController {
         let prefix = wantDub ? "en" : "ja"
         if let opt = group.options.first(where: { ($0.extendedLanguageTag ?? $0.locale?.identifier ?? "").lowercased().hasPrefix(prefix) }) {
             item.select(opt, in: group)
-            pill(audioButton, symbol: "waveform", title: opt.displayName)
+            shownAudioLabel = ""; refreshAudioLabel(item)
         } else if wantDub {
             showToast("No English audio on this server. Try another one in Server.")
         }
     }
 
     fileprivate func audioMenuItems() -> [UIMenuElement] {
+        let now = UIAction(title: "Audio: " + audioLabel(player?.currentItem), attributes: .disabled) { _ in }
+        return [UIMenu(title: "", options: .displayInline, children: [now])] + audioTrackItems()
+    }
+
+    /// Language of an audio option: locale / language tag, else its name.
+    fileprivate func audioName(_ opt: AVMediaSelectionOption) -> (name: String, lang: String) {
+        let tag = (opt.extendedLanguageTag ?? opt.locale?.identifier ?? "").lowercased()
+        let code = tag.split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init) ?? ""
+        let name = code.isEmpty ? nil : Locale(identifier: "en").localizedString(forLanguageCode: code)
+        return (name ?? opt.displayName, code)
+    }
+
+    /// "English · Dub", "Japanese · Sub", or "Original" without audio group info.
+    fileprivate func audioLabel(_ item: AVPlayerItem?) -> String {
+        guard let item = item, item.status == .readyToPlay,
+              let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .audible),
+              let opt = item.currentMediaSelection.selectedMediaOption(in: group) else { return "Original" }
+        let a = audioName(opt)
+        if isAnime, a.lang == "en" { return a.name + " · Dub" }
+        if isAnime, a.lang == "ja" { return a.name + " · Sub" }
+        return a.name
+    }
+
+    /// Keep the Audio button showing what is actually playing.
+    func refreshAudioLabel(_ item: AVPlayerItem) {
+        let label = audioLabel(item)
+        guard label != shownAudioLabel else { return }
+        shownAudioLabel = label
+        pill(audioButton, symbol: "waveform", title: label)
+    }
+
+    fileprivate func audioTrackItems() -> [UIMenuElement] {
         guard let item = player?.currentItem,
               let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .audible),
               group.options.count > 1 else {
@@ -2644,8 +2679,8 @@ extension StreambertPlayerViewController {
             }
             return UIAction(title: name, state: opt == current ? .on : .off) { [weak self, weak item] _ in
                 item?.select(opt, in: group)
-                guard let self = self else { return }
-                self.pill(self.audioButton, symbol: "waveform", title: opt.displayName)
+                guard let self = self, let item = item else { return }
+                self.refreshAudioLabel(item)
             }
         }
     }
