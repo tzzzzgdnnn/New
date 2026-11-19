@@ -231,8 +231,12 @@ async function play({ id, ctx = {} }) {
   wrap.style.cssText = "position:fixed;inset:0;z-index:99999;background:#000;display:flex;align-items:center;justify-content:center";
   const video = document.createElement("video");
   video.controls = true;
-  video.playsInline = true;
+  // iPhone: Apple's own full-screen player (this runs inside the Play tap).
+  const iPhone = /iPhone|iPod/.test(navigator.userAgent);
+  video.playsInline = !iPhone;
   video.autoplay = true;
+  // Required for hls.js on iPhone (ManagedMediaSource).
+  video.disableRemotePlayback = true;
   video.style.cssText = "width:100%;height:100%;object-fit:contain";
   (job.subtitles || []).forEach((s, i) => {
     const t = document.createElement("track");
@@ -257,6 +261,12 @@ async function play({ id, ctx = {} }) {
     video.src = src;
   }
   if (ctx.startAt > 0) video.addEventListener("loadedmetadata", () => (video.currentTime = ctx.startAt), { once: true });
+  video.play().catch(() => {});
+  if (iPhone) {
+    video.addEventListener("loadedmetadata", () => { try { video.webkitEnterFullscreen(); } catch {} }, { once: true });
+    // Done in Apple's player: back to the app.
+    video.addEventListener("webkitendfullscreen", () => close.onclick?.());
+  }
   const saveAt = () => {
     if (ctx.progressKey && video.currentTime > 0) {
       try {
