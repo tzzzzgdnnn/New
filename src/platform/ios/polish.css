@@ -402,3 +402,14 @@ body.no-anim .sp-img-ready > img { animation: none !important; }
   .sp-error,
   html.sb-ios .sp-tab.is-active svg { animation: none; }
 }
+
+/* Episodes header: "Download Episodes" opens the multi-episode picker. */
+html.sb-ios .sb-episodes-download {
+  min-height: 44px;
+  margin: 0 0 12px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+}
