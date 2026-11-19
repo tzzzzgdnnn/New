@@ -579,6 +579,39 @@ function upgrade(wv) {
     return true;
   };
 
+  // Android app: auto-open the player like the iPhone app. MainActivity sees
+  // every request an embed server makes; the moment one asks for a video
+  // stream (.m3u8 / .mp4) it tells us, and we play that stream in our own
+  // full-screen player (no embed page, no ads). If it won't play, the embed
+  // simply keeps going.
+  if (import.meta.env.VITE_ANDROID) {
+    let sniffedFor = null;
+    window.addEventListener("sb-android-stream", (e) => {
+      const u = String(e?.detail?.url || "");
+      if (!u || !wv.isConnected || stopDirect || directFor) return;
+      const embed = iframe.getAttribute("src") || "";
+      if (!embed || isBlank(embed) || sniffedFor === embed) return;
+      sniffedFor = embed;
+      const ctx = currentCtx();
+      log("playing", "auto-opened stream");
+      diag("player", `android sniffed stream: ${u.slice(0, 120)}`);
+      let blanked = false;
+      stopDirect = playDirect(wv, u, {
+        startAt: webStartAt(ctx),
+        onTime: (pos, dur) => {
+          // Our player is running: drop the embed page (stops its audio/ads).
+          if (!blanked && pos > 0) { blanked = true; iframe.src = "about:blank"; }
+          webProgress(ctx)?.(pos, dur);
+        },
+        onFail: (why) => {
+          diag("player", `android auto-open failed: ${why}; keeping embed`);
+          stopDirect = null;
+          if (blanked) loadUrl(embed, { webOnly: true });
+        },
+      });
+    });
+  }
+
   const loadUrl = (url, { webOnly = false } = {}) => {
     stopWeb();
     stopDirect?.();
