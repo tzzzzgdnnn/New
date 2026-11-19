@@ -1,4 +1,4 @@
-import { IS_IOS } from "../platform/target";
+import { IS_IOS, CAN_DOWNLOAD } from "../platform/target";
 import { ActionSheet, contextMenuProps } from "../platform/ui";
 import AnimeDubPrompt, { shouldAskAnimeDub } from "../platform/ios/AnimeDubPrompt";
 import {
@@ -2339,7 +2339,7 @@ export default function TVPage({
                     {isSaved ? <BookmarkFillIcon /> : <BookmarkIcon />}
                     {isSaved ? "Saved" : "Save"}
                   </button>
-                  {IS_IOS && resumePlan && (
+                  {CAN_DOWNLOAD && resumePlan && (
                     <button
                       className="btn btn-ghost"
                       onClick={() =>
@@ -3076,7 +3076,7 @@ export default function TVPage({
 
           <div className="section">
             <div className="section-title">Episodes</div>
-            {IS_IOS && seasons.length > 0 && !restricted && (
+            {CAN_DOWNLOAD && seasons.length > 0 && !restricted && (
               <button
                 type="button"
                 className="btn btn-ghost sb-episodes-download"
@@ -3177,7 +3177,7 @@ export default function TVPage({
                         onPlay={playEpisode}
                         onContextMenu={setEpMenu}
                         onGoToDownloads={onGoToDownloads}
-                        onDownload={EpisodePicker ? downloadOneEpisode : null}
+                        onDownload={CAN_DOWNLOAD && EpisodePicker ? downloadOneEpisode : null}
                       />
                     );
                   })}

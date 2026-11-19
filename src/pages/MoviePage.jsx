@@ -1,4 +1,4 @@
-import { IS_IOS } from "../platform/target";
+import { IS_IOS, CAN_DOWNLOAD } from "../platform/target";
 import AnimeDubPrompt, { shouldAskAnimeDub } from "../platform/ios/AnimeDubPrompt";
 import {
   getAnimeDubMode,
@@ -1093,7 +1093,7 @@ export default function MoviePage({
                     )}
                   </>
                 ))}
-              {IS_IOS && (
+              {CAN_DOWNLOAD && (
                 <button
                   className="btn btn-ghost"
                   onClick={() =>
