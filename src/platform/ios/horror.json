@@ -1,0 +1,478 @@
+{
+ "rows": [
+  {
+   "id": "conjuring",
+   "title": "The Conjuring Universe",
+   "sub": "Warrens' case files",
+   "items": [
+    {
+     "title": "The Conjuring",
+     "year": 2013,
+     "tmdb_id": 138843,
+     "type": "movie"
+    },
+    {
+     "title": "The Conjuring 2",
+     "year": 2016,
+     "tmdb_id": 259693,
+     "type": "movie"
+    },
+    {
+     "title": "Annabelle",
+     "year": 2014,
+     "tmdb_id": 250546,
+     "type": "movie"
+    },
+    {
+     "title": "Annabelle: Creation",
+     "year": 2017,
+     "tmdb_id": 396422,
+     "type": "movie"
+    },
+    {
+     "title": "Annabelle Comes Home",
+     "year": 2019,
+     "tmdb_id": 521029,
+     "type": "movie"
+    },
+    {
+     "title": "The Nun",
+     "year": 2018,
+     "tmdb_id": 439079,
+     "type": "movie"
+    },
+    {
+     "title": "The Conjuring: The Devil Made Me Do It",
+     "year": 2021,
+     "tmdb_id": 423108,
+     "type": "movie"
+    }
+   ]
+  },
+  {
+   "id": "insidious",
+   "title": "The Insidious Saga",
+   "sub": "Into the Further",
+   "items": [
+    {
+     "title": "Insidious",
+     "year": 2010,
+     "tmdb_id": 49018,
+     "type": "movie"
+    },
+    {
+     "title": "Insidious: Chapter 2",
+     "year": 2013,
+     "tmdb_id": 91586,
+     "type": "movie"
+    },
+    {
+     "title": "Insidious: Chapter 3",
+     "year": 2015,
+     "tmdb_id": 280092,
+     "type": "movie"
+    },
+    {
+     "title": "Insidious: The Last Key",
+     "year": 2018,
+     "tmdb_id": 406563,
+     "type": "movie"
+    },
+    {
+     "title": "Insidious: The Red Door",
+     "year": 2023,
+     "tmdb_id": 614479,
+     "type": "movie"
+    }
+   ]
+  },
+  {
+   "id": "blumhouse",
+   "title": "Blumhouse Best",
+   "sub": "Low budget, big scares",
+   "items": [
+    {
+     "title": "Get Out",
+     "year": 2017,
+     "tmdb_id": 419430,
+     "type": "movie"
+    },
+    {
+     "title": "The Invisible Man",
+     "year": 2020,
+     "tmdb_id": 570670,
+     "type": "movie"
+    },
+    {
+     "title": "The Black Phone",
+     "year": 2021,
+     "tmdb_id": 756999,
+     "type": "movie"
+    },
+    {
+     "title": "Black Phone 2",
+     "year": 2025,
+     "tmdb_id": 1197137,
+     "type": "movie"
+    },
+    {
+     "title": "Sinister",
+     "year": 2012,
+     "tmdb_id": 82507,
+     "type": "movie"
+    },
+    {
+     "title": "Us",
+     "year": 2019,
+     "tmdb_id": 458723,
+     "type": "movie"
+    },
+    {
+     "title": "M3GAN",
+     "year": 2022,
+     "tmdb_id": 536554,
+     "type": "movie"
+    },
+    {
+     "title": "Creep",
+     "year": 2014,
+     "tmdb_id": 250574,
+     "type": "movie"
+    },
+    {
+     "title": "Paranormal Activity",
+     "year": 2007,
+     "tmdb_id": 23827,
+     "type": "movie"
+    },
+    {
+     "title": "Split",
+     "year": 2016,
+     "tmdb_id": 358364,
+     "type": "movie"
+    },
+    {
+     "title": "Happy Death Day",
+     "year": 2017,
+     "tmdb_id": 440021,
+     "type": "movie"
+    },
+    {
+     "title": "Freaky",
+     "year": 2020,
+     "tmdb_id": 551804,
+     "type": "movie"
+    },
+    {
+     "title": "Halloween",
+     "year": 2018,
+     "tmdb_id": 424139,
+     "type": "movie"
+    },
+    {
+     "title": "Totally Killer",
+     "year": 2023,
+     "tmdb_id": 974931,
+     "type": "movie"
+    }
+   ]
+  },
+  {
+   "id": "slasher",
+   "title": "Slasher Icons",
+   "sub": "Freddy, Jason, Michael, Ghostface",
+   "items": [
+    {
+     "title": "A Nightmare on Elm Street",
+     "year": 1984,
+     "tmdb_id": 377,
+     "type": "movie"
+    },
+    {
+     "title": "New Nightmare",
+     "year": 1994,
+     "tmdb_id": 11596,
+     "type": "movie"
+    },
+    {
+     "title": "Freddy vs. Jason",
+     "year": 2003,
+     "tmdb_id": 6466,
+     "type": "movie"
+    },
+    {
+     "title": "Friday the 13th",
+     "year": 1980,
+     "tmdb_id": 4488,
+     "type": "movie"
+    },
+    {
+     "title": "Friday the 13th",
+     "year": 2009,
+     "tmdb_id": 13207,
+     "type": "movie"
+    },
+    {
+     "title": "Halloween",
+     "year": 1978,
+     "tmdb_id": 948,
+     "type": "movie"
+    },
+    {
+     "title": "Scream",
+     "year": 1996,
+     "tmdb_id": 4232,
+     "type": "movie"
+    },
+    {
+     "title": "Scream",
+     "year": 2022,
+     "tmdb_id": 646385,
+     "type": "movie"
+    },
+    {
+     "title": "X",
+     "year": 2022,
+     "tmdb_id": 760104,
+     "type": "movie"
+    },
+    {
+     "title": "Pearl",
+     "year": 2022,
+     "tmdb_id": 949423,
+     "type": "movie"
+    },
+    {
+     "title": "Terrifier 2",
+     "year": 2022,
+     "tmdb_id": 663712,
+     "type": "movie"
+    }
+   ]
+  },
+  {
+   "id": "modern",
+   "title": "Modern Masterpieces",
+   "sub": "Elevated horror at its best",
+   "items": [
+    {
+     "title": "Hereditary",
+     "year": 2018,
+     "tmdb_id": 493922,
+     "type": "movie"
+    },
+    {
+     "title": "The Babadook",
+     "year": 2014,
+     "tmdb_id": 242224,
+     "type": "movie"
+    },
+    {
+     "title": "It Follows",
+     "year": 2014,
+     "tmdb_id": 270303,
+     "type": "movie"
+    },
+    {
+     "title": "The Witch",
+     "year": 2015,
+     "tmdb_id": 526667,
+     "type": "movie"
+    },
+    {
+     "title": "A Quiet Place",
+     "year": 2018,
+     "tmdb_id": 447332,
+     "type": "movie"
+    },
+    {
+     "title": "Midsommar",
+     "year": 2019,
+     "tmdb_id": 530385,
+     "type": "movie"
+    },
+    {
+     "title": "It",
+     "year": 2017,
+     "tmdb_id": 346364,
+     "type": "movie"
+    },
+    {
+     "title": "Smile",
+     "year": 2022,
+     "tmdb_id": 882598,
+     "type": "movie"
+    },
+    {
+     "title": "Barbarian",
+     "year": 2022,
+     "tmdb_id": 913290,
+     "type": "movie"
+    },
+    {
+     "title": "Talk to Me",
+     "year": 2022,
+     "tmdb_id": 1118584,
+     "type": "movie"
+    },
+    {
+     "title": "Evil Dead",
+     "year": 2013,
+     "tmdb_id": 109428,
+     "type": "movie"
+    },
+    {
+     "title": "Evil Dead Rise",
+     "year": 2023,
+     "tmdb_id": 713704,
+     "type": "movie"
+    },
+    {
+     "title": "Longlegs",
+     "year": 2024,
+     "tmdb_id": 1226578,
+     "type": "movie"
+    },
+    {
+     "title": "Late Night with the Devil",
+     "year": 2023,
+     "tmdb_id": 938614,
+     "type": "movie"
+    },
+    {
+     "title": "Weapons",
+     "year": 2025,
+     "tmdb_id": 1078605,
+     "type": "movie"
+    },
+    {
+     "title": "Sinners",
+     "year": 2025,
+     "tmdb_id": 1233413,
+     "type": "movie"
+    },
+    {
+     "title": "Train to Busan",
+     "year": 2016,
+     "tmdb_id": 396535,
+     "type": "movie"
+    },
+    {
+     "title": "Lights Out",
+     "year": 2016,
+     "tmdb_id": 345911,
+     "type": "movie"
+    },
+    {
+     "title": "Don't Breathe",
+     "year": 2016,
+     "tmdb_id": 300669,
+     "type": "movie"
+    },
+    {
+     "title": "Ready or Not",
+     "year": 2019,
+     "tmdb_id": 567609,
+     "type": "movie"
+    }
+   ]
+  },
+  {
+   "id": "gems",
+   "title": "Hidden Gems",
+   "sub": "Under-the-radar nightmares",
+   "items": [
+    {
+     "title": "Terrified",
+     "year": 2017,
+     "tmdb_id": 489430,
+     "type": "movie"
+    },
+    {
+     "title": "When Evil Lurks",
+     "year": 2023,
+     "tmdb_id": 744857,
+     "type": "movie"
+    },
+    {
+     "title": "Hell House LLC",
+     "year": 2015,
+     "tmdb_id": 359246,
+     "type": "movie"
+    },
+    {
+     "title": "The Blackcoat's Daughter",
+     "year": 2015,
+     "tmdb_id": 334536,
+     "type": "movie"
+    },
+    {
+     "title": "Relic",
+     "year": 2020,
+     "tmdb_id": 539181,
+     "type": "movie"
+    },
+    {
+     "title": "Oddity",
+     "year": 2024,
+     "tmdb_id": 1216191,
+     "type": "movie"
+    },
+    {
+     "title": "The Empty Man",
+     "year": 2020,
+     "tmdb_id": 516632,
+     "type": "movie"
+    },
+    {
+     "title": "Lake Mungo",
+     "year": 2008,
+     "tmdb_id": 27374,
+     "type": "movie"
+    },
+    {
+     "title": "Host",
+     "year": 2020,
+     "tmdb_id": 723072,
+     "type": "movie"
+    },
+    {
+     "title": "His House",
+     "year": 2020,
+     "tmdb_id": 575774,
+     "type": "movie"
+    },
+    {
+     "title": "Hush",
+     "year": 2016,
+     "tmdb_id": 376570,
+     "type": "movie"
+    },
+    {
+     "title": "The Autopsy of Jane Doe",
+     "year": 2016,
+     "tmdb_id": 397243,
+     "type": "movie"
+    },
+    {
+     "title": "The Taking of Deborah Logan",
+     "year": 2014,
+     "tmdb_id": 297608,
+     "type": "movie"
+    },
+    {
+     "title": "Incident in a Ghostland",
+     "year": 2018,
+     "tmdb_id": 476299,
+     "type": "movie"
+    },
+    {
+     "title": "The Descent",
+     "year": 2005,
+     "tmdb_id": 9392,
+     "type": "movie"
+    }
+   ]
+  }
+ ]
+}

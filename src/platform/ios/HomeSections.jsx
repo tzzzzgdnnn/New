@@ -7,6 +7,7 @@ import MediaCard from "../../components/MediaCard";
 import { PlayIcon } from "../../components/Icons";
 import { imgUrl, tmdbFetch } from "../../utils/api";
 import NOSTALGIA from "./nostalgia.json";
+import HORROR from "./horror.json";
 import { isKidsProfileActive } from "../../utils/profileScope";
 import { SkeletonRail } from "./Skeletons";
 
@@ -482,9 +483,60 @@ function Nostalgia({ rows, onSelect, common }) {
   );
 }
 
+// ── Horror ────────────────────────────────────────────────────────────────
+// Curated rows in horror.json (TMDB ids resolved by title and year), loaded
+// like the Nostalgia rows and shown with the normal cards and detail flow.
+// Hidden on Kids profiles.
+
+function useHorror(apiKey, offline) {
+  const [rows, setRows] = useState({});
+  const kids = isKidsProfileActive();
+  useEffect(() => {
+    if (!apiKey || offline || kids) return;
+    let alive = true;
+    (HORROR.rows || []).forEach(async (r) => {
+      try {
+        const items = await loadCurated(r.items || [], apiKey);
+        if (alive) setRows((d) => ({ ...d, [r.id]: items }));
+      } catch {}
+    });
+    return () => {
+      alive = false;
+    };
+  }, [apiKey, offline, kids]);
+  return rows;
+}
+
+function Horror({ rows, common }) {
+  if (isKidsProfileActive()) return null;
+  const all = Object.values(rows).flat().filter((i) => i.backdrop_path);
+  const feat = all.length ? all[Math.floor(Date.now() / 864e5) % all.length] : null;
+  return (
+    <div className="sb-horror">
+      <div className="sb-horror-head">
+        {feat && <img src={imgUrl(feat.backdrop_path, "w1280")} alt="" decoding="async" loading="lazy" />}
+        <div className="sb-horror-shade" />
+        <div className="sb-horror-body">
+          <div className="sb-horror-kicker">After Dark</div>
+          <div className="sb-horror-title">Horror</div>
+          <div className="sb-horror-sub">Hauntings, slashers and the films that keep you up</div>
+        </div>
+      </div>
+      {(HORROR.rows || []).map((r) =>
+        r.id in rows ? (
+          <PosterRail key={r.id} title={r.title} sub={r.sub} items={rows[r.id]} {...common} />
+        ) : (
+          <SkeletonRail key={r.id} />
+        ),
+      )}
+    </div>
+  );
+}
+
 export default function HomeSections({ apiKey, offline, onSelect, watched, onMarkWatched, onMarkUnwatched }) {
   const [data, setData] = useState({});
   const nostalgia = useNostalgia(apiKey, offline);
+  const horror = useHorror(apiKey, offline);
   useEffect(() => {
     if (!apiKey || offline) return;
     let alive = true;
@@ -513,6 +565,7 @@ export default function HomeSections({ apiKey, offline, onSelect, watched, onMar
         ),
       )}
       <Nostalgia rows={nostalgia} onSelect={onSelect} common={common} />
+      <Horror rows={horror} common={common} />
     </>
   );
 }
