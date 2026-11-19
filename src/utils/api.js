@@ -143,9 +143,17 @@ function _releaseSlot() {
   }
 }
 
-export const tmdbFetch = async (path, apiKey) => {
+/**
+ * TMDB GET with memory/disk cache.
+ * @param {string} path e.g. "/movie/550"
+ * @param {string} apiKey read access token
+ * @param {{signal?: AbortSignal}} [opts] a signal makes the call cancellable
+ *   (it then skips the shared in-flight request so aborting can't affect others)
+ */
+export const tmdbFetch = async (path, apiKey, opts = {}) => {
   const localizedPath = withLanguage(path);
   const cacheKey = `${apiKey}|${localizedPath}`;
+  if (!apiKey) throw tmdbError("missing-token", "No TMDB token set. Add one in Settings.");
   let cached = _tmdbCache.get(cacheKey);
   if (!cached) {
     cached = _readDisk(cacheKey);
@@ -160,8 +168,24 @@ export const tmdbFetch = async (path, apiKey) => {
       return forActiveProfile(cached.data);
     }
   }
+  if (opts.signal) return forActiveProfile(await _tmdbRequest(localizedPath, apiKey, cacheKey, opts.signal));
   return forActiveProfile(await _tmdbNetwork(localizedPath, apiKey, cacheKey));
 };
+
+/** Error with a `code` and a message fit to show the viewer. */
+function tmdbError(code, message, status) {
+  const e = new Error(message);
+  e.code = code;
+  if (status) e.status = status;
+  return e;
+}
+
+/** Short text for showing a TMDB failure to the viewer. */
+export function describeTmdbError(err) {
+  if (!err) return "Something went wrong.";
+  if (err.name === "AbortError") return "";
+  return err.message || "Something went wrong.";
+}
 
 /**
  * Warm the cache for a path (card press-in, hover). Never throws.
@@ -182,31 +206,74 @@ function _tmdbNetwork(localizedPath, apiKey, cacheKey) {
   return p;
 }
 
-async function _tmdbRequest(localizedPath, apiKey, cacheKey) {
-  await _acquireSlot();
+// Network policy: each attempt times out after TMDB_TIMEOUT_MS; network
+// errors, timeouts, 429 and 5xx are retried with backoff (429 honours
+// Retry-After). 401/403 are not retried and report an invalid token.
+const TMDB_TIMEOUT_MS = 12000;
+const TMDB_RETRIES = 2;
+const _sleep = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(t);
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
 
-  let res;
-  try {
-    res = await fetch(`${TMDB_BASE}${localizedPath}`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-  } catch {
-    _releaseSlot();
-    _onUnreachable?.();
-    throw new Error("TMDB unreachable");
+async function _tmdbRequest(localizedPath, apiKey, cacheKey, signal) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= TMDB_RETRIES; attempt++) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    if (attempt > 0) await _sleep(lastErr?.retryAfterMs ?? 400 * 3 ** (attempt - 1), signal);
+    await _acquireSlot();
+    const ctl = new AbortController();
+    const onAbort = () => ctl.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const timer = setTimeout(() => ctl.abort(), TMDB_TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(`${TMDB_BASE}${localizedPath}`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: ctl.signal,
+      });
+    } catch (e) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      lastErr = ctl.signal.aborted
+        ? tmdbError("timeout", "TMDB took too long to answer. Check your connection and try again.")
+        : tmdbError("unreachable", "Can't reach TMDB. Check your internet connection.");
+      continue;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      _releaseSlot();
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      _onAuthError?.();
+      throw tmdbError("invalid-token", "Your TMDB token is invalid or was revoked. Update it in Settings.", res.status);
+    }
+    if (res.status === 429 || res.status >= 500) {
+      const ra = Number(res.headers.get("retry-after"));
+      lastErr = tmdbError(
+        res.status === 429 ? "rate-limited" : "server",
+        res.status === 429 ? "TMDB is rate-limiting requests. Try again in a moment." : `TMDB is having problems (${res.status}). Try again shortly.`,
+        res.status,
+      );
+      if (ra > 0) lastErr.retryAfterMs = Math.min(ra * 1000, 5000);
+      continue;
+    }
+    if (!res.ok) throw tmdbError("http", `TMDB request failed (${res.status}).`, res.status);
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      throw tmdbError("bad-response", "TMDB sent an unreadable response.");
+    }
+    _remember(cacheKey, data);
+    return data;
   }
-
-  _releaseSlot();
-
-  if (res.status === 401 || res.status === 403) {
-    _onAuthError?.();
-    throw new Error(`TMDB ${res.status}`);
-  }
-
-  if (!res.ok) throw new Error(`TMDB ${res.status}`);
-  const data = await res.json();
-  _remember(cacheKey, data);
-  return data;
+  if (lastErr?.code === "unreachable" || lastErr?.code === "timeout") _onUnreachable?.();
+  throw lastErr || tmdbError("unreachable", "Can't reach TMDB.");
 }
 
 // Responses are cached unfiltered; Kids profiles get a filtered view of lists.
