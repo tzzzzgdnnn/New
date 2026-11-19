@@ -747,6 +747,10 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private var hideWork: DispatchWorkItem?
     private var isScrubbing = false
     private var failed = false
+    private let rotateButton = UIButton(type: .system)
+    private var landscapeVideoConstraints: [NSLayoutConstraint] = []
+    private var portraitVideoConstraints: [NSLayoutConstraint] = []
+    private var portraitLayoutActive = false
     private var userPaused = false
     /// Last real playback position; a failover or server switch resumes here.
     private var lastPosition: Double = 0
@@ -756,6 +760,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private var lastReportAt = Date.distantPast
     private var lifecycleObservers: [NSObjectProtocol] = []
     private static let progressReportInterval: TimeInterval = 5
+    private static let optionRowHeight: CGFloat = 48
+    private static let optionButtonMinWidth: CGFloat = 66
     private var toastWork: DispatchWorkItem?
     /// Seconds a stream may sit at 0:00 before the next server is tried.
     private static let startWatchdog: TimeInterval = 15
@@ -816,7 +822,16 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
+    // Never forces an orientation: opens the way the phone is held and turns
+    // freely. The rotate button is the only thing that changes it on purpose.
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .allButUpsideDown }
+    override var shouldAutorotate: Bool { true }
+    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
+        let current = view.window?.windowScene?.interfaceOrientation
+            ?? UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.interfaceOrientation }.first
+            ?? .portrait
+        return current == .portraitUpsideDown || current == .unknown ? .portrait : current
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -857,9 +872,44 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         player?.play()
     }
 
+    override func viewWillLayoutSubviews() {
+        super.viewWillLayoutSubviews()
+        applyVideoLayout()
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         videoView.playerLayer.frame = videoView.bounds
+    }
+
+    private var isPortrait: Bool { view.bounds.height > view.bounds.width }
+
+    /// Landscape: video fills the screen. Portrait: 16:9, full width, centered.
+    private func applyVideoLayout() {
+        let portrait = isPortrait
+        guard portrait != portraitLayoutActive else { return }
+        portraitLayoutActive = portrait
+        NSLayoutConstraint.deactivate(portrait ? landscapeVideoConstraints : portraitVideoConstraints)
+        NSLayoutConstraint.activate(portrait ? portraitVideoConstraints : landscapeVideoConstraints)
+        let symbol = portrait ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left"
+        rotateButton.setImage(UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
+    }
+
+    /// Rotate button: turn to landscape (or back to portrait) on request only.
+    @objc private func rotateTapped() {
+        let target: UIInterfaceOrientationMask = isPortrait ? .landscapeRight : .portrait
+        if #available(iOS 16.0, *) {
+            guard let scene = view.window?.windowScene else { return }
+            setNeedsUpdateOfSupportedInterfaceOrientations()
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: target)) { error in
+                print("[SuperPlayer] rotate failed: \(error.localizedDescription)")
+            }
+        } else {
+            let orientation: UIInterfaceOrientation = target == .portrait ? .portrait : .landscapeRight
+            UIDevice.current.setValue(orientation.rawValue, forKey: "orientation")
+            UIViewController.attemptRotationToDeviceOrientation()
+        }
+        scheduleHide()
     }
 
     /// Shown while the hidden sniffer is still looking for a stream.
@@ -966,12 +1016,19 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         videoView.backgroundColor = .black
         videoView.playerLayer.videoGravity = .resizeAspect
         view.addSubview(videoView)
-        NSLayoutConstraint.activate([
+        landscapeVideoConstraints = [
             videoView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             videoView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             videoView.topAnchor.constraint(equalTo: view.topAnchor),
             videoView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
+        ]
+        portraitVideoConstraints = [
+            videoView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            videoView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            videoView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            videoView.heightAnchor.constraint(equalTo: videoView.widthAnchor, multiplier: 9.0 / 16.0),
+        ]
+        NSLayoutConstraint.activate(landscapeVideoConstraints)
 
         if AVPictureInPictureController.isPictureInPictureSupported() {
             pip = AVPictureInPictureController(playerLayer: videoView.playerLayer)
@@ -1139,7 +1196,10 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         pipButton.addTarget(self, action: #selector(pipTapped), for: .touchUpInside)
         pipButton.isHidden = pip == nil
 
-        let topStack = UIStackView(arrangedSubviews: [backButton, titleLabel, routePicker, pipButton])
+        configure(rotateButton, symbol: "arrow.up.left.and.arrow.down.right")
+        rotateButton.addTarget(self, action: #selector(rotateTapped), for: .touchUpInside)
+        rotateButton.accessibilityLabel = "Rotate"
+        let topStack = UIStackView(arrangedSubviews: [backButton, titleLabel, routePicker, pipButton, rotateButton])
         topStack.axis = .horizontal
         topStack.alignment = .center
         topStack.spacing = 12
@@ -1181,12 +1241,30 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         optionsRow.distribution = .fillEqually
         optionsRow.alignment = .center
         optionsRow.spacing = 4
+        optionsRow.translatesAutoresizingMaskIntoConstraints = false
+        // Narrow screens: the row scrolls sideways instead of clipping labels.
+        let optionsScroll = UIScrollView()
+        optionsScroll.showsHorizontalScrollIndicator = false
+        optionsScroll.alwaysBounceHorizontal = false
+        optionsScroll.addSubview(optionsRow)
+        NSLayoutConstraint.activate([
+            optionsRow.leadingAnchor.constraint(equalTo: optionsScroll.contentLayoutGuide.leadingAnchor),
+            optionsRow.trailingAnchor.constraint(equalTo: optionsScroll.contentLayoutGuide.trailingAnchor),
+            optionsRow.topAnchor.constraint(equalTo: optionsScroll.contentLayoutGuide.topAnchor),
+            optionsRow.bottomAnchor.constraint(equalTo: optionsScroll.contentLayoutGuide.bottomAnchor),
+            optionsRow.heightAnchor.constraint(equalTo: optionsScroll.frameLayoutGuide.heightAnchor),
+            optionsRow.widthAnchor.constraint(greaterThanOrEqualTo: optionsScroll.frameLayoutGuide.widthAnchor),
+            optionsScroll.heightAnchor.constraint(equalToConstant: Self.optionRowHeight),
+        ])
+        for b in [serverButton, audioButton, ccButton, speedButton, qualityButton] {
+            b.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.optionButtonMinWidth).isActive = true
+        }
 
         let divider = UIView()
         divider.backgroundColor = UIColor(white: 1, alpha: 0.12)
         divider.heightAnchor.constraint(equalToConstant: 1).isActive = true
 
-        let bottomColumn = UIStackView(arrangedSubviews: [bottomStack, divider, optionsRow])
+        let bottomColumn = UIStackView(arrangedSubviews: [bottomStack, divider, optionsScroll])
         bottomColumn.axis = .vertical
         bottomColumn.spacing = 8
         bottomColumn.translatesAutoresizingMaskIntoConstraints = false
@@ -1232,6 +1310,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             routePicker.widthAnchor.constraint(equalToConstant: 32),
             routePicker.heightAnchor.constraint(equalToConstant: 32),
             backButton.widthAnchor.constraint(equalToConstant: 32),
+            rotateButton.widthAnchor.constraint(equalToConstant: 32),
 
             bottomBar.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 12),
             bottomBar.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -12),
