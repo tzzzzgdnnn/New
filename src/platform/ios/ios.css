@@ -314,3 +314,72 @@ html.sb-ios .sb-nostalgia-sub { font-size: 13px; color: var(--text2); margin-top
 @media (min-width: 761px) {
   html.sb-ios .sb-nostalgia-head { margin-left: 48px; margin-right: 48px; }
 }
+
+/* ── Billboard ─────────────────────────────────────────────────────────── */
+html.sb-ios .sb-bill { position: relative; height: min(82vh, 680px); min-height: 460px; overflow: hidden; background: #000; }
+html.sb-ios .sb-bill-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 20%; opacity: 0; transform: scale(1.06); transition: opacity 1s ease, transform 9s linear; }
+html.sb-ios .sb-bill-bg.on { opacity: 1; transform: scale(1); }
+html.sb-ios .sb-bill-shade { position: absolute; inset: 0; background:
+  linear-gradient(to top, var(--bg, #0a0a0a) 0%, rgba(10,10,10,.85) 22%, rgba(10,10,10,0) 60%),
+  linear-gradient(to right, rgba(0,0,0,.65) 0%, rgba(0,0,0,0) 55%); }
+html.sb-ios .sb-bill-body { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 40px 34px; display: flex; flex-direction: column; align-items: flex-start; animation: sbFade .6s ease both; }
+html.sb-ios .sb-bill-kicker { display: flex; align-items: center; gap: 8px; font: 700 12px/1 -apple-system, system-ui, sans-serif; letter-spacing: 2.5px; text-transform: uppercase; color: #e5e5e5; margin-bottom: 12px; }
+html.sb-ios .sb-bill-n { font-family: "Bebas Neue", sans-serif; font-size: 26px; color: var(--red, #e50914); letter-spacing: 0; }
+html.sb-ios .sb-bill-logo { max-width: min(420px, 70vw); max-height: 140px; object-fit: contain; object-position: left bottom; filter: drop-shadow(0 6px 24px rgba(0,0,0,.7)); margin-bottom: 14px; }
+html.sb-ios .sb-bill-title { font-family: "Bebas Neue", sans-serif; font-size: 64px; line-height: .95; letter-spacing: 1px; text-shadow: 0 4px 30px rgba(0,0,0,.7); margin-bottom: 12px; max-width: 80%; }
+html.sb-ios .sb-bill-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 13px; color: #ddd; margin-bottom: 18px; }
+html.sb-ios .sb-bill-match { color: #46d369; font-weight: 700; }
+html.sb-ios .sb-bill-dot::before { content: "•"; margin-right: 10px; color: #777; }
+html.sb-ios .sb-bill-actions { display: flex; gap: 10px; }
+html.sb-ios .sb-btn-play, html.sb-ios .sb-btn-info { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 6px; padding: 11px 26px; font: 700 16px -apple-system, system-ui, sans-serif; cursor: pointer; }
+html.sb-ios .sb-btn-play { background: #fff; color: #000; }
+html.sb-ios .sb-btn-play svg { width: 18px; height: 18px; }
+html.sb-ios .sb-btn-info { background: rgba(109,109,110,.7); color: #fff; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+html.sb-ios .sb-btn-play:active, html.sb-ios .sb-btn-info:active { transform: scale(.96); }
+html.sb-ios .sb-bill-dots { display: flex; gap: 6px; margin-top: 18px; }
+html.sb-ios .sb-bill-dots i { width: 18px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.3); transition: all .3s; }
+html.sb-ios .sb-bill-dots i.on { width: 32px; background: #fff; }
+@keyframes sbFade { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+/* ── Nostalgia ─────────────────────────────────────────────────────────── */
+html.sb-ios .sb-nos { margin-top: 26px; padding-bottom: 20px; background: linear-gradient(180deg, rgba(255,214,10,.05), transparent 40%); }
+html.sb-ios .sb-nos-hero { position: relative; height: 300px; margin: 0 24px 18px; border-radius: 16px; overflow: hidden; background: #111; box-shadow: 0 20px 50px rgba(0,0,0,.6); }
+html.sb-ios .sb-nos-hero img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: saturate(1.35) contrast(1.05) sepia(.18); }
+html.sb-ios .sb-nos-scan { position: absolute; inset: 0;
+  background: repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0 2px, transparent 2px 4px),
+              linear-gradient(to top, rgba(0,0,0,.92), rgba(0,0,0,.15) 65%),
+              radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.55)); }
+html.sb-ios .sb-nos-hero-body { position: absolute; left: 22px; right: 22px; bottom: 20px; }
+html.sb-ios .sb-nos-rec { position: absolute; top: -220px; left: 0; font: 700 13px "Courier New", monospace; color: #fff; text-shadow: 0 0 6px rgba(255,0,0,.8); animation: sbBlink 1.4s steps(1) infinite; }
+html.sb-ios .sb-nos-big { font-family: "Bebas Neue", sans-serif; font-size: 60px; line-height: .9; letter-spacing: 2px;
+  background: linear-gradient(90deg, #ffd60a, #ff6a00 35%, #ff2d95 65%, #39d0ff); -webkit-background-clip: text; background-clip: text; color: transparent;
+  text-shadow: none; filter: drop-shadow(3px 3px 0 rgba(0,0,0,.6)); }
+html.sb-ios .sb-nos-tag { font-size: 14px; color: #eee; margin: 4px 0 14px; }
+@keyframes sbBlink { 50% { opacity: .2; } }
+html.sb-ios .sb-chips { display: flex; gap: 8px; overflow-x: auto; padding: 4px 24px 6px; scrollbar-width: none; }
+html.sb-ios .sb-chips::-webkit-scrollbar { display: none; }
+html.sb-ios .sb-chip { flex: 0 0 auto; padding: 9px 16px; border-radius: 999px; border: 1.5px solid rgba(255,255,255,.25); background: rgba(255,255,255,.06); color: #ddd; font: 700 13px -apple-system, system-ui, sans-serif; transition: all .2s; }
+html.sb-ios .sb-chip.on { box-shadow: 0 6px 18px rgba(0,0,0,.5); transform: translateY(-1px); }
+html.sb-ios .sb-tape-row { gap: 12px; }
+html.sb-ios .sb-tape { position: relative; flex: 0 0 300px; width: 300px; aspect-ratio: 16/9; border-radius: 12px; overflow: hidden; scroll-snap-align: start; background: #222; box-shadow: 0 10px 24px rgba(0,0,0,.55); }
+html.sb-ios .sb-tape img { width: 100%; height: 100%; object-fit: cover; }
+html.sb-ios .sb-tape-shade { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,.9), transparent 60%); }
+html.sb-ios .sb-tape-badge { position: absolute; top: 8px; left: 8px; padding: 3px 8px; border-radius: 4px; font: 800 11px -apple-system, system-ui, sans-serif; letter-spacing: .5px; }
+html.sb-ios .sb-tape-year { position: absolute; top: 8px; right: 8px; padding: 2px 7px; border-radius: 4px; background: rgba(0,0,0,.6); font: 700 11px "Courier New", monospace; color: #ffd60a; }
+html.sb-ios .sb-tape-title { position: absolute; left: 12px; right: 12px; bottom: 10px; font: 800 16px -apple-system, system-ui, sans-serif; text-shadow: 0 2px 8px #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 760px) and (orientation: portrait) {
+  html.sb-ios .sb-bill { height: 72vh; min-height: 520px; }
+  html.sb-ios .sb-bill-bg { object-position: center 25%; }
+  html.sb-ios .sb-bill-body { padding: 0 16px 26px; align-items: center; text-align: center; }
+  html.sb-ios .sb-bill-logo { object-position: center bottom; max-width: 78vw; max-height: 120px; }
+  html.sb-ios .sb-bill-title { font-size: 48px; max-width: 100%; }
+  html.sb-ios .sb-bill-meta { justify-content: center; font-size: 12px; }
+  html.sb-ios .sb-bill-actions { width: 100%; }
+  html.sb-ios .sb-bill-actions button { flex: 1; padding: 11px 10px; }
+  html.sb-ios .sb-nos-hero { margin: 0 16px 14px; height: 240px; }
+  html.sb-ios .sb-nos-rec { top: -170px; }
+  html.sb-ios .sb-nos-big { font-size: 50px; }
+  html.sb-ios .sb-chips { padding: 4px 16px 6px; }
+  html.sb-ios .sb-tape { flex-basis: 78vw; width: 78vw; }
+}

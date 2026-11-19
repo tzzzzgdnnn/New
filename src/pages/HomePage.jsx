@@ -8,7 +8,7 @@ import { isRestricted } from "../utils/ageRating";
 import { storage } from "../utils/storage";
 import { loadHomeLayout, loadHomeViewMode } from "../utils/homeLayout";
 import { IS_IOS } from "../platform/target";
-import HomeSections, { PosterRail, RankRail, WideRail } from "../platform/ios/HomeSections";
+import HomeSections, { Billboard, PosterRail, RankRail, WideRail } from "../platform/ios/HomeSections";
 
 /**
  * Extract up to `count` unique, recently watched items from the user's
@@ -248,7 +248,10 @@ export default function HomePage({
       )}
 
       {/* ── Hero (always first) ── */}
-      {!loading && hero && (
+      {IS_IOS && !loading && (
+        <Billboard items={[...(trending || []), ...(trendingTV || [])]} apiKey={apiKey} onSelect={onSelect} />
+      )}
+      {!IS_IOS && !loading && hero && (
         <div className="hero">
           <div
             className="hero-bg"

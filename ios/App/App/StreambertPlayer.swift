@@ -1547,12 +1547,12 @@ extension StreambertPlayerViewController {
 
     fileprivate func qualityMenuItems() -> [UIMenuElement] {
         // Caps the bit rate the HLS player may pick; Auto lets it adapt.
-        // This screen's own pixels (iPhone 16e: 2532×1170), long side first.
+        // This screen's own resolution (iPhone 16e: 1170p), long side first.
         let nb = UIScreen.main.nativeBounds.size
         let native = CGSize(width: max(nb.width, nb.height), height: min(nb.width, nb.height))
         let options: [(String, Double, CGSize)] = [
             ("Max (best the stream has)", 0, .zero),
-            ("Native screen (\(Int(native.width))×\(Int(native.height)))", 30_000_000, native),
+            ("\(Int(native.height))p", 30_000_000, native),
             ("4K (2160p)", 40_000_000, CGSize(width: 3840, height: 2160)),
             ("1440p", 20_000_000, CGSize(width: 2560, height: 1440)),
             ("1080p", 8_000_000, CGSize(width: 1920, height: 1080)),
@@ -1567,7 +1567,7 @@ extension StreambertPlayerViewController {
                 item.preferredPeakBitRate = o.1
                 item.preferredMaximumResolution = o.2
                 let sym = UIImage(systemName: "sparkles.tv") == nil ? "tv" : "sparkles.tv"
-                self.pill(self.qualityButton, symbol: sym, title: o.1 == 0 ? "Max" : (o.0.hasPrefix("Native") ? "Native" : o.0.components(separatedBy: " ").first ?? o.0))
+                self.pill(self.qualityButton, symbol: sym, title: o.1 == 0 ? "Max" : o.0.components(separatedBy: " ").first ?? o.0)
             }
         }
         if let size = player?.currentItem?.presentationSize, size.height > 0 {
