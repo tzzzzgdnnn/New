@@ -189,8 +189,8 @@ export function withAnipm(ranked, anipm) {
  * no page to load), unless the viewer picked another server by hand.
  */
 /** Direct-stream servers (Movy, Cinejoy) for a movie or episode, both looked up at once. */
-export async function directCandidates(ctx) {
-  const [m, c] = await Promise.all([movyCandidates(ctx).catch(() => []), cinejoyCandidates(ctx).catch(() => [])]);
+export async function directCandidates(ctx, opts = {}) {
+  const [m, c] = await Promise.all([movyCandidates(ctx, opts).catch(() => []), cinejoyCandidates(ctx, opts).catch(() => [])]);
   return [...m, ...c];
 }
 
