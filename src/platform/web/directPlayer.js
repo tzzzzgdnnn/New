@@ -71,17 +71,18 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     hls.attachMedia(video);
     video.play().catch(() => {});
   };
-  if (nativeHls && (isIPhone || nativeOnly)) {
+  // hls.js first wherever it runs (iPhone too, via ManagedMediaSource): Cinejoy's
+  // segments are TS wrapped in a fake PNG header that Safari's own HLS can't play.
+  if (Hls.isSupported() && !nativeOnly) {
+    startHls();
+  } else if (nativeHls) {
     // Safari's own HLS (Apple's player, like the app): fastest start. If it
     // can't read this host's segments, hls.js takes over.
     video.src = src;
     video.addEventListener("error", () => {
       if (done || hls) return;
-      if (Hls.isSupported() && !nativeOnly) { video.removeAttribute("src"); video.load(); startHls(); }
-      else fail("video error");
+      fail("video error");
     });
-  } else if (Hls.isSupported()) {
-    startHls();
   } else {
     video.src = src;
     video.addEventListener("error", () => fail("video error"));
