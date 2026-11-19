@@ -1,5 +1,6 @@
 import { isKidsProfileActive } from "./profileScope";
 import { filterKidSafeResults } from "./kidsFilter";
+import { storage } from "./storage";
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMG_BASE = "https://image.tmdb.org/t/p";
@@ -112,7 +113,7 @@ function _remember(key, data) {
 export function clearTmdbCache() {
   _tmdbCache.clear();
   try {
-    localStorage.removeItem("streambert_trendingCache");
+    storage.remove(TRENDING_CACHE_KEY);
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const k = localStorage.key(i);
       if (k && k.startsWith(TMDB_DISK_PREFIX)) localStorage.removeItem(k);
@@ -279,6 +280,31 @@ async function _tmdbRequest(localizedPath, apiKey, cacheKey, signal) {
 // Responses are cached unfiltered; Kids profiles get a filtered view of lists.
 const forActiveProfile = (data) =>
   isKidsProfileActive() ? filterKidSafeResults(data) : data;
+
+// ── Home trending lists, kept 30 minutes (across restarts) ────────────────
+// Saved as shown, so a Kids profile's copy is already filtered: a copy is
+// only reused for the same language and the same kind of profile.
+const TRENDING_CACHE_KEY = "trendingCache";
+const TRENDING_CACHE_TTL = 30 * 60 * 1000;
+
+/**
+ * Trending lists saved for this language and kind of profile, or null.
+ * @param {string} lang TMDB metadata language the lists were fetched in
+ * @returns {{movies: object[], tv: object[]} | null}
+ */
+export function readTrendingCache(lang) {
+  const c = storage.get(TRENDING_CACHE_KEY);
+  const usable =
+    c?.lang === lang &&
+    c.kids === isKidsProfileActive() &&
+    Date.now() - c.ts < TRENDING_CACHE_TTL;
+  return usable ? { movies: c.movies || [], tv: c.tv || [] } : null;
+}
+
+/** Save trending lists fetched in `lang` for the active profile. */
+export function saveTrendingCache(lang, movies, tv) {
+  storage.set(TRENDING_CACHE_KEY, { movies, tv, lang, kids: isKidsProfileActive(), ts: Date.now() });
+}
 
 // Documentation:
 // https://vsembed.su/api/

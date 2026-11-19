@@ -32,6 +32,7 @@ const { storage } = await import("../src/utils/storage.js");
 const store = await import("../src/platform/ios/profiles/profileStore.js");
 const { getActiveProfileId } = await import("../src/utils/profileScope.js");
 const nav = await import("../src/utils/navHistory.js");
+const { readTrendingCache, saveTrendingCache } = await import("../src/utils/api.js");
 
 let pass = 0;
 const t = async (name, fn) => { await fn(); pass++; console.log("ok -", name); };
@@ -154,6 +155,22 @@ await t("deleting the active profile: a late write can't recreate its data", asy
   storage.set("progress", { movie_4: 30 }); // e.g. a progress report landing late
   assert.ok(![...mem.keys()].some((k) => k.includes(`p.${doomed.id}.`)), "deleted profile's data came back");
   store.activateProfile(main);
+});
+
+await t("Home trending saved by one kind of profile is not shown to the other", async () => {
+  const kid = await store.createProfile({ name: "Kid2", kids: true });
+  const [adult] = store.listProfiles().filter((p) => !p.kids);
+  const horror = { id: 9, genre_ids: [27] };
+  store.activateProfile(adult);
+  saveTrendingCache("en-US", [horror], []);
+  assert.deepEqual(readTrendingCache("en-US")?.movies, [horror]);
+  store.activateProfile(kid);
+  assert.equal(readTrendingCache("en-US"), null, "Kids profile got the adult trending list");
+  saveTrendingCache("en-US", [], []);
+  store.activateProfile(adult);
+  assert.equal(readTrendingCache("en-US"), null, "adult got the Kids-filtered list");
+  assert.equal(readTrendingCache("de-DE"), null);
+  await store.deleteProfile(kid.id);
 });
 
 await t("profile cap is enforced", async () => {
