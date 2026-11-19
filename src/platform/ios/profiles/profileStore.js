@@ -3,6 +3,7 @@
 // under each profile's storage namespace (see profileKey in utils/storage).
 import {
   storage,
+  rawStored,
   secureStorage,
   STORAGE_PREFIX,
   NATIVE_MIRRORED_KEYS,
@@ -10,6 +11,7 @@ import {
 } from "../../../utils/storage";
 import { profileNamespace, scopedKey, setActiveProfileScope } from "../../../utils/profileScope";
 import { defaultAvatarFor } from "./avatars";
+import { diag } from "../../../utils/diag";
 
 /** Most profiles one device can hold. */
 export const MAX_PROFILES = 5;
@@ -115,8 +117,37 @@ async function readKeychainProfiles() {
  * Always resolves with at least one profile.
  */
 export async function loadProfiles() {
-  const local = listProfiles();
+  let local = listProfiles();
   const saved = await readKeychainProfiles();
+  // A stored list that can't be read is never silently replaced by a fresh
+  // "Main" (that would orphan every profile's data): it is backed up and
+  // logged, and the Keychain copy is used when there is one.
+  const raw = rawStored(PROFILES_KEY);
+  if (!local.length && raw && raw !== "[]") {
+    try {
+      localStorage.setItem(`${STORAGE_PREFIX}profiles_corrupt_${Date.now()}`, raw);
+    } catch {}
+    diag("profile", `stored profile list unreadable (${raw.length} chars); ${saved?.length ? "restored from Keychain" : "no Keychain copy"}`);
+    try {
+      window.dispatchEvent(new CustomEvent("sb-storage-error", { detail: { kind: "profiles-corrupt", key: PROFILES_KEY } }));
+    } catch {}
+    if (!saved?.length) {
+      // Rebuild entries from the per-profile data namespaces still on disk.
+      const ids = new Set();
+      const ns = new RegExp(`^${STORAGE_PREFIX}p\\.([0-9a-f]+)\\.`);
+      for (const k of Object.keys(localStorage)) {
+        const m = k.match(ns);
+        if (m) ids.add(m[1]);
+      }
+      local = [...ids].map((id, i) => normalize({ id, name: `Profile ${i + 1}` }, i));
+      if (local.length) {
+        diag("profile", `rebuilt ${local.length} profile(s) from their stored data`);
+        storage.set(PROFILES_KEY, local);
+        await saveProfiles(local);
+        return local;
+      }
+    }
+  }
   if (!local.length && saved?.length) {
     storage.set(PROFILES_KEY, saved);
     return saved;
@@ -148,7 +179,13 @@ function adoptLegacyData(profileId) {
     if (!physical.startsWith(STORAGE_PREFIX)) continue;
     const key = physical.slice(STORAGE_PREFIX.length);
     if (!isProfileScoped(key)) continue;
-    localStorage.setItem(STORAGE_PREFIX + scopedKey(profileId, key), localStorage.getItem(physical));
+    try {
+      localStorage.setItem(STORAGE_PREFIX + scopedKey(profileId, key), localStorage.getItem(physical));
+    } catch (e) {
+      // Keep the legacy copy when the move failed; never delete unmoved data.
+      diag("profile", `legacy migration of ${key} failed: ${e?.name || e}`);
+      continue;
+    }
     if (!NATIVE_MIRRORED_KEYS.has(key)) localStorage.removeItem(physical);
   }
 }

@@ -1,5 +1,29 @@
 // localStorage-based persistence (works in both Vite dev and prod)
 import { getActiveProfileId, scopedKey } from "./profileScope";
+import { diag } from "./diag";
+
+// Failed saves (quota) and unreadable values are logged and announced
+// ("sb-storage-error") so the app can tell the viewer, instead of the old
+// silent catch {} that dropped progress/history writes without a trace.
+let _lastStorageEvent = 0;
+function reportStorageProblem(kind, key, err) {
+  try {
+    diag("storage", `${kind} ${key}: ${err?.name || ""} ${err?.message || err || ""}`);
+    const now = Date.now();
+    if (now - _lastStorageEvent < 2000) return;
+    _lastStorageEvent = now;
+    window.dispatchEvent(new CustomEvent("sb-storage-error", { detail: { kind, key } }));
+  } catch {}
+}
+
+/** Raw stored string for a logical key (null when missing), for corruption checks. */
+export function rawStored(key) {
+  try {
+    return localStorage.getItem(PREFIX + profileKey(key));
+  } catch {
+    return null;
+  }
+}
 
 export const STORAGE_PREFIX = "streambert_";
 const PREFIX = STORAGE_PREFIX;
@@ -12,19 +36,32 @@ export const storage = {
       if (!raw && key === "hianimeDubMode") {
         raw = localStorage.getItem(PREFIX + "allmangaDubMode");
       }
-      const value = raw ? JSON.parse(raw) : null;
+      let value = null;
+      if (raw) {
+        try {
+          value = JSON.parse(raw);
+        } catch (e) {
+          reportStorageProblem("corrupt", key, e);
+          return null;
+        }
+      }
       if (key === "playerSource" && value === "allmanga") return "hianime";
       return value;
     } catch {
       return null;
     }
   },
+  /** Save a value. Returns false (and reports it) when the write failed. */
   set(key, value) {
     try {
       const json = JSON.stringify(value);
       localStorage.setItem(PREFIX + profileKey(key), json);
       if (isNativeMirrored(key)) localStorage.setItem(PREFIX + key, json);
-    } catch {}
+      return true;
+    } catch (e) {
+      reportStorageProblem("save failed", key, e);
+      return false;
+    }
   },
   remove(key) {
     try {

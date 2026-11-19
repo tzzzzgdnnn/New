@@ -887,6 +887,26 @@ export default function App() {
     toastTimerRef.current = setTimeout(() => setToast(null), 2500);
   }, []);
 
+  // Failed saves / unreadable stored data: tell the viewer (throttled).
+  useEffect(() => {
+    let last = 0;
+    const on = (e) => {
+      const now = Date.now();
+      if (now - last < 30000) return;
+      last = now;
+      const kind = e?.detail?.kind;
+      showToast(
+        kind === "save failed"
+          ? "Couldn't save: device storage for the app is full. Clear Cache in Settings › Storage."
+          : kind === "profiles-corrupt"
+            ? "Profile list was damaged and has been recovered. Check Settings › Profiles."
+            : "Some saved data couldn't be read. Details in Settings › Diagnostics log.",
+      );
+    };
+    window.addEventListener("sb-storage-error", on);
+    return () => window.removeEventListener("sb-storage-error", on);
+  }, [showToast]);
+
   const getMediaType = useCallback(
     (item) => item.media_type || (item.first_air_date ? "tv" : "movie"),
     [],

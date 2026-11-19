@@ -19,6 +19,9 @@ globalThis.localStorage = new Proxy(globalThis.localStorage, {
 // Keychain stand-in (window.electron.secureGet/secureSet, as shim.js provides).
 const keychain = new Map();
 globalThis.window = globalThis.window || globalThis;
+const events = [];
+window.dispatchEvent = (e) => { events.push(e); return true; };
+globalThis.CustomEvent = globalThis.CustomEvent || class extends Event { constructor(t, o) { super(t); this.detail = o?.detail; } };
 window.electron = {
   isIOS: true,
   secureGet: async (k) => keychain.get(k) ?? null,
@@ -120,6 +123,62 @@ await t("delete removes only that profile's data; last profile can't go", async 
 await t("profile cap is enforced", async () => {
   while (store.listProfiles().length < store.MAX_PROFILES) await store.createProfile({ name: "x" });
   await assert.rejects(() => store.createProfile({ name: "too many" }));
+});
+
+await t("per-profile settings don't leak (subtitles, autoplay, dub mode) and the native mirror follows", async () => {
+  const [a, b] = store.listProfiles();
+  store.activateProfile(a);
+  storage.set("subtitleLang", "de"); storage.set("autoplayNextEnabled", false); storage.set("hianimeDubMode", "dub");
+  store.activateProfile(b);
+  assert.equal(storage.get("subtitleLang"), null);
+  assert.equal(storage.get("autoplayNextEnabled"), null);
+  assert.equal(storage.get("hianimeDubMode"), null);
+  assert.equal(localStorage.getItem("streambert_subtitleLang"), null, "native mirror kept A's language");
+  store.activateProfile(a);
+  assert.equal(localStorage.getItem("streambert_subtitleLang"), '"de"');
+});
+
+await t("switching mid-watch: progress reported after the switch lands in the new profile only", async () => {
+  const [a, b] = store.listProfiles();
+  store.activateProfile(a); storage.set("progress", { movie_1: 50 });
+  store.activateProfile(b); storage.set("progress", { movie_2: 10 });
+  store.activateProfile(a); assert.deepEqual(storage.get("progress"), { movie_1: 50 });
+});
+
+await t("a failed save is reported, not silent", async () => {
+  const orig = localStorage.setItem;
+  localStorage.setItem = () => { const e = new Error("quota"); e.name = "QuotaExceededError"; throw e; };
+  const ok = storage.set("history", [{ id: 99 }]);
+  localStorage.setItem = orig;
+  assert.equal(ok, false);
+  assert.ok(events.some((e) => e.type === "sb-storage-error" && e.detail.kind === "save failed"));
+});
+
+await t("corrupt stored JSON is reported and read as missing", async () => {
+  events.length = 0;
+  const [a] = store.listProfiles();
+  store.activateProfile(a);
+  localStorage.setItem(`streambert_p.${a.id}.watched`, "{not json");
+  await new Promise((r) => setTimeout(r, 2100)); // event throttle window
+  assert.equal(storage.get("watched"), null);
+  assert.ok(events.some((e) => e.type === "sb-storage-error" && e.detail.kind === "corrupt"));
+});
+
+await t("corrupt profile list is restored from the Keychain, never replaced by a fresh Main", async () => {
+  const ids = store.listProfiles().map((p) => p.id);
+  localStorage.setItem("streambert_profiles", "[{broken");
+  const restored = await store.loadProfiles();
+  assert.deepEqual(restored.map((p) => p.id), ids);
+  assert.ok([...mem.keys()].some((k) => k.startsWith("streambert_profiles_corrupt_")), "no backup of the damaged list");
+});
+
+await t("corrupt profile list with no Keychain copy is rebuilt from stored profile data", async () => {
+  const ids = store.listProfiles().map((p) => p.id).filter((id) => [...mem.keys()].some((k) => k.startsWith(`streambert_p.${id}.`)));
+  keychain.clear();
+  localStorage.setItem("streambert_profiles", "garbage");
+  const rebuilt = await store.loadProfiles();
+  for (const id of ids) assert.ok(rebuilt.some((p) => p.id === id), `lost profile ${id}`);
+  assert.ok(!rebuilt.some((p) => p.name === "Main" && !ids.includes(p.id)), "fresh Main created");
 });
 
 console.log(`\n${pass} profile tests passed`);
