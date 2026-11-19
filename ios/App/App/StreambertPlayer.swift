@@ -156,13 +156,16 @@ enum SniffScript {
 
 struct SniffCandidate { let id: String; let label: String; let url: URL }
 
+/// A subtitle file seen on an embed page, with the page's label if it had one.
+struct SniffSub: Equatable { let url: URL; let label: String? }
+
 struct SniffResult {
     let candidateIndex: Int
     let server: SniffCandidate
     let url: URL
     let headers: [String: String]
     let cookies: [HTTPCookie]
-    let subtitles: [URL]
+    let subtitles: [SniffSub]
 }
 
 private final class WeakHandler: NSObject, WKScriptMessageHandler {
@@ -181,9 +184,11 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     private var timeout: Timer?
     private var settle: Timer?
     private var streams: [(url: URL, page: URL?)] = []
-    private var subs: [URL] = []
+    private var subs: [SniffSub] = []
     private var completion: ((SniffResult?) -> Void)?
     private(set) var running = false
+    /// Called on the main thread whenever a new server is tried.
+    var onAdvance: ((SniffCandidate, Int) -> Void)?
     static let perServerTimeout: TimeInterval = 16
 
     init(container: UIView) { self.container = container }
@@ -225,6 +230,8 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         index += 1
         guard index < candidates.count, let container = container else { finish(nil); return }
         let c = candidates[index]
+        print("[SuperPlayer] trying \(c.id) \(c.url.absoluteString)")
+        onAdvance?(c, index)
         let cfg = WKWebViewConfiguration()
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
@@ -259,7 +266,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
               let s = b["url"] as? String, let u = URL(string: s) else { return }
         let page = (b["page"] as? String).flatMap { URL(string: $0) }
         if (b["kind"] as? String) == "sub" {
-            if !subs.contains(u) { subs.append(u) }
+            if !subs.contains(where: { $0.url == u }) { subs.append(SniffSub(url: u, label: b["label"] as? String)) }
             return
         }
         streams.append((u, page))
@@ -273,8 +280,10 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         settle?.invalidate(); timeout?.invalidate()
         guard running, !streams.isEmpty, index < candidates.count else { return }
         let hls = streams.filter { $0.url.absoluteString.lowercased().contains("m3u8") || !$0.url.absoluteString.lowercased().contains(".mp4") }
-        let best = hls.first(where: { $0.url.absoluteString.lowercased().contains("master") })
-            ?? hls.first(where: { !$0.url.absoluteString.lowercased().contains("audio") }) ?? hls.first ?? streams.first!
+        guard let best = hls.first(where: { $0.url.absoluteString.lowercased().contains("master") })
+            ?? hls.first(where: { !$0.url.absoluteString.lowercased().contains("audio") }) ?? hls.first ?? streams.first
+        else { return }
+        print("[SuperPlayer] stream \(best.url.absoluteString) from \(candidates[index].id)")
         var headers: [String: String] = ["User-Agent": StreambertBridgeViewController.safariUserAgent]
         if let page = best.page, let scheme = page.scheme, let host = page.host {
             let origin = "\(scheme)://\(host)" + (page.port.map { ":\($0)" } ?? "")
@@ -392,26 +401,55 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
               let list = body["candidates"] as? [[String: Any]] else { return }
         if let c = body["ctx"] as? [String: Any] { context["ctx"] = c }
         if let s = body["servers"] { context["servers"] = s }
-        resolveToken = token
         resolveList = list.compactMap { d in
             guard let u = (d["url"] as? String).flatMap({ URL(string: $0) }), let id = d["id"] as? String else { return nil }
             return SniffCandidate(id: id, label: (d["label"] as? String) ?? id, url: u)
         }
         guard !resolveList.isEmpty else { return }
+        // A previous request whose failure screen is still up is replaced.
+        if let old = failedToken, old != token { notifyJS(token: old, ok: false, server: nil) }
+        failedToken = nil
+        resolveToken = token
         // Open the player right away (spinner + title) while the hidden
         // sniffer looks for the stream.
-        if playerVC == nil {
-            let vc = makePlayer(currentServer: resolveList.first?.id, sniffBased: true)
-            vc.setStatus("Finding a stream on \(resolveList.first?.label ?? "server")…")
-            presentOnTop(vc)
+        if let vc = playerVC {
+            vc.updateServers(serverList(), current: resolveList.first?.id)
         } else {
-            playerVC?.setStatus("Finding a stream on \(resolveList.first?.label ?? "server")…")
+            presentOnTop(makePlayer(currentServer: resolveList.first?.id, sniffBased: true))
         }
-        sniffIndex = nil
-        sniffer.start(resolveList) { [weak self] r in self?.sniffed(r, token: token) }
+        startSniffing(from: 0, token: token)
     }
 
     private var sniffIndex: Int?
+    /// Token whose servers all failed; JS is told when the player closes.
+    private var failedToken: String?
+
+    private func startSniffing(from index: Int, token: String) {
+        sniffIndex = nil
+        playerVC?.showLoading("Finding a stream on \(resolveList[min(index, resolveList.count - 1)].label)…")
+        sniffer.onAdvance = { [weak self] cand, i in
+            guard let self = self, token == self.resolveToken else { return }
+            self.playerVC?.showLoading("Finding a stream on \(cand.label)…")
+            if i > 0 { self.playerVC?.showToast("Trying \(cand.label)…") }
+        }
+        let done: (SniffResult?) -> Void = { [weak self] r in self?.sniffed(r, token: token) }
+        if index == 0 { sniffer.start(resolveList, completion: done) }
+        else { sniffer.resume(after: index - 1, completion: done) }
+    }
+
+    /// Servers for the native menu; falls back to the candidate list.
+    private func serverList() -> [(String, String)] {
+        let fromCtx = (context["servers"] as? [[String: Any]] ?? []).compactMap { d -> (String, String)? in
+            guard let id = d["id"] as? String else { return nil }
+            return (id, (d["label"] as? String) ?? id)
+        }
+        if fromCtx.count > 1 { return fromCtx }
+        var seen = Set<String>()
+        let fromCandidates = resolveList.compactMap { c -> (String, String)? in
+            seen.insert(c.id).inserted ? (c.id, c.label) : nil
+        }
+        return fromCandidates.count > fromCtx.count ? fromCandidates : fromCtx
+    }
 
     private func presentOnTop(_ vc: UIViewController) {
         var top: UIViewController = self
@@ -422,9 +460,15 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     private func sniffed(_ r: SniffResult?, token: String) {
         guard token == resolveToken else { return }
         guard let r = r else {
-            // Every server failed: close the player, JS shows the web player.
-            let finish: () -> Void = { [weak self] in self?.notifyJS(token: token, ok: false, server: nil) }
-            if let vc = playerVC { vc.onClose = nil; vc.dismiss(animated: true, completion: finish) } else { finish() }
+            // Every server failed: keep the player up with Retry + server
+            // picker. JS falls back to the web player once it is closed.
+            print("[SuperPlayer] every server failed")
+            if let vc = playerVC {
+                failedToken = token
+                vc.showFailure("Couldn't find a working stream on any server.")
+            } else {
+                notifyJS(token: token, ok: false, server: nil)
+            }
             return
         }
         notifyJS(token: token, ok: true, server: r.server.id)
@@ -446,8 +490,11 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     // MARK: Visible-iframe fallback sniffing
 
     private func handleVisibleMedia(_ body: [String: Any], frame: WKFrameInfo) {
-        guard !frame.isMainFrame, (body["kind"] as? String) != "sub",
-              let s = body["url"] as? String, let url = URL(string: s) else { return }
+        guard !frame.isMainFrame, let s = body["url"] as? String, let url = URL(string: s) else { return }
+        if (body["kind"] as? String) == "sub" {
+            playerVC?.addStreamSubtitle(SniffSub(url: url, label: body["label"] as? String), headers: [:])
+            return
+        }
         if playerVC != nil || sniffer.running { return }
         let page = (body["page"] as? String).flatMap { URL(string: $0) }
         candidates.append((url, page))
@@ -459,10 +506,10 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     }
 
     private func presentVisibleCandidate() {
-        guard playerVC == nil, presentedViewController == nil, !candidates.isEmpty else { return }
+        guard playerVC == nil, presentedViewController == nil else { return }
         let hls = candidates.filter { $0.url.absoluteString.lowercased().contains("m3u8") }
-        let pick = hls.first(where: { $0.url.absoluteString.lowercased().contains("master") })
-            ?? hls.first ?? candidates.first!
+        guard let pick = hls.first(where: { $0.url.absoluteString.lowercased().contains("master") })
+                ?? hls.first ?? candidates.first else { return }
         if presentedFor == pick.url.absoluteString { return }
         presentedFor = pick.url.absoluteString
         var headers: [String: String] = ["User-Agent": Self.safariUserAgent]
@@ -472,25 +519,23 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
             headers["Origin"] = origin
         }
         setWebVideos(play: false)
-        presentPlayer(url: pick.url, headers: headers, cookies: [], subtitles: [],
-                      currentServer: context["current"] as? String, fromSniff: nil)
+        let current = context["current"] as? String
+        let vc = makePlayer(currentServer: current, sniffBased: false)
+        presentOnTop(vc)
+        vc.load(url: pick.url, headers: headers, cookies: [], server: current)
     }
 
     // MARK: Player
 
     private func makePlayer(currentServer: String?, sniffBased: Bool) -> StreambertPlayerViewController {
         let ctx = context["ctx"] as? [String: Any] ?? [:]
-        let servers = (context["servers"] as? [[String: Any]] ?? []).compactMap { d -> (String, String)? in
-            guard let id = d["id"] as? String else { return nil }
-            return (id, (d["label"] as? String) ?? id)
-        }
         let vc = StreambertPlayerViewController(
             title: (ctx["title"] as? String) ?? "",
             mediaType: (ctx["type"] as? String) ?? "movie",
             season: ctx["season"] as? Int,
             episode: ctx["episode"] as? Int,
             isAnime: (ctx["isAnime"] as? Bool) ?? false,
-            servers: servers,
+            servers: serverList(),
             currentServer: currentServer)
         vc.keepOpenOnFail = sniffBased
         vc.subtitleInfo = ctx
@@ -499,28 +544,32 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
             guard let self = self else { return }
             if sniffBased, let i = self.sniffIndex, let token = self.resolveToken {
                 // Stream would not play: keep going with the next server.
-                self.sniffer.resume(after: i) { [weak self] r in self?.sniffed(r, token: token) }
+                self.startSniffing(from: i + 1, token: token)
             } else {
                 self.setWebVideos(play: true)
             }
         }
+        vc.onRetry = { [weak self] in
+            guard let self = self, let token = self.resolveToken, !self.resolveList.isEmpty else { return }
+            self.failedToken = nil
+            self.startSniffing(from: 0, token: token)
+        }
+        vc.onOpenSettings = { [weak self] in
+            self?.bridge?.webView?.evaluateJavaScript(
+                "window.dispatchEvent(new CustomEvent('sb-open-settings',{detail:'subtitles'}))",
+                completionHandler: nil)
+        }
         vc.onClose = { [weak self] in
             guard let self = self else { return }
             self.sniffer.cancel()
+            if let t = self.failedToken { self.notifyJS(token: t, ok: false, server: nil) }
+            self.failedToken = nil
             self.resolveToken = nil
             self.candidates = []
             self.bridge?.webView?.evaluateJavaScript("window.__sbNativeClosed && window.__sbNativeClosed()", completionHandler: nil)
         }
         playerVC = vc
         return vc
-    }
-
-    private func presentPlayer(url: URL, headers: [String: String], cookies: [HTTPCookie], subtitles: [URL],
-                               currentServer: String?, fromSniff: Int?) {
-        guard playerVC == nil else { return }
-        let vc = makePlayer(currentServer: currentServer, sniffBased: false)
-        presentOnTop(vc)
-        vc.load(url: url, headers: headers, cookies: cookies, server: currentServer)
     }
 
     // Pause (and mute) or resume the <video> elements of the web player frame.
@@ -561,7 +610,18 @@ private final class WeakBridgeHandler: NSObject, WKScriptMessageHandler {
 
 final class PlayerLayerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
+    // layerClass guarantees the type.
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+}
+
+/// Label with inner padding, used for toasts.
+final class PaddedLabel: UILabel {
+    var insets = UIEdgeInsets(top: 7, left: 14, bottom: 7, right: 14)
+    override func drawText(in rect: CGRect) { super.drawText(in: rect.inset(by: insets)) }
+    override var intrinsicContentSize: CGSize {
+        let s = super.intrinsicContentSize
+        return CGSize(width: s.width + insets.left + insets.right, height: s.height + insets.top + insets.bottom)
+    }
 }
 
 // MARK: - Native player
@@ -574,6 +634,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     var onSelectServer: ((String) -> Void)?
     var onFail: (() -> Void)?
     var onClose: (() -> Void)?
+    var onRetry: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
 
     private var url: URL?
     private var headers: [String: String] = [:]
@@ -583,9 +645,14 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private let season: Int?
     private let episode: Int?
     private let isAnime: Bool
-    private let servers: [(String, String)]
+    private var servers: [(String, String)]
     private var currentServer: String?
     private let statusLabel = UILabel()
+    private let toastLabel = PaddedLabel()
+    private let failureView = UIStackView()
+    private let failureLabel = UILabel()
+    private let retryButton = UIButton(type: .system)
+    private let pickServerButton = UIButton(type: .system)
 
     private let red = UIColor(red: 229 / 255, green: 9 / 255, blue: 20 / 255, alpha: 1)
     private var player: AVPlayer?
@@ -596,6 +663,10 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private var hideWork: DispatchWorkItem?
     private var isScrubbing = false
     private var failed = false
+    private var userPaused = false
+    private var toastWork: DispatchWorkItem?
+    /// Seconds a stream may sit at 0:00 before the next server is tried.
+    private static let startWatchdog: TimeInterval = 15
 
     // Controls (all inside `controls`, part of this view's own hierarchy)
     private let controls = UIView()
@@ -659,6 +730,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         view.backgroundColor = .black
         setupVideoView()
         setupControls()
+        setupOverlays()
         setupGestures()
         setupSubtitles()
         loadSkipTimes()
@@ -681,6 +753,60 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         statusLabel.isHidden = (text == nil)
     }
 
+    /// Spinner + status line; clears a failure screen.
+    func showLoading(_ text: String) {
+        failureView.isHidden = true
+        spinner.startAnimating()
+        setStatus(text)
+    }
+
+    /// Every server failed: message, Retry and a server picker. Never an
+    /// endless spinner.
+    func showFailure(_ text: String) {
+        generation += 1 // stale watchdogs from the last attempt do nothing
+        player?.pause()
+        spinner.stopAnimating()
+        setStatus(nil)
+        failureLabel.text = text
+        failureView.isHidden = false
+        setControls(visible: true)
+    }
+
+    /// Short message at the top that fades out by itself.
+    func showToast(_ text: String) {
+        toastLabel.text = text
+        toastLabel.isHidden = false
+        UIView.animate(withDuration: 0.2) { self.toastLabel.alpha = 1 }
+        toastWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            UIView.animate(withDuration: 0.3, animations: { self?.toastLabel.alpha = 0 },
+                           completion: { _ in self?.toastLabel.isHidden = true })
+        }
+        toastWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: w)
+    }
+
+    /// New server list (and playing server) from a fresh resolve.
+    func updateServers(_ list: [(String, String)], current: String?) {
+        if !list.isEmpty { servers = list }
+        if let c = current { currentServer = c }
+        refreshServerButton()
+    }
+
+    private func refreshServerButton() {
+        pill(serverButton, symbol: "server.rack",
+             title: servers.first(where: { $0.0 == currentServer })?.1 ?? "Server")
+        serverButton.isHidden = servers.isEmpty
+    }
+
+    fileprivate func serverMenuItems() -> [UIMenuElement] {
+        servers.map { s in
+            UIAction(title: s.1, state: s.0 == currentServer ? .on : .off) { [weak self] _ in
+                self?.switchServer(s.0)
+            }
+        }
+    }
+
     /// Start playback of a captured stream (called once the sniffer found it).
     func load(url: URL, headers: [String: String], cookies: [HTTPCookie], server: String?) {
         if let t = timeObserver { player?.removeTimeObserver(t); timeObserver = nil }
@@ -691,12 +817,15 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         self.cookies = cookies
         if let s = server {
             currentServer = s
-            pill(serverButton, symbol: "server.rack", title: servers.first(where: { $0.0 == s })?.1 ?? "Server")
+            refreshServerButton()
         }
         failed = false
+        userPaused = false
+        failureView.isHidden = true
         resetStreamSubtitles()
         setStatus(nil)
         spinner.startAnimating()
+        print("[SuperPlayer] play \(url.absoluteString) on \(server ?? "?")")
         startPlayback(url)
         if isViewLoaded, view.window != nil { player?.play() }
         scheduleHide()
@@ -751,20 +880,28 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
         generation += 1
         let gen = generation
-        statusObs = item.observe(\.status, options: [.new]) { [weak self] it, _ in
+        statusObs = item.observe(\.status, options: [.initial, .new]) { [weak self] it, _ in
             DispatchQueue.main.async {
                 guard let self = self, gen == self.generation else { return }
                 if it.status == .readyToPlay {
                     self.spinner.stopAnimating()
+                    self.applyPreferredAudio()
+                    self.autoSelectIfWanted()
                     self.tick(self.player?.currentTime().seconds ?? 0)
                 }
-                if it.status == .failed { self.failAndClose() }
+                if it.status == .failed {
+                    print("[SuperPlayer] item failed: \(it.error?.localizedDescription ?? "unknown")")
+                    self.failAndClose()
+                }
             }
         }
-        // Not playable within 15 s -> next server (or the web player).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-            guard let self = self, gen == self.generation,
-                  self.player?.currentItem?.status != .readyToPlay else { return }
+        // Watchdog: not ready, or still at 0:00, after 15 s -> next server.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.startWatchdog) { [weak self] in
+            guard let self = self, gen == self.generation, !self.userPaused else { return }
+            let ready = self.player?.currentItem?.status == .readyToPlay
+            let t = self.player?.currentTime().seconds ?? 0
+            guard !ready || !(t > 0.5) else { return }
+            print("[SuperPlayer] no playback after \(Int(Self.startWatchdog)) s (ready: \(ready))")
             self.failAndClose()
         }
 
@@ -786,8 +923,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         let cb = onFail
         if keepOpenOnFail {
             player?.replaceCurrentItem(with: nil)
-            spinner.startAnimating()
-            setStatus("Trying the next server…")
+            showLoading("Trying the next server…")
             cb?()
         } else {
             dismiss(animated: true) { cb?() }
@@ -858,15 +994,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        pill(serverButton, symbol: "server.rack", title: servers.first(where: { $0.0 == currentServer })?.1 ?? "Server")
-        let actions = servers.map { s in
-            UIAction(title: s.1, state: s.0 == currentServer ? .on : .off) { [weak self] _ in
-                self?.switchServer(s.0)
-            }
-        }
-        serverButton.menu = UIMenu(title: "Server", children: actions)
-        serverButton.showsMenuAsPrimaryAction = true
-        serverButton.isHidden = servers.isEmpty
+        refreshServerButton()
 
         routePicker.tintColor = .white
         routePicker.activeTintColor = red
@@ -1002,6 +1130,65 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         }
     }
 
+    // MARK: Toast + failure screen
+
+    private func setupOverlays() {
+        toastLabel.translatesAutoresizingMaskIntoConstraints = false
+        toastLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        toastLabel.textColor = .white
+        toastLabel.backgroundColor = UIColor(white: 0.1, alpha: 0.85)
+        toastLabel.layer.cornerRadius = 14
+        toastLabel.clipsToBounds = true
+        toastLabel.alpha = 0
+        toastLabel.isHidden = true
+        view.addSubview(toastLabel)
+
+        failureLabel.textColor = .white
+        failureLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        failureLabel.textAlignment = .center
+        failureLabel.numberOfLines = 0
+        for (b, title) in [(retryButton, "Retry"), (pickServerButton, "Choose server")] {
+            var c = UIButton.Configuration.filled()
+            c.title = title
+            c.cornerStyle = .capsule
+            c.baseBackgroundColor = b === retryButton ? red : UIColor(white: 1, alpha: 0.16)
+            c.baseForegroundColor = .white
+            c.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 22, bottom: 10, trailing: 22)
+            b.configuration = c
+        }
+        retryButton.addAction(UIAction { [weak self] _ in
+            guard let self = self else { return }
+            self.showLoading("Retrying…")
+            self.onRetry?()
+        }, for: .touchUpInside)
+        pickServerButton.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
+            done(self?.serverMenuItems() ?? [])
+        }])
+        pickServerButton.showsMenuAsPrimaryAction = true
+        let buttons = UIStackView(arrangedSubviews: [retryButton, pickServerButton])
+        buttons.axis = .horizontal
+        buttons.spacing = 12
+        failureView.addArrangedSubview(failureLabel)
+        failureView.addArrangedSubview(buttons)
+        failureView.axis = .vertical
+        failureView.alignment = .center
+        failureView.spacing = 18
+        failureView.isHidden = true
+        failureView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(failureView)
+
+        let safe = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            toastLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            toastLabel.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 12),
+            toastLabel.widthAnchor.constraint(lessThanOrEqualTo: safe.widthAnchor, constant: -48),
+            failureView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            failureView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            failureView.leadingAnchor.constraint(greaterThanOrEqualTo: safe.leadingAnchor, constant: 24),
+            failureView.trailingAnchor.constraint(lessThanOrEqualTo: safe.trailingAnchor, constant: -24),
+        ])
+    }
+
     // MARK: Gestures
 
     private func setupGestures() {
@@ -1083,7 +1270,13 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
     @objc private func playTapped() {
         guard let p = player else { return }
-        if p.timeControlStatus == .paused { p.playImmediately(atRate: speed) } else { p.pause() }
+        if p.timeControlStatus == .paused {
+            userPaused = false
+            p.playImmediately(atRate: speed)
+        } else {
+            userPaused = true
+            p.pause()
+        }
         scheduleHide()
     }
 
@@ -1100,10 +1293,22 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         scheduleHide()
     }
 
+    /// Stay open and let the page resolve the picked server; the bridge then
+    /// sends a new resolve to this same player. Fails visibly if nothing comes.
     private func switchServer(_ id: String) {
+        print("[SuperPlayer] server picked: \(id)")
+        generation += 1
+        let gen = generation
         player?.pause()
-        let cb = onSelectServer
-        dismiss(animated: true) { cb?(id) }
+        player?.replaceCurrentItem(with: nil)
+        currentServer = id
+        refreshServerButton()
+        showLoading("Switching to \(servers.first(where: { $0.0 == id })?.1 ?? "server")…")
+        onSelectServer?(id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self] in
+            guard let self = self, gen == self.generation, self.player?.currentItem == nil else { return }
+            self.showFailure("That server didn't respond.")
+        }
     }
 
     // MARK: Skip intro / outro (real timestamps only)
@@ -1273,6 +1478,15 @@ enum SubParser {
         "ru": "Russian", "nl": "Dutch", "pl": "Polish", "tr": "Turkish", "sv": "Swedish",
     ]
 
+    /// Best-effort language guess from the page's label, else the file name.
+    static func guessLang(label: String, url: URL) -> String {
+        let l = label.lowercased()
+        if !l.isEmpty {
+            for (code, name) in langNames where l.hasPrefix(name.lowercased()) || l == code { return code }
+        }
+        return guessLang(url)
+    }
+
     /// Best-effort language guess from a subtitle file name.
     static func guessLang(_ url: URL) -> String {
         let n = url.lastPathComponent.lowercased()
@@ -1402,18 +1616,29 @@ extension StreambertPlayerViewController {
 
     // MARK: Sources
 
-    func setStreamSubtitles(_ urls: [URL], headers: [String: String]) {
-        let lang = preferredLang
-        var n = subTracks.filter { $0.fromStream }.count
-        for u in urls where !subTracks.contains(where: { $0.url == u }) {
-            n += 1
-            let l = SubParser.guessLang(u)
-            let name = SubParser.langNames[l] ?? "Subtitle \(n)"
-            subTracks.insert(SubTrack(id: "str:\(u.absoluteString)", label: name + " (player)", lang: l,
-                                      url: u, headers: headers, fromStream: true),
-                             at: l == lang ? 0 : subTracks.count)
-        }
+    func setStreamSubtitles(_ subs: [SniffSub], headers: [String: String]) {
+        for sub in subs { insertStreamSubtitle(sub, headers: headers) }
         autoSelectIfWanted()
+    }
+
+    /// A subtitle file that showed up after the stream was picked.
+    func addStreamSubtitle(_ sub: SniffSub, headers: [String: String]) {
+        guard insertStreamSubtitle(sub, headers: headers) else { return }
+        autoSelectIfWanted()
+    }
+
+    @discardableResult
+    private func insertStreamSubtitle(_ sub: SniffSub, headers: [String: String]) -> Bool {
+        let u = sub.url
+        guard !subTracks.contains(where: { $0.url == u }) else { return false }
+        let n = subTracks.filter { $0.fromStream }.count + 1
+        let label = sub.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let l = SubParser.guessLang(label: label, url: u)
+        let name = !label.isEmpty ? label : (SubParser.langNames[l] ?? "Subtitle \(n)")
+        let track = SubTrack(id: "str:\(u.absoluteString)", label: name + " (player)", lang: l,
+                             url: u, headers: headers, fromStream: true)
+        subTracks.insert(track, at: l == preferredLang ? 0 : subTracks.filter { $0.fromStream }.count)
+        return true
     }
 
     func resetStreamSubtitles() {
@@ -1534,6 +1759,7 @@ extension StreambertPlayerViewController {
         let deferred: (@escaping () -> [UIMenuElement]) -> UIMenu = { build in
             UIMenu(children: [UIDeferredMenuElement.uncached { done in done(build()) }])
         }
+        serverButton.menu = deferred { [weak self] in self?.serverMenuItems() ?? [] }
         audioButton.menu = deferred { [weak self] in self?.audioMenuItems() ?? [] }
         ccButton.menu = deferred { [weak self] in self?.subtitleMenuItems() ?? [] }
         speedButton.menu = deferred { [weak self] in self?.speedMenuItems() ?? [] }
@@ -1541,6 +1767,22 @@ extension StreambertPlayerViewController {
         for b in [audioButton, ccButton, speedButton, qualityButton, serverButton] {
             b.showsMenuAsPrimaryAction = true
             b.addAction(UIAction { [weak self] _ in self?.hideWork?.cancel() }, for: .menuActionTriggered)
+        }
+    }
+
+    /// Anime: pick the audio rendition that matches the chosen Sub/Dub mode
+    /// (English for Dub, Japanese for Sub) when the stream has both.
+    func applyPreferredAudio() {
+        guard isAnime, let item = player?.currentItem,
+              let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .audible),
+              group.options.count > 1 else { return }
+        let wantDub = (subtitleInfo["dubMode"] as? String) == "dub"
+        let prefix = wantDub ? "en" : "ja"
+        if let opt = group.options.first(where: { ($0.extendedLanguageTag ?? $0.locale?.identifier ?? "").lowercased().hasPrefix(prefix) }) {
+            item.select(opt, in: group)
+            pill(audioButton, symbol: "waveform", title: opt.displayName)
+        } else if wantDub {
+            showToast("No English audio on this server. Try another one in Server.")
         }
     }
 
