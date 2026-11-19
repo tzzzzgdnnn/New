@@ -2,7 +2,7 @@
 // stream, and an opt-in subtitle choice. Platform-neutral: the caller passes
 // the probe/measure/start functions of its downloader (iOS: native bridge).
 import { useEffect, useMemo, useState } from "react";
-import { defaultSubtitleChoice, optionSizeText } from "../../utils/downloadMath";
+import { defaultSubtitleChoice, optionSizeText, QUALITY_TIERS } from "../../utils/downloadMath";
 import { createPortal } from "react-dom";
 import "./downloads-phone.css";
 
@@ -102,6 +102,13 @@ export default function QualitySheet({
                 >
                   <span className="pd-row__main">{o.name}</span>
                   <span className="pd-row__side">{starting === o.name ? "Starting…" : optionSizeText(o)}</span>
+                </button>
+              ))}
+              {/* Every resolution is listed; ones this stream doesn't have are greyed out. */}
+              {QUALITY_TIERS.filter(([, n]) => !probe.options.some((o) => o.name === n)).map(([, n]) => (
+                <button type="button" key={n} className="pd-row pd-row--off" disabled aria-disabled="true">
+                  <span className="pd-row__main">{n}</span>
+                  <span className="pd-row__side">Not offered for this title</span>
                 </button>
               ))}
             </div>
