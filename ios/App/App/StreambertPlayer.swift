@@ -22,10 +22,10 @@ enum SniffScript {
           if (!H) return;
           var seen = {};
           function abs(u) { try { return new URL(String(u), location.href).href; } catch (e) { return null; } }
-          function post(kind, u) {
+          function post(kind, u, label) {
             if (!u || seen[kind + u]) return;
             seen[kind + u] = 1;
-            try { H.postMessage({ kind: kind, url: u, page: location.href }); } catch (e) {}
+            try { H.postMessage({ kind: kind, url: u, page: location.href, label: label || null }); } catch (e) {}
           }
           function rep(u, force) {
             try {
@@ -44,8 +44,39 @@ enum SniffScript {
             } catch (e) {}
           }
           function sniffText(u, t) {
-            if (typeof t === 'string' && t.slice(0, 7) === '#EXTM3U' && /#EXT-X-(STREAM-INF|TARGETDURATION|MEDIA-SEQUENCE)/.test(t)) rep(u, true);
+            if (typeof t !== 'string') return;
+            if (t.slice(0, 7) === '#EXTM3U' && /#EXT-X-(STREAM-INF|TARGETDURATION|MEDIA-SEQUENCE)/.test(t)) rep(u, true);
+            else sniffSubs(u, t);
           }
+          // Subtitle URLs inside JSON / text / scripts: player configs like
+          // "tracks":[{"file":"…/en.vtt","label":"English"}] or bare links.
+          function subUrl(u, base, label) {
+            try {
+              var a = new URL(u, base || location.href).href;
+              if (/^https?:/i.test(a) && !/thumb|sprite|storyboard|preview/i.test(a)) post('sub', a, label);
+            } catch (e) {}
+          }
+          function sniffSubs(base, t) {
+            if (typeof t !== 'string' || t.length > 3000000 || !/\\.(vtt|srt)/i.test(t)) return;
+            var s = t.replace(/\\\\\\//g, '/'), m;
+            var objRe = /\\{[^{}]*?["'](?:file|src|url|path)["']\\s*:\\s*["']([^"']+?\\.(?:vtt|srt)(?:\\?[^"']*)?)["'][^{}]*\\}/gi;
+            while ((m = objRe.exec(s))) {
+              var lab = /["'](?:label|language|lang|srclang|name|title)["']\\s*:\\s*["']([^"']{1,40})["']/i.exec(m[0]);
+              subUrl(m[1], base, lab && lab[1]);
+            }
+            var urlRe = /(https?:\\/\\/[^"'\\s<>\\\\]+?\\.(?:vtt|srt)(?:\\?[^"'\\s<>\\\\]*)?)/gi;
+            while ((m = urlRe.exec(s))) subUrl(m[1], base, null);
+          }
+          // <track> elements, also ones added later, in every frame.
+          var trackScans = 0;
+          var trackIv = setInterval(function () {
+            try {
+              document.querySelectorAll('track[src]').forEach(function (tr) {
+                subUrl(tr.getAttribute('src'), location.href, tr.label || tr.srclang || null);
+              });
+            } catch (e) {}
+            if (++trackScans > 40) clearInterval(trackIv);
+          }, 1500);
           var of = window.fetch;
           if (of) window.fetch = function (i) {
             var u = typeof i === 'string' ? i : (i && i.url);
@@ -56,7 +87,7 @@ enum SniffScript {
                 try {
                   var ct = (r.headers.get('content-type') || '').toLowerCase();
                   if (ct.indexOf('mpegurl') >= 0) rep(r.url || u, true);
-                  else if (!/image|video\\/mp2t|octet|font|css|javascript/.test(ct)) r.clone().text().then(function (t) { sniffText(r.url || u, t); }).catch(function () {});
+                  else if (!/image|video|audio|octet|font|css/.test(ct)) r.clone().text().then(function (t) { sniffText(r.url || u, t); }).catch(function () {});
                 } catch (e) {}
               }).catch(function () {});
             } catch (e) {}
@@ -71,6 +102,7 @@ enum SniffScript {
                   var ct = (x.getResponseHeader('content-type') || '').toLowerCase();
                   if (ct.indexOf('mpegurl') >= 0) rep(x.responseURL || u, true);
                   else if (x.responseType === '' || x.responseType === 'text') sniffText(x.responseURL || u, x.responseText);
+                  else if (x.responseType === 'json' && x.response) sniffSubs(x.responseURL || u, JSON.stringify(x.response));
                 } catch (e) {}
               });
             } catch (e) {}
@@ -92,7 +124,7 @@ enum SniffScript {
           Element.prototype.setAttribute = function (n, v) {
             try {
               if (n === 'src' && (this instanceof HTMLMediaElement || this instanceof HTMLSourceElement)) rep(v);
-              if (n === 'src' && this instanceof HTMLTrackElement) rep(v);
+              if (n === 'src' && this instanceof HTMLTrackElement) subUrl(v, location.href, this.label || this.srclang || null);
             } catch (e) {}
             return sa.apply(this, arguments);
           };
@@ -189,7 +221,14 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     private(set) var running = false
     /// Called on the main thread whenever a new server is tried.
     var onAdvance: ((SniffCandidate, Int) -> Void)?
+    /// Subtitles found after the stream was handed to the player.
+    var onLateSubtitle: ((SniffSub) -> Void)?
     static let perServerTimeout: TimeInterval = 16
+    /// After a stream is picked the page stays loaded this long, so subtitle
+    /// files it fetches later still reach the player.
+    static let lingerAfterPick: TimeInterval = 12
+    private var lingering = false
+    private var lingerTimer: Timer?
 
     init(container: UIView) { self.container = container }
 
@@ -214,6 +253,8 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     }
 
     private func teardown() {
+        lingerTimer?.invalidate(); lingerTimer = nil
+        lingering = false
         guard let wv = webView else { return }
         wv.stopLoading()
         wv.configuration.userContentController.removeScriptMessageHandler(forName: "sbMedia")
@@ -262,13 +303,20 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     }
 
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
-        guard running, let b = m.body as? [String: Any],
+        guard running || lingering, let b = m.body as? [String: Any],
               let s = b["url"] as? String, let u = URL(string: s) else { return }
         let page = (b["page"] as? String).flatMap { URL(string: $0) }
         if (b["kind"] as? String) == "sub" {
-            if !subs.contains(where: { $0.url == u }) { subs.append(SniffSub(url: u, label: b["label"] as? String)) }
+            guard !subs.contains(where: { $0.url == u }) else { return }
+            let sub = SniffSub(url: u, label: b["label"] as? String)
+            subs.append(sub)
+            if lingering {
+                print("[SuperPlayer] late subtitle \(u.absoluteString)")
+                onLateSubtitle?(sub)
+            }
             return
         }
+        guard running else { return }
         streams.append((u, page))
         // Short settle window to prefer a master playlist over a variant.
         if settle == nil || settle?.isValid == false {
@@ -297,7 +345,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         let host = best.url.host ?? ""
         let done: ([HTTPCookie]) -> Void = { [weak self] cookies in
             guard let self = self else { return }
-            self.teardown()
+            self.startLingering()
             self.finish(SniffResult(candidateIndex: i, server: cand, url: best.url, headers: headers,
                                     cookies: cookies, subtitles: subtitles))
         }
@@ -309,6 +357,21 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
                 })
             }
         } else { done([]) }
+    }
+
+    private func startLingering() {
+        guard webView != nil else { return }
+        lingering = true
+        lingerTimer?.invalidate()
+        lingerTimer = Timer.scheduledTimer(withTimeInterval: Self.lingerAfterPick, repeats: false) { [weak self] _ in
+            self?.teardown()
+        }
+    }
+
+    // The hidden page's web content process died: move on, or stop lingering.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        print("[SuperPlayer] sniffer web process terminated")
+        if lingering { teardown() } else if running { next() }
     }
 
     private func finish(_ r: SniffResult?) {
@@ -427,6 +490,9 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     private func startSniffing(from index: Int, token: String) {
         sniffIndex = nil
         playerVC?.showLoading("Finding a stream on \(resolveList[min(index, resolveList.count - 1)].label)…")
+        sniffer.onLateSubtitle = { [weak self] sub in
+            self?.playerVC?.addStreamSubtitle(sub, headers: [:])
+        }
         sniffer.onAdvance = { [weak self] cand, i in
             guard let self = self, token == self.resolveToken else { return }
             self.playerVC?.showLoading("Finding a stream on \(cand.label)…")
@@ -481,10 +547,20 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     }
 
     private func notifyJS(token: String, ok: Bool, server: String?) {
+        sendToJS("__sbNativeResult", ["token": token, "ok": ok, "server": server ?? NSNull()])
+    }
+
+    /// Call `window.<function>(payload)` in the app's web view, if defined.
+    private func sendToJS(_ function: String, _ payload: [String: Any]) {
         guard let wv = bridge?.webView,
-              let data = try? JSONSerialization.data(withJSONObject: ["token": token, "ok": ok, "server": server ?? NSNull()]),
-              let json = String(data: data, encoding: .utf8) else { return }
-        wv.evaluateJavaScript("window.__sbNativeResult && window.__sbNativeResult(\(json))", completionHandler: nil)
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            print("[SuperPlayer] could not encode payload for \(function)")
+            return
+        }
+        wv.evaluateJavaScript("window.\(function) && window.\(function)(\(json))") { _, error in
+            if let error = error { print("[SuperPlayer] \(function) failed: \(error.localizedDescription)") }
+        }
     }
 
     // MARK: Visible-iframe fallback sniffing
@@ -559,14 +635,19 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
                 "window.dispatchEvent(new CustomEvent('sb-open-settings',{detail:'subtitles'}))",
                 completionHandler: nil)
         }
-        vc.onClose = { [weak self] in
+        let progressKey = ctx["progressKey"] as? String
+        vc.onProgress = { [weak self] time, duration, inOutro in
+            guard let key = progressKey else { return }
+            self?.sendToJS("__sbNativeProgress", ["key": key, "time": time, "duration": duration, "inOutro": inOutro])
+        }
+        vc.onClose = { [weak self] position in
             guard let self = self else { return }
             self.sniffer.cancel()
             if let t = self.failedToken { self.notifyJS(token: t, ok: false, server: nil) }
             self.failedToken = nil
             self.resolveToken = nil
             self.candidates = []
-            self.bridge?.webView?.evaluateJavaScript("window.__sbNativeClosed && window.__sbNativeClosed()", completionHandler: nil)
+            self.sendToJS("__sbNativeClosed", ["time": position])
         }
         playerVC = vc
         return vc
@@ -633,7 +714,10 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
     var onSelectServer: ((String) -> Void)?
     var onFail: (() -> Void)?
-    var onClose: (() -> Void)?
+    /// Called after the viewer closed the player, with the last position.
+    var onClose: ((Double) -> Void)?
+    /// Position reports: time, duration, inside the outro.
+    var onProgress: ((Double, Double, Bool) -> Void)?
     var onRetry: (() -> Void)?
     var onOpenSettings: (() -> Void)?
 
@@ -664,6 +748,14 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private var isScrubbing = false
     private var failed = false
     private var userPaused = false
+    /// Last real playback position; a failover or server switch resumes here.
+    private var lastPosition: Double = 0
+    /// Position to seek to once the next item is ready (0 = none).
+    private var pendingSeek: Double = 0
+    private var startAtApplied = false
+    private var lastReportAt = Date.distantPast
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private static let progressReportInterval: TimeInterval = 5
     private var toastWork: DispatchWorkItem?
     /// Seconds a stream may sit at 0:00 before the next server is tried.
     private static let startWatchdog: TimeInterval = 15
@@ -693,6 +785,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     fileprivate var speed: Float = 1.0
     fileprivate var qualityCap: Double = 0  // 0 = auto (peak bit rate)
     fileprivate let subLabel = UILabel()
+    fileprivate var subAboveControls: NSLayoutConstraint?
     fileprivate var subTracks: [SubTrack] = []
     fileprivate var subCueCache: [String: [SubCue]] = [:]
     fileprivate var activeSubId: String?
@@ -735,6 +828,28 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         setupSubtitles()
         loadSkipTimes()
         searchOnlineSubtitles()
+        observeAppLifecycle()
+    }
+
+    /// Save the position when the app goes to the background or quits.
+    private func observeAppLifecycle() {
+        let nc = NotificationCenter.default
+        for name in [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification] {
+            lifecycleObservers.append(nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.reportProgress()
+            })
+        }
+    }
+
+    /// Send the current position to the page (saved as resume point).
+    func reportProgress() {
+        guard let item = player?.currentItem, item.status == .readyToPlay else { return }
+        let d = item.duration.seconds
+        let t = lastPosition
+        guard d.isFinite, d > 0, t > 0 else { return }
+        lastReportAt = Date()
+        let inOutro = skipIntervals.contains { $0.kind == "ed" && t >= $0.start }
+        onProgress?(t, d, inOutro)
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -821,6 +936,13 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         }
         failed = false
         userPaused = false
+        // Resume: saved spot on the first stream, last position after that.
+        if !startAtApplied {
+            startAtApplied = true
+            pendingSeek = (subtitleInfo["startAt"] as? NSNumber)?.doubleValue ?? 0
+        } else {
+            pendingSeek = lastPosition
+        }
         failureView.isHidden = true
         resetStreamSubtitles()
         setStatus(nil)
@@ -834,6 +956,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     deinit {
         if let t = timeObserver { player?.removeTimeObserver(t) }
         statusObs?.invalidate()
+        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     // MARK: Player
@@ -885,6 +1008,11 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
                 guard let self = self, gen == self.generation else { return }
                 if it.status == .readyToPlay {
                     self.spinner.stopAnimating()
+                    if self.pendingSeek > 1 {
+                        print("[SuperPlayer] resuming at \(Int(self.pendingSeek)) s")
+                        self.seek(to: self.pendingSeek)
+                    }
+                    self.pendingSeek = 0
                     self.applyPreferredAudio()
                     self.autoSelectIfWanted()
                     self.tick(self.player?.currentTime().seconds ?? 0)
@@ -933,6 +1061,11 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private func tick(_ t: Double) {
         updateSubtitle(t)
         guard let item = player?.currentItem else { return }
+        if item.status == .readyToPlay, t > 1, pendingSeek == 0 { lastPosition = t }
+        if Date().timeIntervalSince(lastReportAt) >= Self.progressReportInterval,
+           player?.timeControlStatus == .playing {
+            reportProgress()
+        }
         let d = item.duration.seconds
         let isPlaying = (player?.timeControlStatus ?? .paused) != .paused
         playButton.setImage(UIImage(systemName: isPlaying ? "pause.fill" : "play.fill"), for: .normal)
@@ -1245,7 +1378,11 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
     private func setControls(visible: Bool) {
         hideWork?.cancel()
-        UIView.animate(withDuration: 0.25) { self.controls.alpha = visible ? 1 : 0 }
+        updateSubtitlePlacement(controlsVisible: visible)
+        UIView.animate(withDuration: 0.25) {
+            self.controls.alpha = visible ? 1 : 0
+            self.view.layoutIfNeeded()
+        }
         if visible { scheduleHide() }
     }
 
@@ -1254,7 +1391,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         let w = DispatchWorkItem { [weak self] in
             guard let self = self, !self.isScrubbing,
                   self.player?.timeControlStatus == .playing else { return }
-            UIView.animate(withDuration: 0.35) { self.controls.alpha = 0 }
+            self.setControls(visible: false)
         }
         hideWork = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.5, execute: w)
@@ -1262,10 +1399,19 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
     // MARK: Actions
 
-    @objc private func closeTapped() {
+    @objc private func closeTapped() { closePlayer(then: nil) }
+
+    /// Viewer closed the player: save the position, stop, dismiss.
+    func closePlayer(then after: (() -> Void)?) {
+        reportProgress()
         player?.pause()
+        generation += 1
         let cb = onClose
-        dismiss(animated: true) { cb?() }
+        let position = lastPosition
+        dismiss(animated: true) {
+            cb?(position)
+            after?()
+        }
     }
 
     @objc private func playTapped() {
@@ -1276,6 +1422,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         } else {
             userPaused = true
             p.pause()
+            reportProgress()
         }
         scheduleHide()
     }
@@ -1415,9 +1562,11 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 // MARK: - Subtitles & audio tracks
 //
 // Three subtitle sources, all in one CC menu:
-//  1. Tracks embedded in the HLS stream (AVMediaSelectionGroup .legible)
-//  2. .vtt/.srt files the embed page loaded (captured by the sniffer)
-//  3. Wyzie search by TMDB id (needs the Wyzie key from Settings)
+//  1. Tracks embedded in the HLS stream (AVMediaSelectionGroup .legible),
+//     rendered by AVPlayerLayer itself
+//  2. .vtt/.srt files the embed pages loaded or listed in their JSON
+//     (captured by the sniffer, also when they show up after the stream)
+//  3. Wyzie search by TMDB id (needs a free Wyzie key from Settings)
 // External files are parsed here and drawn in our own label, so they work
 // with any stream. The audio section switches HLS audio renditions
 // (dub / sub / other languages) when the stream has more than one.
@@ -1434,42 +1583,69 @@ struct SubTrack {
 }
 
 enum SubParser {
+    /// Parses WebVTT and SRT: BOM, CRLF/CR line endings, WEBVTT/NOTE/STYLE
+    /// blocks, X-TIMESTAMP-MAP headers, cue settings after the end time,
+    /// HH:MM:SS.mmm / MM:SS.mmm / comma decimals, and styling tags
+    /// (<i>, <b>, <c.color>, <v Name>, {\an8}, \N).
     static func parse(_ raw: String) -> [SubCue] {
         var text = raw.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
-        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+        while text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+        // Whitespace-only lines separate cues just like empty lines.
+        text = text.replacingOccurrences(of: "\n[ \t]+\n", with: "\n\n", options: .regularExpression)
         var cues: [SubCue] = []
         for block in text.components(separatedBy: "\n\n") {
             let lines = block.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+            // Header / NOTE / STYLE / REGION blocks have no timing line.
             guard let i = lines.firstIndex(where: { $0.contains("-->") }) else { continue }
             let parts = lines[i].components(separatedBy: "-->")
             guard parts.count == 2,
-                  let s = time(parts[0]),
-                  let e = time(parts[1].trimmingCharacters(in: .whitespaces).components(separatedBy: " ").first ?? "")
+                  let start = time(parts[0]),
+                  let endToken = parts[1].split(whereSeparator: { $0 == " " || $0 == "\t" }).first,
+                  let end = time(String(endToken)), end > start
             else { continue }
             let body = lines[(i + 1)...].joined(separator: "\n")
-            let clean = body
-                .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-                .replacingOccurrences(of: "\\{[^}]*\\}", with: "", options: .regularExpression)
-                .replacingOccurrences(of: "&amp;", with: "&")
-                .replacingOccurrences(of: "&lt;", with: "<")
-                .replacingOccurrences(of: "&gt;", with: ">")
-                .replacingOccurrences(of: "&nbsp;", with: " ")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !clean.isEmpty, e > s { cues.append(SubCue(start: s, end: e, text: clean)) }
+            let clean = cleanText(body)
+            if !clean.isEmpty { cues.append(SubCue(start: start, end: end, text: clean)) }
         }
         return cues.sorted { $0.start < $1.start }
     }
 
+    static func cleanText(_ body: String) -> String {
+        return body
+            .replacingOccurrences(of: "\\N", with: "\n")
+            .replacingOccurrences(of: "\\n", with: "\n")
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\{[^}]*\\}", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&lrm;", with: "")
+            .replacingOccurrences(of: "&rlm;", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// "01:02:03.456", "02:03.456", "01:02:03,456" or plain seconds.
     static func time(_ s: String) -> Double? {
         let t = s.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
         let comps = t.split(separator: ":").map(String.init)
         guard !comps.isEmpty, comps.count <= 3 else { return nil }
         var total = 0.0
         for c in comps {
-            guard let v = Double(c) else { return nil }
+            guard let v = Double(c), v >= 0 else { return nil }
             total = total * 60 + v
         }
         return total
+    }
+
+    /// Text from subtitle bytes: UTF-8, UTF-16 (BOM), else Windows-1252.
+    static func decode(_ data: Data) -> String {
+        if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]),
+           let s = String(data: data, encoding: .utf16) { return s }
+        if let s = String(data: data, encoding: .utf8) { return s }
+        return String(data: data, encoding: .windowsCP1252) ?? String(decoding: data, as: UTF8.self)
     }
 
     static let langNames: [String: String] = [
@@ -1507,37 +1683,54 @@ extension StreambertPlayerViewController {
         ((subtitleInfo["subLang"] as? String) ?? "en").split(separator: "-").first.map(String.init) ?? "en"
     }
 
-    func setupSubtitles() {
+    fileprivate var hasWyzieKey: Bool { !((subtitleInfo["wyzieKey"] as? String) ?? "").isEmpty }
 
+    func setupSubtitles() {
         subLabel.translatesAutoresizingMaskIntoConstraints = false
         subLabel.numberOfLines = 0
         subLabel.textAlignment = .center
         subLabel.isUserInteractionEnabled = false
         subLabel.isHidden = true
+        // Above the video, below the control bars (never covered by them:
+        // see the constraints below).
         view.insertSubview(subLabel, aboveSubview: videoView)
         let safe = view.safeAreaLayoutGuide
+        let onVideo = subLabel.bottomAnchor.constraint(equalTo: videoView.bottomAnchor, constant: -Self.subtitleInset)
+        onVideo.priority = .defaultHigh
+        let aboveBar = subLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomBar.topAnchor, constant: -8)
+        subAboveControls = aboveBar
         NSLayoutConstraint.activate([
             subLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             subLabel.leadingAnchor.constraint(greaterThanOrEqualTo: safe.leadingAnchor, constant: 24),
             subLabel.trailingAnchor.constraint(lessThanOrEqualTo: safe.trailingAnchor, constant: -24),
-            subLabel.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -40),
+            subLabel.bottomAnchor.constraint(lessThanOrEqualTo: safe.bottomAnchor, constant: -Self.subtitleInset),
+            onVideo,
+            aboveBar,
         ])
+    }
+
+    static let subtitleInset: CGFloat = 20
+
+    /// Keep subtitles clear of the bottom bar only while it is shown.
+    func updateSubtitlePlacement(controlsVisible: Bool) {
+        subAboveControls?.isActive = controlsVisible
     }
 
     // MARK: Menu
 
+    fileprivate func embeddedLegibleGroup() -> AVMediaSelectionGroup? {
+        guard let item = player?.currentItem, item.status == .readyToPlay else { return nil }
+        return item.asset.mediaSelectionGroup(forMediaCharacteristic: .legible)
+    }
+
     fileprivate func subtitleMenuItems() -> [UIMenuElement] {
         var out: [UIMenuElement] = []
-        let item = player?.currentItem
-
-        // Subtitles
         var subs: [UIMenuElement] = [
             UIAction(title: "Off", state: activeSubId == nil ? .on : .off) { [weak self] _ in
                 self?.selectSubtitle(nil)
             },
         ]
-        if let item = item,
-           let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .legible) {
+        if let group = embeddedLegibleGroup() {
             for (i, opt) in group.options.enumerated() {
                 let id = "emb:\(i)"
                 subs.append(UIAction(title: opt.displayName + " (stream)",
@@ -1554,23 +1747,37 @@ extension StreambertPlayerViewController {
         if subSearching {
             subs.append(UIAction(title: "Searching for more subtitles…", attributes: .disabled) { _ in })
         } else if subs.count == 1 {
-            let hasKey = !((subtitleInfo["wyzieKey"] as? String) ?? "").isEmpty
-            subs.append(UIAction(title: hasKey ? "No subtitles found" : "Add a Wyzie key in Settings for more",
+            subs.append(UIAction(title: hasWyzieKey ? "No subtitles found for this title"
+                                                    : "This stream has no subtitles",
                                  attributes: .disabled) { _ in })
         }
         out.append(UIMenu(title: "Subtitles", options: .displayInline, children: subs))
+        if !hasWyzieKey {
+            out.append(UIMenu(title: "", options: .displayInline, children: [
+                UIAction(title: "Get more subtitles: add a free Wyzie key in Settings",
+                         image: UIImage(systemName: "key")) { [weak self] _ in
+                    self?.openSubtitleSettings()
+                },
+            ]))
+        }
 
         // Text size
         let sizes: [(String, CGFloat)] = [("Small", 0.8), ("Medium", 1.0), ("Large", 1.3)]
         out.append(UIMenu(title: "Subtitle size", children: sizes.map { s in
             UIAction(title: s.0, state: abs(subScale - s.1) < 0.01 ? .on : .off) { [weak self] _ in
-                self?.subScale = s.1
+                guard let self = self else { return }
+                self.subScale = s.1
                 UserDefaults.standard.set(Double(s.1), forKey: "sb.subScale")
-                self?.subLabel.attributedText = nil
-                self?.updateSubtitle(self?.player?.currentTime().seconds ?? 0, force: true)
+                self.updateSubtitle(self.player?.currentTime().seconds ?? 0, force: true)
             }
         }))
         return out
+    }
+
+    /// Close the player and open Settings → Subtitles in the app.
+    fileprivate func openSubtitleSettings() {
+        let open = onOpenSettings
+        closePlayer { open?() }
     }
 
     // MARK: Selection
@@ -1581,24 +1788,30 @@ extension StreambertPlayerViewController {
         lastSubText = nil
         subLabel.isHidden = true
         UserDefaults.standard.set(id != nil, forKey: "sb.subsOn")
+        pill(ccButton, symbol: id == nil ? "captions.bubble" : "captions.bubble.fill", title: "Subtitles")
         guard let item = player?.currentItem else { return }
-        let legible = item.asset.mediaSelectionGroup(forMediaCharacteristic: .legible)
+        let legible = embeddedLegibleGroup()
 
+        // Embedded HLS track: AVPlayerLayer draws it.
         if let id = id, id.hasPrefix("emb:"), let g = legible, let i = Int(id.dropFirst(4)), i < g.options.count {
             item.select(g.options[i], in: g)
             return
         }
-        if let g = legible, g.allowsEmptySelection { item.select(nil, in: g) }
+        if let g = legible { item.select(nil, in: g) }
         guard let id = id, let track = subTracks.first(where: { $0.id == id }) else { return }
         if let cached = subCueCache[id] { activeCues = cached; return }
         var req = URLRequest(url: track.url, timeoutInterval: 15)
         track.headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
-        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-            guard let data = data else { return }
-            let raw = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
-            let cues = SubParser.parse(raw)
+        URLSession.shared.dataTask(with: req) { [weak self] data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let cues = data.map { SubParser.parse(SubParser.decode($0)) } ?? []
             DispatchQueue.main.async {
                 guard let self = self else { return }
+                if cues.isEmpty {
+                    print("[SuperPlayer] subtitle load failed (\(status)) \(error?.localizedDescription ?? "") \(track.url)")
+                    if self.activeSubId == id { self.showToast("Couldn't load \(track.label)") }
+                    return
+                }
                 self.subCueCache[id] = cues
                 if self.activeSubId == id { self.activeCues = cues }
             }
@@ -1606,9 +1819,14 @@ extension StreambertPlayerViewController {
     }
 
     /// Turn subtitles back on automatically if the viewer had them on last time.
-    fileprivate func autoSelectIfWanted() {
+    func autoSelectIfWanted() {
         guard activeSubId == nil, UserDefaults.standard.bool(forKey: "sb.subsOn") else { return }
         let lang = preferredLang
+        if let g = embeddedLegibleGroup(),
+           let i = g.options.firstIndex(where: { ($0.extendedLanguageTag ?? "").lowercased().hasPrefix(lang) }) {
+            selectSubtitle("emb:\(i)")
+            return
+        }
         if let t = subTracks.first(where: { $0.lang == lang }) ?? subTracks.first(where: { $0.lang.isEmpty }) {
             selectSubtitle(t.id)
         }
@@ -1623,7 +1841,7 @@ extension StreambertPlayerViewController {
 
     /// A subtitle file that showed up after the stream was picked.
     func addStreamSubtitle(_ sub: SniffSub, headers: [String: String]) {
-        guard insertStreamSubtitle(sub, headers: headers) else { return }
+        guard insertStreamSubtitle(sub, headers: headers.isEmpty ? self.headers : headers) else { return }
         autoSelectIfWanted()
     }
 
@@ -1649,11 +1867,11 @@ extension StreambertPlayerViewController {
     }
 
     func searchOnlineSubtitles() {
-        guard let key = subtitleInfo["wyzieKey"] as? String, !key.isEmpty,
-              let tmdb = (subtitleInfo["tmdbId"] as? NSNumber)?.intValue ?? Int("\(subtitleInfo["tmdbId"] ?? "")")
+        guard hasWyzieKey, let key = subtitleInfo["wyzieKey"] as? String,
+              let tmdb = (subtitleInfo["tmdbId"] as? NSNumber)?.intValue ?? Int("\(subtitleInfo["tmdbId"] ?? "")"),
+              var comps = URLComponents(string: "https://sub.wyzie.io/search")
         else { return }
         let lang = preferredLang
-        var comps = URLComponents(string: "https://sub.wyzie.io/search")!
         var q = [URLQueryItem(name: "id", value: String(tmdb)),
                  URLQueryItem(name: "key", value: key),
                  URLQueryItem(name: "format", value: "srt"),
@@ -1667,34 +1885,45 @@ extension StreambertPlayerViewController {
         comps.queryItems = q
         guard let url = comps.url else { return }
         subSearching = true
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             let list = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [[String: Any]]) ?? []
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.subSearching = false
-                var perLang: [String: Int] = [:]
-                for r in list {
-                    guard let raw = r["url"] as? String,
-                          let u = URL(string: raw.hasPrefix("http") ? raw : "https://sub.wyzie.io" + (raw.hasPrefix("/") ? "" : "/") + raw)
-                    else { continue }
-                    let l = ((r["language"] as? String) ?? "").lowercased()
-                    let count = (perLang[l] ?? 0) + 1
-                    guard count <= 4 else { continue } // a few options per language is plenty
-                    perLang[l] = count
-                    var label = (r["display"] as? String) ?? SubParser.langNames[l] ?? l.uppercased()
-                    if count > 1 { label += " \(count)" }
-                    if (r["isHearingImpaired"] as? Bool) == true { label += " [CC]" }
-                    self.subTracks.append(SubTrack(id: "wz:\(u.absoluteString)", label: label, lang: l,
-                                                   url: u, headers: [:], fromStream: false))
+                if status != 200 {
+                    print("[SuperPlayer] Wyzie search failed (\(status)) \(error?.localizedDescription ?? "")")
+                    if status == 401 || status == 403 { self.showToast("Wyzie key was rejected. Check it in Settings.") }
                 }
-                // Preferred language first, stream-captured ones stay on top.
-                self.subTracks.sort { a, b in
-                    if a.fromStream != b.fromStream { return a.fromStream }
-                    return (a.lang == lang ? 0 : 1) < (b.lang == lang ? 0 : 1)
-                }
-                self.autoSelectIfWanted()
+                self.addWyzieResults(list, preferred: lang)
             }
         }.resume()
+    }
+
+    private static let maxWyziePerLanguage = 4
+
+    private func addWyzieResults(_ list: [[String: Any]], preferred lang: String) {
+        var perLang: [String: Int] = [:]
+        for r in list {
+            guard let raw = r["url"] as? String,
+                  let u = URL(string: raw.hasPrefix("http") ? raw : "https://sub.wyzie.io" + (raw.hasPrefix("/") ? "" : "/") + raw)
+            else { continue }
+            let l = ((r["language"] as? String) ?? "").lowercased()
+            let count = (perLang[l] ?? 0) + 1
+            guard count <= Self.maxWyziePerLanguage else { continue }
+            perLang[l] = count
+            var label = (r["display"] as? String) ?? SubParser.langNames[l] ?? l.uppercased()
+            if count > 1 { label += " \(count)" }
+            if (r["isHearingImpaired"] as? Bool) == true { label += " [CC]" }
+            subTracks.append(SubTrack(id: "wz:\(u.absoluteString)", label: label, lang: l,
+                                      url: u, headers: [:], fromStream: false))
+        }
+        // Stream-captured ones stay on top, then the preferred language.
+        subTracks.sort { a, b in
+            if a.fromStream != b.fromStream { return a.fromStream }
+            return (a.lang == lang ? 0 : 1) < (b.lang == lang ? 0 : 1)
+        }
+        autoSelectIfWanted()
     }
 
     // MARK: Rendering
@@ -1708,7 +1937,8 @@ extension StreambertPlayerViewController {
         if !force, text == lastSubText { return }
         lastSubText = text
         guard let text = text else { subLabel.isHidden = true; return }
-        let base: CGFloat = view.bounds.width > view.bounds.height ? 22 : 17
+        let landscape = view.bounds.width > view.bounds.height
+        let base: CGFloat = landscape ? 22 : 17
         let shadow = NSShadow()
         shadow.shadowColor = UIColor.black
         shadow.shadowBlurRadius = 4
