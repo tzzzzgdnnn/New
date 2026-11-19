@@ -49,6 +49,29 @@ function enterBoxFullscreen(box) {
 }
 const canBoxFullscreen = (box) => !IS_IPHONE && !!(box.requestFullscreen || box.webkitRequestFullscreen);
 
+// Phones: the player always fills the whole screen (a stage over the app),
+// with no tap needed, on every phone and browser. Apple's / the browser's own
+// full screen is tried on top of it when the browser allows it.
+const IS_PHONE =
+  /iPhone|iPod|Android.*Mobile|Mobile.*Firefox/i.test(navigator.userAgent) ||
+  (matchMedia?.("(pointer: coarse)")?.matches && Math.min(screen.width, screen.height) < 600);
+let stage = null;
+function getStage() {
+  if (stage?.isConnected) return stage;
+  stage = document.createElement("div");
+  stage.id = "sb-stage";
+  stage.style.cssText = "position:fixed;left:0;top:0;width:100vw;height:100vh;height:100dvh;z-index:2147483000;background:#000;display:none;overscroll-behavior:none;touch-action:manipulation";
+  document.body.appendChild(stage);
+  return stage;
+}
+const stageShown = () => !!stage && stage.style.display !== "none";
+function showStage(on) {
+  const st = getStage();
+  st.style.display = on ? "block" : "none";
+  document.documentElement.style.overflow = on ? "hidden" : "";
+  if (on) { try { screen.orientation?.lock?.("landscape")?.catch?.(() => {}); } catch {} }
+}
+
 /**
  * Play `src` inside `box`. Calls onFail() if nothing plays within `timeoutMs`
  * or on a fatal error. Returns a stop() function.
@@ -57,9 +80,17 @@ const canBoxFullscreen = (box) => !IS_IPHONE && !!(box.requestFullscreen || box.
  * already let it play from a tap, so the next episode starts on its own with
  * sound, and full screen carries over.
  */
-export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 12000, nativeOnly = false } = {}) {
+export function playDirect(pageBox, src, { startAt = 0, onFail, onTime, timeoutMs = 12000, nativeOnly = false } = {}) {
   const ac = new AbortController();
   const on = (el, ev, fn, opts = {}) => el.addEventListener(ev, fn, { ...opts, signal: ac.signal });
+  // Phones play on the full-screen stage; desktop/tablet in the page's box.
+  let box = IS_PHONE ? getStage() : pageBox;
+  if (IS_PHONE) {
+    // Whatever was left inline (minimized) moves back onto the stage.
+    const left = pageBox.querySelector(":scope > video.sb-direct-video");
+    if (left && !box.contains(left)) box.appendChild(left);
+    showStage(true);
+  }
   let video = box.querySelector(":scope > video.sb-direct-video");
   const reused = !!video;
   if (!video) {
@@ -105,14 +136,28 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   // iPhone: Apple's own player (webkitEnterFullscreen; needs metadata, so it
   // is tried on the tap, again once metadata is in, and again when playing).
   // Everything else: the player box in full screen, turned to landscape.
-  const isFull = () => (IS_IPHONE ? !!video.webkitDisplayingFullscreen : !!fsElement());
+  const nativeFull = () => (IS_IPHONE ? !!video.webkitDisplayingFullscreen : !!fsElement());
+  const isFull = () => nativeFull() || (IS_PHONE && stageShown() && box === stage);
+  // ✕ on the stage: shrink back into the page (keeps playing); Full screen
+  // brings it back.
+  let closeBtn = null;
+  let upNextCard = null;
+  const moveTo = (target) => {
+    const wasPlaying = !video.paused;
+    for (const el of [video, bigBtn, upNextCard, closeBtn]) if (el) target.appendChild(el);
+    box = target;
+    if (wasPlaying) video.play().catch(() => {});
+  };
   const goFull = () => {
-    if (done || isFull()) return;
+    if (done) return;
+    if (IS_PHONE && box !== stage) { moveTo(getStage()); }
+    if (IS_PHONE) { showStage(true); if (closeBtn) closeBtn.style.display = ""; }
+    if (nativeFull()) return;
     try {
       if (IS_IPHONE) {
         if (video.webkitEnterFullscreen && video.readyState >= 1) video.webkitEnterFullscreen();
       } else if (canBoxFullscreen(box)) {
-        enterBoxFullscreen(box);
+        enterBoxFullscreen(box).catch?.(() => {});
       } else if (video.webkitEnterFullscreen && video.readyState >= 1) {
         video.webkitEnterFullscreen();
       }
@@ -146,6 +191,21 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
 
   // Start now (inside the Play tap when the stream was already known) and go
   // full screen in the same tap.
+  if (IS_PHONE) {
+    closeBtn = document.createElement("button");
+    closeBtn.className = "sb-direct-ui";
+    closeBtn.textContent = "✕";
+    closeBtn.setAttribute("aria-label", "Exit full screen");
+    closeBtn.style.cssText = "position:absolute;top:calc(env(safe-area-inset-top) + 10px);left:calc(env(safe-area-inset-left) + 12px);z-index:8;width:40px;height:40px;border-radius:20px;border:0;background:rgba(0,0,0,.55);color:#fff;font-size:20px";
+    closeBtn.onclick = () => {
+      closeBtn.style.display = "none";
+      moveTo(pageBox);
+      showStage(false);
+      try { screen.orientation?.unlock?.(); } catch {}
+      showBtn("⛶  Full screen");
+    };
+    box.appendChild(closeBtn);
+  }
   if (!canBoxFullscreen(box) || !fsElement()) goFull();
   const tapPlay = video.play();
   tapPlay?.catch?.(() => {
@@ -181,7 +241,6 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
 
   // ── Up Next: at the end of an episode, the next one plays by itself ──
   // (Settings > Playback autoplay and countdown; the page sets __sbWebUpNext.)
-  let upNextCard = null;
   let upNextTimer = null;
   const clearUpNext = () => {
     clearInterval(upNextTimer);
@@ -191,6 +250,7 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   };
   const playNext = () => {
     clearUpNext();
+    window.__sbNextAt = Date.now();
     window.dispatchEvent(new CustomEvent("sb-up-next-play"));
   };
   const offerNext = () => {
@@ -250,6 +310,22 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     video.removeAttribute("src");
     try { video.load(); } catch {}
     bigBtn.remove();
+    closeBtn?.remove();
+    if (IS_PHONE && box === stage) {
+      // Going to the next episode: stay on the black stage with a spinner
+      // line; anything else (player closed): back to the app right away.
+      if (Date.now() - (window.__sbNextAt || 0) < 3000) {
+        const note = document.createElement("div");
+        note.className = "sb-direct-ui";
+        note.textContent = "Loading next episode…";
+        note.style.cssText = "position:absolute;left:0;right:0;top:50%;text-align:center;color:#fff;opacity:.8;font:16px -apple-system,system-ui,sans-serif";
+        stage.appendChild(note);
+        const st = stage;
+        setTimeout(() => { if (!st.querySelector("video.sb-direct-video")?.src) { note.remove(); showStage(false); } }, 15000);
+      } else {
+        showStage(false);
+      }
+    }
     // Kept in the box for the next episode. If nothing reuses it soon (the
     // player was closed), leave full screen and take it away.
     const v = video;
