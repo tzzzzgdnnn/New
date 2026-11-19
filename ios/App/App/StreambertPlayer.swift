@@ -1847,6 +1847,10 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         p.usesExternalPlaybackWhileExternalScreenIsActive = true
         player = p
         videoView.playerLayer.player = p
+        // A new stream always starts playing by itself (also when the bridge
+        // swaps in the next server while the player is already on screen).
+        userPaused = false
+        if viewIfLoaded?.window != nil { resumePlayback() }
         healthMonitor.start(player: p)
         healthDot.isHidden = false
 
@@ -1862,6 +1866,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
                         self.seek(to: self.pendingSeek)
                     }
                     self.pendingSeek = 0
+                    if !self.userPaused { self.resumePlayback() }
                     self.applyPreferredAudio()
                     self.autoSelectIfWanted()
                     self.tick(self.player?.currentTime().seconds ?? 0)
