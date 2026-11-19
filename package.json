@@ -21,7 +21,8 @@
     "dist:win": "cross-env ELECTRON_DIST=1 vite build && electron-builder --win --publish never",
     "dist:mac": "cross-env ELECTRON_DIST=1 vite build && electron-builder --mac --universal --publish never",
     "build:ios": "vite build --mode ios && cap sync ios",
-    "test:ios": "sh scripts/run-ios-tests.sh"
+    "test:ios": "sh scripts/run-ios-tests.sh",
+    "test:swift": "sh scripts/run-swift-tests.sh"
   },
   "dependencies": {
     "hls.js": "1.5.17",

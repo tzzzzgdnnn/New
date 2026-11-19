@@ -22,6 +22,30 @@ struct DLUnit: Codable {
     var done = false
     var bytes: Int64 = 0
     var tries = 0
+    /// "seg" (HLS media segment), "part" (MP4 range), "key", "map", "sub".
+    /// nil in state saved by older builds; `isFragment` infers it then.
+    var kind: String? = nil
+    /// Subtitles: a failure skips the file instead of failing the download.
+    var optional: Bool? = nil
+    /// Times the finished-check found this unit's file missing or short.
+    var verifyFails: Int? = nil
+
+    init(url: String, file: String, range: String? = nil, kind: String, optional: Bool = false) {
+        self.url = url
+        self.file = file
+        self.range = range
+        self.kind = kind
+        self.optional = optional ? true : nil
+    }
+
+    /// A media fragment: what the fragment counter and the size refinement count.
+    var isFragment: Bool {
+        if let k = kind { return k == "seg" || k == "part" }
+        let name = (file as NSString).lastPathComponent
+        return file.hasPrefix("parts/") || name.hasPrefix("seg")
+    }
+
+    var isOptional: Bool { optional ?? false }
 }
 
 struct DLJob: Codable {
@@ -42,12 +66,17 @@ struct DLJob: Codable {
     var completedAt: Double?
     var error: String?
     var finalBytes: Int64?
+    /// MP4: leading parts already appended to video.mp4, and its length then.
+    var joinedParts: Int?
+    var joinedBytes: Int64?
 }
 
 final class DownloadManager: NSObject, URLSessionDownloadDelegate {
     static let shared = DownloadManager()
     static let sessionId = "superplayer.downloads"
-    static let connectionsPerJob = 16
+    /// Upper bound of fragments in flight; the live number adapts between
+    /// DLMath.Concurrency.minimum and .maximum per download.
+    static let connectionsPerJob = DLMath.Concurrency.maximum
     /// One download at a time gets all connections; the rest wait in queue.
     static let maxActiveJobs = 1
     /// MP4 range size; smaller ranges lose less on pause.
@@ -62,8 +91,9 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
     private var inflight: [String: [Int: URLSessionTask]] = [:]
     private var notBefore: [String: Date] = [:]  // "job|unit" -> earliest retry
     private var liveBytes: [Int: Int64] = [:]    // taskIdentifier -> bytes so far
-    private var speedSample: [String: (at: Date, bytes: Int64)] = [:]
-    private var speeds: [String: Double] = [:]
+    private var meters: [String: DLMath.SpeedMeter] = [:]
+    private var received: [String: Int64] = [:]  // bytes received this run (speed only)
+    private var concurrency: [String: DLMath.Concurrency] = [:]
     private var dirty = Set<String>()
     /// Tasks from a previous launch are reattached before anything is scheduled.
     private var attached = false
@@ -86,7 +116,10 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 for t in tasks {
-                    guard let (id, i) = Self.ids(t), self.jobs[id]?.status == .downloading else { t.cancel(); continue }
+                    // Tasks still running from before a relaunch keep going.
+                    guard let (id, i) = Self.ids(t), let j = self.jobs[id], j.status == .queued || j.status == .downloading,
+                          i < j.units.count, !j.units[i].done, self.inflight[id]?[i] == nil else { t.cancel(); continue }
+                    self.jobs[id]?.status = .downloading
                     self.inflight[id, default: [:]][i] = t
                 }
                 self.attached = true
@@ -139,7 +172,25 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
                 sbLog("download \(j.id) removed in Files; forgetting it")
                 continue
             }
+            var j = j
+            if j.status == .downloading { j.status = .queued }  // nothing is in flight at launch yet
             jobs[j.id] = j
+            cleanTemp(j)
+        }
+    }
+
+    /// Drops what an interrupted run left behind: a video.mp4 longer than
+    /// the parts recorded as appended is cut back, so a part is never in it twice.
+    private func cleanTemp(_ j: DLJob) {
+        let dir = folder(j)
+        if j.kind == "mp4", j.status != .completed {
+            let out = dir.appendingPathComponent("video.mp4")
+            let keep = j.joinedBytes ?? 0
+            if let size = fileSize(out), size > keep, let h = try? FileHandle(forWritingTo: out) {
+                try? h.truncate(atOffset: UInt64(keep))
+                try? h.close()
+                sbLog("download \(j.id): trimmed video.mp4 from \(size) to \(keep) bytes")
+            }
         }
     }
 
@@ -177,11 +228,12 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
         let dirName = folderName(for: r.name)
         let dest = Self.root.appendingPathComponent(dirName, isDirectory: true)
         let isMP4 = r.variant == nil && r.url.pathExtension.lowercased() == "mp4"
-        let planned: (@escaping ([DLUnit], String, String?) -> Void) -> Void = { done in
+        // done(units, playFile, error, exact size when the server states it)
+        let planned: (@escaping ([DLUnit], String, String?, Int64) -> Void) -> Void = { done in
             if isMP4 {
-                self.planMP4(r.url, headers: r.headers) { done($0, "video.mp4", nil) }
+                self.planMP4(r.url, headers: r.headers) { units, length in done(units, "video.mp4", nil, length) }
             } else {
-                self.planHLS(r, folder: dest, done: done)
+                self.planHLS(r, folder: dest) { units, file, err, exact in done(units, file, err, exact) }
             }
         }
         do {
@@ -189,7 +241,7 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
         } catch {
             completion("Could not create the download folder"); return
         }
-        planned { units, playFile, err in
+        planned { units, playFile, err, exactBytes in
             DispatchQueue.main.async {
                 if let err = err {
                     try? self.fm.removeItem(at: dest)
@@ -197,19 +249,20 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
                 }
                 var all = units
                 var subs: [[String: String]] = []
-                for (i, s) in r.subtitles.enumerated() {
+                let keep = DLMath.dedupeSubtitles(r.subtitles.map { ($0.url.absoluteString, $0.lang) })
+                for (i, s) in keep.map({ r.subtitles[$0] }).enumerated() {
                     let ext = s.url.pathExtension.lowercased() == "srt" ? "srt" : "vtt"
                     let lang = s.lang.filter { $0.isLetter || $0.isNumber || $0 == "-" }
                     let file = "subs/\(i)-\(lang.isEmpty ? "sub" : lang).\(ext)"
-                    all.append(DLUnit(url: s.url.absoluteString, file: file))
+                    all.append(DLUnit(url: s.url.absoluteString, file: file, kind: "sub", optional: true))
                     subs.append(["lang": s.lang, "file": file])
                 }
                 let job = DLJob(id: r.id, name: r.name, kind: isMP4 ? "mp4" : "hls", dir: dirName,
                                 headers: r.headers, units: all, status: .queued, playFile: playFile,
-                                estBytes: r.estBytes, meta: r.meta, subtitles: subs,
+                                estBytes: exactBytes > 0 ? exactBytes : r.estBytes, meta: r.meta, subtitles: subs,
                                 createdAt: Date().timeIntervalSince1970 * 1000)
                 self.jobs[job.id] = job
-                sbLog("download \(job.id) \"\(job.name)\" \(job.kind) \(all.count) units")
+                sbLog("download \(job.id) \"\(job.name)\" \(job.kind) \(all.count) units, \(all.filter { $0.isFragment }.count) fragments, estimate \(job.estBytes) bytes")
                 self.save(now: true)
                 self.dirty.insert(job.id)
                 self.schedule()
@@ -220,7 +273,7 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
 
     /// MP4: fixed-size byte ranges (at least `connectionsPerJob` of them) when
     /// the server takes ranges, else one request for the whole file.
-    private func planMP4(_ url: URL, headers: [String: String], done: @escaping ([DLUnit]) -> Void) {
+    private func planMP4(_ url: URL, headers: [String: String], done: @escaping ([DLUnit], Int64) -> Void) {
         var req = URLRequest(url: url, timeoutInterval: 20)
         req.httpMethod = "HEAD"
         headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
@@ -229,7 +282,7 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
             let length = Int64(http?.value(forHTTPHeaderField: "Content-Length") ?? "") ?? 0
             let ranges = (http?.value(forHTTPHeaderField: "Accept-Ranges") ?? "").contains("bytes")
             guard length > 0, ranges else {
-                done([DLUnit(url: url.absoluteString, file: "parts/0")]); return
+                done([DLUnit(url: url.absoluteString, file: "parts/0", kind: "part")], length); return
             }
             let perConnection = (length + Int64(Self.connectionsPerJob) - 1) / Int64(Self.connectionsPerJob)
             let chunk = max(1, min(Self.mp4ChunkBytes, perConnection))
@@ -237,23 +290,26 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
             done((0..<count).map { i in
                 let a = i * chunk
                 let b = min(length, a + chunk) - 1
-                return DLUnit(url: url.absoluteString, file: "parts/\(i)", range: "bytes=\(a)-\(b)")
-            })
+                return DLUnit(url: url.absoluteString, file: "parts/\(i)", range: "bytes=\(a)-\(b)", kind: "part")
+            }, length)
         }.resume()
     }
 
     /// HLS: fetch the media playlist(s), turn every segment / key / init map
     /// into a unit, and write local playlists pointing at them.
-    private func planHLS(_ r: StartRequest, folder: URL, done: @escaping ([DLUnit], String, String?) -> Void) {
-        fetchText(r.variant ?? r.url, headers: r.headers) { text, base in
-            guard let text = text, text.contains("#EXTINF") else { done([], "", "Could not read the stream playlist"); return }
+    private func planHLS(_ r: StartRequest, folder: URL, done: @escaping ([DLUnit], String, String?, Int64) -> Void) {
+        fetchMediaPlaylist(r.variant ?? r.url, headers: r.headers) { text, base in
+            guard let text = text, text.contains("#EXTINF") else { done([], "", "Could not read the stream playlist", 0); return }
             var units = self.localPlaylist(text, base: base, prefix: "v", folder: folder)
-            guard let audio = r.audio else { done(units, "v/index.m3u8", nil); return }
+            let videoExact = DLMath.playlistStats(text).exactBytes ?? 0
+            guard let audio = r.audio else { done(units, "v/index.m3u8", nil, videoExact); return }
             self.fetchText(audio, headers: r.headers) { atext, abase in
                 guard let atext = atext, atext.contains("#EXTINF") else {
-                    done([], "", "Could not read the audio playlist"); return
+                    done([], "", "Could not read the audio playlist", 0); return
                 }
                 units += self.localPlaylist(atext, base: abase, prefix: "a", folder: folder)
+                let audioExact = DLMath.playlistStats(atext).exactBytes ?? 0
+                let exact = videoExact > 0 && audioExact > 0 ? videoExact + audioExact : 0
                 let master = """
                     #EXTM3U
                     #EXT-X-VERSION:4
@@ -264,11 +320,23 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
                     """
                 do {
                     try master.write(to: folder.appendingPathComponent("master.m3u8"), atomically: true, encoding: .utf8)
-                    done(units, "master.m3u8", nil)
+                    done(units, "master.m3u8", nil, exact)
                 } catch {
-                    done([], "", "Could not write the playlist")
+                    done([], "", "Could not write the playlist", 0)
                 }
             }
+        }
+    }
+
+    /// One media playlist: when handed a master playlist, only its best
+    /// variant is followed, so segments of several qualities are never mixed.
+    private func fetchMediaPlaylist(_ url: URL, headers: [String: String], done: @escaping (String?, URL) -> Void) {
+        fetchText(url, headers: headers) { text, base in
+            guard let text = text, text.contains("#EXT-X-STREAM-INF") else { done(text, base); return }
+            let best = HLSMaster.variants(text, base: base)
+                .max { ($0["bandwidth"] as? Int ?? 0) < ($1["bandwidth"] as? Int ?? 0) }
+            guard let u = (best?["url"] as? String).flatMap({ URL(string: $0) }) else { done(nil, base); return }
+            self.fetchText(u, headers: headers, done: done)
         }
     }
 
@@ -291,6 +359,7 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
         var counts: [String: Int] = [:]
         var pendingRange: String?
         var nextOffset: Int64 = 0
+        var seenSegments = Set<String>()
         let segExt = text.contains("#EXT-X-MAP") ? "m4s" : "ts"
 
         func local(_ uri: String, kind: String, ext: String, range: String? = nil) -> String? {
@@ -298,7 +367,7 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
             let n = counts[kind, default: 0]
             counts[kind] = n + 1
             let name = "\(kind)\(n).\(ext)"
-            units.append(DLUnit(url: u.absoluteString, file: "\(prefix)/\(name)", range: range))
+            units.append(DLUnit(url: u.absoluteString, file: "\(prefix)/\(name)", range: range, kind: kind))
             return name
         }
         func replacingURI(_ line: String, kind: String, ext: String) -> String {
@@ -323,8 +392,15 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
                 nextOffset = off + len
             } else if line.hasPrefix("#") {
                 out.append(line)
-            } else if let name = local(line, kind: "seg", ext: segExt, range: pendingRange) {
-                out.append(name)
+            } else {
+                // The same segment (URI + range) is stored once.
+                let key = line + "|" + (pendingRange ?? "")
+                if !seenSegments.insert(key).inserted {
+                    if out.last?.hasPrefix("#EXTINF") == true { out.removeLast() }
+                    pendingRange = nil
+                    continue
+                }
+                if let name = local(line, kind: "seg", ext: segExt, range: pendingRange) { out.append(name) }
                 pendingRange = nil
             }
         }
@@ -335,13 +411,150 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
         return units
     }
 
+    // MARK: Measure (sizes for the quality picker)
+
+    /// Segments sampled per playlist to estimate its size.
+    static let sizeSamples = 5
+
+    /// Size of each download choice, read from the stream itself: the exact
+    /// byte-range total, or the average size of a few sampled segments × the
+    /// segment count, or BANDWIDTH × the playlist's own duration.
+    /// items: [{url, audio?, bandwidth?, kind: "hls"|"mp4"}].
+    /// Replies [{url, bytes, durationSec, segments, method}] in the same order.
+    func measure(_ items: [[String: Any]], headers: [String: String], completion: @escaping ([[String: Any]]) -> Void) {
+        var results = items.map { ["url": $0["url"] ?? "", "bytes": 0, "method": "unknown"] as [String: Any] }
+        let group = DispatchGroup()
+        let lock = NSLock()
+        func store(_ n: Int, _ r: [String: Any]) { lock.lock(); results[n] = r; lock.unlock() }
+        for (n, item) in items.enumerated() {
+            guard let url = (item["url"] as? String).flatMap({ URL(string: $0) }) else { continue }
+            group.enter()
+            if (item["kind"] as? String) == "mp4" {
+                contentLength(url, headers: headers) { len in
+                    store(n, ["url": url.absoluteString, "bytes": len, "method": len > 0 ? "exact" : "unknown",
+                              "durationSec": 0, "segments": 0])
+                    group.leave()
+                }
+                continue
+            }
+            let bandwidth = (item["bandwidth"] as? NSNumber)?.intValue ?? 0
+            let audio = (item["audio"] as? String).flatMap { URL(string: $0) }
+            measurePlaylist(url, headers: headers, bandwidth: bandwidth) { v in
+                guard let audio = audio else {
+                    store(n, v.dict(url)); group.leave(); return
+                }
+                self.measurePlaylist(audio, headers: headers, bandwidth: 0) { a in
+                    var both = v
+                    if a.bytes > 0, v.bytes > 0 {
+                        both.bytes += a.bytes
+                        if a.method != v.method { both.method = "sampled" }
+                    }
+                    store(n, both.dict(url)); group.leave()
+                }
+            }
+        }
+        group.notify(queue: .main) { completion(results) }
+    }
+
+    private struct Measured {
+        var bytes: Int64 = 0
+        var durationSec: Double = 0
+        var segments = 0
+        var method = "unknown"   // exact | sampled | bandwidth | unknown
+        func dict(_ url: URL) -> [String: Any] {
+            ["url": url.absoluteString, "bytes": bytes, "durationSec": durationSec, "segments": segments, "method": method]
+        }
+    }
+
+    private func measurePlaylist(_ url: URL, headers: [String: String], bandwidth: Int, done: @escaping (Measured) -> Void) {
+        fetchText(url, headers: headers) { text, base in
+            guard let text = text, text.contains("#EXTINF") else { done(Measured()); return }
+            let stats = DLMath.playlistStats(text)
+            var m = Measured(durationSec: stats.durationSec, segments: stats.segments)
+            if let exact = stats.exactBytes, exact > 0 {
+                m.bytes = exact; m.method = "exact"; done(m); return
+            }
+            let uris = DLMath.segmentURIs(text)
+            let picks = DLMath.sampleIndices(segments: uris.count, count: Self.sizeSamples)
+            var sizes: [Int64] = []
+            let lock = NSLock()
+            let group = DispatchGroup()
+            for i in picks {
+                guard let u = URL(string: uris[i], relativeTo: base)?.absoluteURL else { continue }
+                group.enter()
+                self.contentLength(u, headers: headers) { len in
+                    lock.lock(); if len > 0 { sizes.append(len) }; lock.unlock()
+                    group.leave()
+                }
+            }
+            group.notify(queue: .global()) {
+                m.bytes = DLMath.estimateBytes(stats, sampledSegmentBytes: sizes, bandwidth: bandwidth)
+                m.method = !sizes.isEmpty ? "sampled" : (m.bytes > 0 ? "bandwidth" : "unknown")
+                done(m)
+            }
+        }
+    }
+
+    /// Size of a remote file: HEAD's Content-Length, else the total in the
+    /// Content-Range of a one-byte GET. 0 when the server won't say.
+    private func contentLength(_ url: URL, headers: [String: String], done: @escaping (Int64) -> Void) {
+        var head = URLRequest(url: url, timeoutInterval: 10)
+        head.httpMethod = "HEAD"
+        headers.forEach { head.setValue($1, forHTTPHeaderField: $0) }
+        URLSession.shared.dataTask(with: head) { _, resp, _ in
+            if let h = resp as? HTTPURLResponse, (200..<300).contains(h.statusCode), h.expectedContentLength > 0 {
+                done(h.expectedContentLength); return
+            }
+            var get = URLRequest(url: url, timeoutInterval: 10)
+            headers.forEach { get.setValue($1, forHTTPHeaderField: $0) }
+            get.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+            URLSession.shared.dataTask(with: get) { data, resp, _ in
+                guard let h = resp as? HTTPURLResponse, (200..<300).contains(h.statusCode) else { done(0); return }
+                if h.statusCode == 206, let cr = h.value(forHTTPHeaderField: "Content-Range"),
+                   let total = cr.split(separator: "/").last.flatMap({ Int64($0) }) {
+                    done(total); return
+                }
+                // Server ignored the range and sent the whole file.
+                done(h.statusCode == 200 ? Int64(data?.count ?? 0) : 0)
+            }.resume()
+        }.resume()
+    }
+
     // MARK: Control
 
     func pause(_ id: String) {
         guard let j = jobs[id], j.status == .queued || j.status == .downloading else { return }
         jobs[id]?.status = .paused
-        stopTasks(id)
+        // Keep what each in-flight fragment already received (resume data),
+        // so Resume continues it instead of starting the fragment over.
+        for (i, t) in inflight[id] ?? [:] {
+            guard let dt = t as? URLSessionDownloadTask, i < j.units.count, j.units[i].range == nil else { t.cancel(); continue }
+            let dir = folder(j)
+            dt.cancel(byProducingResumeData: { [weak self] data in
+                guard let data = data else { return }
+                DispatchQueue.main.async { self?.storeResumeData(data, dir: dir, unit: i) }
+            })
+        }
+        inflight[id] = nil
+        notBefore = notBefore.filter { !$0.key.hasPrefix("\(id)|") }
+        meters[id]?.reset()
         changed(id)
+    }
+
+    // Resume data per unit lives in <job>/.partial/<index>; it is only ever
+    // used for that unit, then deleted, so a fragment can't be stitched twice.
+    private func resumeURL(_ dir: URL, _ i: Int) -> URL { dir.appendingPathComponent(".partial/\(i)") }
+
+    private func storeResumeData(_ data: Data, dir: URL, unit i: Int) {
+        let u = resumeURL(dir, i)
+        try? fm.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: u, options: .atomic)
+    }
+
+    private func takeResumeData(_ dir: URL, _ i: Int) -> Data? {
+        let u = resumeURL(dir, i)
+        defer { try? fm.removeItem(at: u) }
+        return try? Data(contentsOf: u)
     }
 
     /// Resumes a paused download, or retries a failed one from where it stopped.
@@ -358,8 +571,9 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
         stopTasks(id)
         try? fm.removeItem(at: folder(j))
         jobs[id] = nil
-        speeds[id] = nil
-        speedSample[id] = nil
+        meters[id] = nil
+        received[id] = nil
+        concurrency[id] = nil
         dirty.remove(id)
         save(now: true)
         onEvent?(["id": id, "removed": true])
@@ -398,14 +612,22 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
         guard attached, let job = jobs[id], job.status == .downloading else { return }
         var running = inflight[id] ?? [:]
         let now = Date()
+        let limit = concurrency[id, default: DLMath.Concurrency()].limit
+        let dir = folder(job)
+        // Lowest indices first, so fragments finish (and MP4 parts append) in order.
         for (i, u) in job.units.enumerated() where !u.done && running[i] == nil {
-            if running.count >= Self.connectionsPerJob { break }
+            if running.count >= limit { break }
             if let t = notBefore["\(id)|\(i)"], t > now { continue }
             guard let url = URL(string: u.url) else { fail(id, "Bad segment address"); return }
             var req = URLRequest(url: url)
             job.headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
             if let r = u.range { req.setValue(r, forHTTPHeaderField: "Range") }
-            let task = session.downloadTask(with: req)
+            let task: URLSessionDownloadTask
+            if u.range == nil, let data = takeResumeData(dir, i) {
+                task = session.downloadTask(withResumeData: data)
+            } else {
+                task = session.downloadTask(with: req)
+            }
             task.taskDescription = "\(id)|\(i)"
             running[i] = task
             task.resume()
@@ -424,28 +646,52 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
         liveBytes[downloadTask.taskIdentifier] = totalBytesWritten
-        if let (id, _) = Self.ids(downloadTask) { dirty.insert(id) }
+        if let (id, _) = Self.ids(downloadTask) {
+            received[id, default: 0] += bytesWritten
+            dirty.insert(id)
+        }
     }
 
     /// The temp file must be moved before this returns.
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         guard let (id, i) = Self.ids(downloadTask), let job = jobs[id], i < job.units.count else { return }
+        // A fragment is written once: a second task for the same index (a
+        // late duplicate after a retry or relaunch) is dropped.
+        if job.units[i].done || job.status != .downloading { return }
         let http = downloadTask.response as? HTTPURLResponse
         let status = http?.statusCode ?? 200
         guard (200..<300).contains(status) else {
             failedUnit(id, i, status: status, retryAfter: http?.value(forHTTPHeaderField: "Retry-After"))
             return
         }
+        // A fragment is whatever size the server sends: nothing here assumes
+        // the estimate. Only a body shorter than the server's own
+        // Content-Length (a cut connection) is refetched.
+        let got = (try? location.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) } ?? 0
+        let verdict = DLMath.checkFragment(received: got, contentLength: http?.expectedContentLength ?? -1,
+                                           status: status, range: job.units[i].range)
+        if let problem = verdict {
+            failedUnit(id, i, status: 0, message: problem)
+            return
+        }
+        // Atomic replace: the new file takes the fragment's name in one step,
+        // so a retry never leaves a half-written or doubled fragment.
         let dest = folder(job).appendingPathComponent(job.units[i].file)
         do {
             try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-            try fm.moveItem(at: location, to: dest)
+            if fm.fileExists(atPath: dest.path) {
+                _ = try fm.replaceItemAt(dest, withItemAt: location)
+            } else {
+                try fm.moveItem(at: location, to: dest)
+            }
         } catch {
             fail(id, "Could not save to storage: \(error.localizedDescription)"); return
         }
+        try? fm.removeItem(at: resumeURL(folder(job), i))
         jobs[id]?.units[i].done = true
-        jobs[id]?.units[i].bytes = (try? dest.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) } ?? 0
+        jobs[id]?.units[i].bytes = fileSize(dest) ?? got
+        concurrency[id, default: DLMath.Concurrency()].succeeded()
+        if job.kind == "mp4" { appendReadyParts(id) }
         dirty.insert(id)
         save()
     }
@@ -456,6 +702,10 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
         inflight[id]?[i] = nil
         if let error = error as NSError? {
             if error.code == NSURLErrorCancelled { return }
+            if let data = error.userInfo[NSURLSessionDownloadTaskResumeData] as? Data,
+               let j = jobs[id], i < j.units.count, j.units[i].range == nil {
+                storeResumeData(data, dir: folder(j), unit: i)  // retry continues the fragment
+            }
             failedUnit(id, i, status: 0, message: error.localizedDescription)
             return
         }
@@ -477,14 +727,26 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
         guard let job = jobs[id], job.status == .downloading, i < job.units.count else { return }
         let tries = job.units[i].tries
         let throttled = status == 429 || status == 503
-        let limit = throttled ? 10 : (status == 0 ? 3 : 0)
+        let limit = DLMath.retryLimit(status: status)
+        if throttled { concurrency[id, default: DLMath.Concurrency()].throttled() }
+        else { concurrency[id, default: DLMath.Concurrency()].failed() }
+        if tries >= limit, job.units[i].isOptional {
+            // A subtitle the server won't give: keep the video, skip the file.
+            sbLog("download \(id): skipping \(job.units[i].file) (\(status > 0 ? "HTTP \(status)" : (message ?? "network error")))")
+            jobs[id]?.units[i].done = true
+            jobs[id]?.units[i].bytes = 0
+            dirty.insert(id)
+            save()
+            DispatchQueue.main.async { [weak self] in self?.fill(id) }
+            return
+        }
         guard tries < limit else {
             fail(id, status > 0 ? "Server error (HTTP \(status))" : (message ?? "Network error"))
             return
         }
         jobs[id]?.units[i].tries = tries + 1
-        let backoff = min(30, pow(2, Double(tries)) * (throttled ? 1.5 : 0.5))
-        let delay = retryAfter.flatMap { Double($0) }.map { min(60, max(0, $0)) } ?? backoff
+        let delay = DLMath.backoff(attempt: tries, throttled: throttled,
+                                   retryAfter: retryAfter.flatMap { Double($0) }, jitter: Double.random(in: 0...1))
         notBefore["\(id)|\(i)"] = Date().addingTimeInterval(delay)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.fill(id) }
     }
@@ -500,35 +762,118 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
 
     // MARK: Finish
 
+    /// Called once no unit is left to fetch. Every unit's file is checked on
+    /// disk first; anything missing or short is fetched again, and the
+    /// download is only marked completed when every fragment is written.
     private func finalize(_ id: String) {
         guard var job = jobs[id], job.status == .downloading else { return }
         let dir = folder(job)
+        let joined = job.joinedParts ?? 0
+        let checks = job.units.enumerated().map { (i, u) -> DLMath.UnitCheck in
+            // MP4 parts already appended to video.mp4 are checked by its size below.
+            let disk = job.kind == "mp4" && u.isFragment && i < joined ? u.bytes : fileSize(dir.appendingPathComponent(u.file))
+            return DLMath.UnitCheck(done: u.done, recordedBytes: u.bytes, bytesOnDisk: disk, optional: u.isOptional)
+        }
+        let refetch = DLMath.unitsToRefetch(checks)
+        if !refetch.isEmpty {
+            for i in refetch {
+                let fails = (job.units[i].verifyFails ?? 0) + 1
+                if fails > 3 {
+                    fail(id, "A fragment could not be saved (\(job.units[i].file))"); return
+                }
+                jobs[id]?.units[i].verifyFails = fails
+                jobs[id]?.units[i].done = false
+                jobs[id]?.units[i].bytes = 0
+            }
+            sbLog("download \(id): \(refetch.count) unit(s) missing or short on disk, fetching again")
+            dirty.insert(id)
+            save(now: true)
+            DispatchQueue.main.async { [weak self] in self?.fill(id) }
+            return
+        }
+        let fragmentBytes = job.units.filter { $0.isFragment }.reduce(Int64(0)) { $0 + $1.bytes }
         if job.kind == "mp4" {
-            do { try joinParts(job, into: dir.appendingPathComponent("video.mp4")) } catch {
-                fail(id, "Could not assemble the video: \(error.localizedDescription)"); return
+            appendReadyParts(id)
+            guard let j = jobs[id], j.status == .downloading else { return }
+            job = j
+            let out = fileSize(dir.appendingPathComponent("video.mp4")) ?? -1
+            guard DLMath.finalSizeMatches(outputBytes: out, fragmentBytes: job.units.filter { $0.isFragment }.map { $0.bytes }) else {
+                // Start the file over rather than keep a wrong one.
+                try? fm.removeItem(at: dir.appendingPathComponent("video.mp4"))
+                for i in job.units.indices where job.units[i].isFragment { jobs[id]?.units[i].done = false; jobs[id]?.units[i].bytes = 0 }
+                jobs[id]?.joinedParts = 0
+                jobs[id]?.joinedBytes = 0
+                fail(id, "The assembled video was \(out) bytes, expected \(fragmentBytes). Resume to download it again.")
+                return
             }
             try? fm.removeItem(at: dir.appendingPathComponent("parts"))
+        } else {
+            // HLS: each fragment is its own file; on disk they must add up exactly.
+            let onDisk = job.units.filter { $0.isFragment }.map { fileSize(dir.appendingPathComponent($0.file)) ?? -1 }
+            guard DLMath.finalSizeMatches(outputBytes: onDisk.reduce(0, +), fragmentBytes: job.units.filter { $0.isFragment }.map { $0.bytes }) else {
+                fail(id, "Saved fragments don't add up. Resume to fetch them again."); return
+            }
         }
+        try? fm.removeItem(at: dir.appendingPathComponent(".partial"))
         job.status = .completed
         job.completedAt = Date().timeIntervalSince1970 * 1000
         job.finalBytes = folderSize(dir)
         jobs[id] = job
-        speeds[id] = nil
-        speedSample[id] = nil
-        sbLog("download \(id) completed, \(job.finalBytes ?? 0) bytes")
+        meters[id] = nil
+        received[id] = nil
+        concurrency[id] = nil
+        sbLog("download \(id) completed, \(job.finalBytes ?? 0) bytes (estimate was \(job.estBytes))")
         changed(id)
+        flushEvents()
     }
 
-    private func joinParts(_ job: DLJob, into out: URL) throws {
+    private func fileSize(_ url: URL) -> Int64? {
+        guard let attrs = try? fm.attributesOfItem(atPath: url.path) else { return nil }
+        return (attrs[.size] as? NSNumber)?.int64Value
+    }
+
+    /// MP4: appends the finished parts that come next in order to
+    /// video.mp4 and deletes them, recording how far the file goes. Each part
+    /// is appended exactly once, at the offset the record says.
+    private func appendReadyParts(_ id: String) {
+        guard let job = jobs[id], job.kind == "mp4" else { return }
+        let parts = job.units.indices.filter { job.units[$0].isFragment }
+        let joined = job.joinedParts ?? 0
+        let n = DLMath.appendableParts(done: parts.map { job.units[$0].done }, alreadyJoined: joined)
+        guard n > 0 else { return }
         let dir = folder(job)
-        fm.createFile(atPath: out.path, contents: nil)
-        let w = try FileHandle(forWritingTo: out)
-        defer { try? w.close() }
-        for u in job.units where u.file.hasPrefix("parts/") {
-            let r = try FileHandle(forReadingFrom: dir.appendingPathComponent(u.file))
-            defer { try? r.close() }
-            while let chunk = try r.read(upToCount: 4 << 20), !chunk.isEmpty { try w.write(contentsOf: chunk) }
+        let out = dir.appendingPathComponent("video.mp4")
+        var offset = job.joinedBytes ?? 0
+        do {
+            if !fm.fileExists(atPath: out.path) { fm.createFile(atPath: out.path, contents: nil) }
+            let w = try FileHandle(forWritingTo: out)
+            defer { try? w.close() }
+            try w.truncate(atOffset: UInt64(offset))   // nothing past the recorded end
+            for k in joined..<(joined + n) {
+                let u = job.units[parts[k]]
+                let src = dir.appendingPathComponent(u.file)
+                let r = try FileHandle(forReadingFrom: src)
+                var copied: Int64 = 0
+                while let chunk = try r.read(upToCount: 4 << 20), !chunk.isEmpty {
+                    try w.write(contentsOf: chunk)
+                    copied += Int64(chunk.count)
+                }
+                try? r.close()
+                guard copied == u.bytes else {
+                    try w.truncate(atOffset: UInt64(offset))
+                    jobs[id]?.units[parts[k]].done = false
+                    jobs[id]?.units[parts[k]].bytes = 0
+                    break
+                }
+                offset += copied
+                jobs[id]?.joinedParts = k + 1
+                jobs[id]?.joinedBytes = offset
+                try? fm.removeItem(at: src)
+            }
+        } catch {
+            fail(id, "Could not write the video: \(error.localizedDescription)")
         }
+        save()
     }
 
     private func folderSize(_ url: URL) -> Int64 {
@@ -549,38 +894,48 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
         let now = Date()
         for id in ids {
             guard let j = jobs[id] else { continue }
-            if j.status == .downloading { sampleSpeed(id, bytes: bytes(j), at: now) }
+            if j.status == .downloading {
+                meters[id, default: DLMath.SpeedMeter()].add(t: now.timeIntervalSince1970, received: received[id] ?? 0)
+            }
             onEvent?(payload(j))
         }
     }
 
-    /// Smoothed bytes/s, sampled at most every 0.4 s.
-    private func sampleSpeed(_ id: String, bytes: Int64, at now: Date) {
-        guard let last = speedSample[id] else { speedSample[id] = (now, bytes); return }
-        let dt = now.timeIntervalSince(last.at)
-        guard dt >= 0.4 else { return }
-        let inst = max(0, Double(bytes - last.bytes) / dt)
-        speeds[id] = (speeds[id] ?? inst) * 0.6 + inst * 0.4
-        speedSample[id] = (now, bytes)
-    }
-
+    /// Bytes downloaded: finished units plus what in-flight requests have
+    /// received so far (a finished unit whose task is still closing counts once).
     private func bytes(_ j: DLJob) -> Int64 {
         let done = j.units.reduce(Int64(0)) { $0 + ($1.done ? $1.bytes : 0) }
-        return (inflight[j.id] ?? [:]).values.reduce(done) { $0 + (liveBytes[$1.taskIdentifier] ?? 0) }
+        return (inflight[j.id] ?? [:]).reduce(done) { sum, entry in
+            let (i, task) = entry
+            if i < j.units.count, j.units[i].done { return sum }
+            return sum + (liveBytes[task.taskIdentifier] ?? 0)
+        }
     }
 
+    /// Everything the page shows about a download. The page renders these
+    /// numbers as they are; nothing is estimated or kept on the web side.
     private func payload(_ j: DLJob) -> [String: Any] {
-        let doneUnits = j.units.filter { $0.done }.count
-        let have = bytes(j)
-        let unitPct = j.units.isEmpty ? 0 : Double(doneUnits) / Double(j.units.count) * 100
-        let pct = j.status == .completed ? 100 : unitPct
-        let speed = j.status == .downloading ? (speeds[j.id] ?? 0) : 0
-        let total = j.estBytes > 0 ? j.estBytes : (pct >= 1 ? Int64(Double(have) / (pct / 100)) : 0)
+        let finished = j.status == .completed
+        let fragments = j.units.filter { $0.isFragment }
+        let fragmentsDone = fragments.filter { $0.done }.count
+        let fragmentBytesDone = fragments.reduce(Int64(0)) { $0 + ($1.done ? $1.bytes : 0) }
+        let otherBytesDone = j.units.reduce(Int64(0)) { $0 + (!$1.isFragment && $1.done ? $1.bytes : 0) }
+        let have = finished ? (j.finalBytes ?? bytes(j)) : bytes(j)
+        let total = DLMath.expectedTotal(fragmentBytesDone: fragmentBytesDone, fragmentsDone: fragmentsDone,
+                                         fragmentsTotal: fragments.count, otherBytesDone: otherBytesDone,
+                                         estimate: j.estBytes, bytesDownloaded: have,
+                                         finalBytes: finished ? j.finalBytes : nil)
+        let pct = DLMath.progress(bytesDownloaded: have, expectedTotal: total, fragmentsDone: fragmentsDone,
+                                  fragmentsTotal: fragments.count, finished: finished)
+        let speed = j.status == .downloading ? (meters[j.id]?.bytesPerSecond ?? 0) : 0
         let eta = speed > 1 && total > have ? Double(total - have) / speed : -1
         return [
             "id": j.id, "name": j.name, "status": j.status.rawValue,
-            "progress": pct, "bytes": have, "totalBytes": total, "speedBps": speed, "etaSec": eta,
-            "completedFragments": doneUnits, "totalFragments": j.units.count,
+            "progress": pct, "bytesDownloaded": have, "totalBytes": total,
+            "totalIsFinal": finished, "estimateBytes": j.estBytes,
+            "speedBps": speed, "etaSec": eta,
+            "fragmentsDone": fragmentsDone, "fragmentsTotal": fragments.count,
+            "connections": j.status == .downloading ? (inflight[j.id]?.count ?? 0) : 0,
             "finalBytes": j.finalBytes ?? 0, "error": j.error ?? "", "meta": j.meta,
             "subtitles": j.subtitles, "createdAt": j.createdAt, "completedAt": j.completedAt ?? 0,
         ]

@@ -1125,6 +1125,10 @@ final class DownloadMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
                 let result: [String: Any] = err.map { ["ok": false, "error": $0] as [String: Any] } ?? ["ok": true, "id": id]
                 replyHandler(result, nil)
             }
+        case "measure":
+            dm.measure(b["items"] as? [[String: Any]] ?? [], headers: b["headers"] as? [String: String] ?? [:]) {
+                replyHandler($0, nil)
+            }
         case "pause": dm.pause(id); replyHandler(true, nil)
         case "resume": dm.resume(id); replyHandler(true, nil)
         case "remove": dm.remove(id); replyHandler(true, nil)
