@@ -97,29 +97,47 @@
 }
 .sp-kids-badge { position: absolute; top: 6px; right: 6px; padding: 2px 6px; border-radius: 6px; background: #ffd60a; color: #000; font: 800 10px -apple-system, system-ui, sans-serif; letter-spacing: .6px; }
 
-/* ── PIN pad ────────────────────────────────────────────────────────────── */
-.sp-pin { align-items: center; justify-content: center; gap: 8px; }
-.sp-pin-cancel { position: absolute; top: calc(env(safe-area-inset-top) + 4px); left: 8px; min-height: 44px; padding: 0 12px; border: 0; background: none; color: #fff; font: 400 17px -apple-system, system-ui, sans-serif; }
-.sp-pin-title { margin-top: 16px; font: 600 20px -apple-system, system-ui, sans-serif; }
-.sp-pin-sub { font: 400 14px -apple-system, system-ui, sans-serif; color: var(--sp-secondary); }
-.sp-pin-dots { display: flex; gap: 18px; margin: 24px 0 32px; }
-.sp-pin-dots i { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid #fff; transition: background .12s ease; }
+/* ── PIN pad (iOS passcode style; no animations or transitions at all) ──── */
+.sp-pin { align-items: center; justify-content: center; gap: 6px; animation: none !important; }
+.sp-pin, .sp-pin * { transition: none !important; animation: none !important; }
+.sp-pin-cancel { position: absolute; top: calc(env(safe-area-inset-top) + 4px); left: 8px; min-height: 44px; padding: 0 12px; border: 0; background: none; color: #fff; font: 400 17px -apple-system, system-ui, sans-serif; touch-action: manipulation; }
+.sp-pin-title { margin-top: 14px; font: 400 20px -apple-system, system-ui, sans-serif; }
+.sp-pin-sub { min-height: 18px; font: 400 14px -apple-system, system-ui, sans-serif; color: var(--sp-secondary); }
+.sp-pin-dots { display: flex; gap: 22px; margin: 22px 0 34px; }
+.sp-pin-dots i { width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid #fff; }
 .sp-pin-dots i.on { background: #fff; }
-.sp-pin-dots.is-wrong { animation: spShake .4s ease; }
 .sp-pin-dots.is-wrong i { border-color: #ff453a; background: #ff453a; }
-.sp-pin-keys { display: grid; grid-template-columns: repeat(3, 76px); gap: 16px 24px; }
+.sp-pin-keys { display: grid; grid-template-columns: repeat(3, 76px); gap: 14px 26px; touch-action: manipulation; }
 .sp-pin-key {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   width: 76px;
   height: 76px;
-  border-radius: 50%;
+  padding: 0;
   border: 0;
-  background: rgba(255, 255, 255, .12);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .14);
   color: #fff;
-  font: 400 30px -apple-system, system-ui, sans-serif;
-  transition: background .1s ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
 }
-.sp-pin-key:active { background: rgba(255, 255, 255, .32); }
-.sp-pin-key.is-del { background: none; font-size: 24px; }
+.sp-pin-key:active { background: rgba(255, 255, 255, .38); }
+.sp-pin-digit { font: 400 34px/1 -apple-system, system-ui, sans-serif; }
+.sp-pin-letters { margin-top: 2px; font: 600 10px/1 -apple-system, system-ui, sans-serif; letter-spacing: 2px; }
+.sp-pin-key.is-del { background: none; font: 400 17px -apple-system, system-ui, sans-serif; }
+.sp-pin-key.is-del:active { background: none; color: rgba(255, 255, 255, .5); }
+@media (max-height: 640px) {
+  .sp-pin-keys { grid-template-columns: repeat(3, 72px); gap: 10px 22px; }
+  .sp-pin-key { width: 72px; height: 72px; }
+  .sp-pin-dots { margin: 14px 0 20px; }
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  .sp-pin { flex-direction: row; flex-wrap: wrap; align-content: center; column-gap: 48px; }
+}
 
 /* ── Sheet (editor, avatar picker) ──────────────────────────────────────── */
 .sp-sheet-title { font: 600 17px -apple-system, system-ui, sans-serif; }
@@ -224,9 +242,13 @@
 .sp-ap-kicker { margin: 16px 0 8px; font: 700 12px -apple-system, system-ui, sans-serif; letter-spacing: 1.6px; text-transform: uppercase; color: var(--sp-tint); }
 .sp-ap-title { margin: 0 0 8px; font: 600 15px -apple-system, system-ui, sans-serif; color: #e5e5ea; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sp-ap-row .sp-avatar { box-shadow: 0 4px 14px rgba(0, 0, 0, .45), inset 0 0 0 1px rgba(255, 255, 255, .1); }
-.sp-ap-skeleton { flex: 0 0 76px; width: 76px; height: 76px; border-radius: 50%; background: linear-gradient(100deg, #1c1c1e 30%, #2c2c2e 50%, #1c1c1e 70%) 0 0 / 300% 100%; animation: spShimmer 1.4s linear infinite; }
+.sp-ap-skeleton { flex: 0 0 76px; width: 76px; height: 76px; border-radius: 50%; background: #1c1c1e; animation: spSkelPulse 1.2s ease-in-out infinite alternate; }
 .sp-ap-empty { padding: 24px 0; font: 400 15px -apple-system, system-ui, sans-serif; color: var(--sp-secondary); text-align: center; }
-@keyframes spShimmer { from { background-position: 100% 0; } to { background-position: -50% 0; } }
+@keyframes spSkelPulse { from { opacity: .55; } to { opacity: 1; } }
+/* Picker performance: rows off screen skip layout and paint entirely. */
+.sp-ap-row { content-visibility: auto; contain-intrinsic-size: auto 120px; }
+.sp-ap-strip { -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+.sp-ap-item { contain: layout paint; }
 
 /* ── Top bar ────────────────────────────────────────────────────────────── */
 .sp-topbar {

@@ -1,7 +1,7 @@
 // Launch gate for iOS: "Who's watching?" until a profile is chosen, then the
 // app for that profile. Switching remounts the app so every screen re-reads
 // the new profile's history, lists, progress and settings.
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ProfileContext } from "./ProfileContext";
 import WhoIsWatching from "./WhoIsWatching";
 import ProfileEditor from "./ProfileEditor";
@@ -14,6 +14,7 @@ import {
   deleteProfile,
   ensureProfiles,
   listProfiles,
+  loadProfiles,
   updateProfile,
 } from "./profileStore";
 import "./profiles.css";
@@ -23,7 +24,21 @@ const PICK = "pick";
 const MANAGE = "manage";
 
 export default function ProfileGate({ children }) {
-  const [profiles, setProfiles] = useState(ensureProfiles);
+  // null until the list (and its PINs) is reconciled with the Keychain, so a
+  // locked profile can never be entered before its PIN is known.
+  const [profiles, setProfiles] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    loadProfiles()
+      .catch((err) => {
+        console.warn("[profiles] load failed", err);
+        return ensureProfiles();
+      })
+      .then((list) => alive && setProfiles(list));
+    return () => {
+      alive = false;
+    };
+  }, []);
   const [active, setActive] = useState(null);
   const [overlay, setOverlay] = useState(PICK);
   const [pinTarget, setPinTarget] = useState(null); // { profile, then }
@@ -43,12 +58,17 @@ export default function ProfileGate({ children }) {
     else then(profile);
   };
 
-  const saveEdit = (fields) => {
-    if (editing === "new") {
-      createProfile(fields);
-    } else {
-      const updated = updateProfile(editing.id, fields);
-      if (updated.id === active?.id) enter(updated);
+  // Saves are awaited (the Keychain copy included) before the editor closes.
+  const saveEdit = async (fields) => {
+    try {
+      if (editing === "new") {
+        await createProfile(fields);
+      } else {
+        const updated = await updateProfile(editing.id, fields);
+        if (updated.id === active?.id) enter(updated);
+      }
+    } catch (err) {
+      console.warn("[profiles] save failed", err);
     }
     setEditing(null);
     refresh();
@@ -56,7 +76,7 @@ export default function ProfileGate({ children }) {
 
   const removeEdited = () => {
     const removedId = editing.id;
-    deleteProfile(removedId);
+    deleteProfile(removedId).catch((err) => console.warn("[profiles] delete failed", err));
     setEditing(null);
     refresh();
     if (removedId === active?.id) {
@@ -74,6 +94,8 @@ export default function ProfileGate({ children }) {
       },
     [active],
   );
+
+  if (!profiles) return null; // a few ms behind the launch splash
 
   return (
     <ProfileContext.Provider value={ctx}>
