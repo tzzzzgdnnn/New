@@ -91,6 +91,7 @@ const MediaCard = memo(function MediaCard({
               src={imgUrl(item.poster_path, "w342")}
               alt={title}
               loading="lazy"
+              decoding="async"
             />
           ) : (
             <div className="no-poster">

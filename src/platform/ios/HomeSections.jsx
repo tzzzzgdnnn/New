@@ -1,7 +1,7 @@
 // iOS home: Netflix-style rails (poster rows, Top 10 with big rank numbers,
 // wide Continue Watching cards) plus genre sections and a curated
 // Nostalgia block. Rendered only in the iOS build.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import MediaCard from "../../components/MediaCard";
 import { PlayIcon } from "../../components/Icons";
 import { imgUrl, tmdbFetch } from "../../utils/api";
@@ -107,7 +107,7 @@ export function WideRail({ title, items, progress, onSelect }) {
           return (
             <div className="sb-wide-item" key={`${item.media_type}_${item.id}`} onClick={() => onSelect({ ...item, autoResume: true })}>
               <div className="sb-wide-img">
-                {img && <img src={imgUrl(img, "w780")} alt="" loading="lazy" />}
+                {img && <img src={imgUrl(img, "w780")} alt="" loading="lazy" decoding="async" />}
                 <div className="sb-wide-play">
                   <span>
                     <PlayIcon />
@@ -311,6 +311,8 @@ function useLogo(item, apiKey) {
   useEffect(() => {
     if (!key || !apiKey) return;
     if (key in _logos) return setLogo(_logos[key]);
+    // Never show the previous slide's logo while this one loads.
+    setLogo(null);
     let alive = true;
     tmdbFetch(`/${typeOf(item)}/${item.id}/images?include_image_language=en,null`, apiKey)
       .then((r) => {
@@ -329,38 +331,43 @@ function useLogo(item, apiKey) {
 export function Billboard({ items, apiKey, onSelect, kicker = "Trending Now" }) {
   const list = (items || []).filter((i) => i.backdrop_path).slice(0, 6);
   const [idx, setIdx] = useState(0);
-  const [touchX, setTouchX] = useState(null);
-  const item = list[idx % (list.length || 1)];
+  const touchX = useRef(null);
+  // The list can shrink (new trending data); keep the index inside it.
+  const cur = list.length ? idx % list.length : 0;
+  const item = list[cur];
   const logo = useLogo(item, apiKey);
   useEffect(() => {
     if (list.length < 2) return;
     const t = setTimeout(() => setIdx((i) => (i + 1) % list.length), 8000);
     return () => clearTimeout(t);
-  }, [idx, list.length]);
+  }, [cur, list.length]);
   if (!item) return null;
   const genres = (item.genre_ids || []).map((g) => GENRES[g]).filter(Boolean).slice(0, 3);
-  const go = (d) => setIdx((i) => (i + d + list.length) % list.length);
+  const go = (d) => setIdx((i) => (((i + d) % list.length) + list.length) % list.length);
   return (
     <div
       className="sb-bill"
-      onTouchStart={(e) => setTouchX(e.touches[0].clientX)}
+      onTouchStart={(e) => (touchX.current = e.touches[0].clientX)}
       onTouchEnd={(e) => {
-        if (touchX == null) return;
-        const dx = e.changedTouches[0].clientX - touchX;
+        if (touchX.current == null) return;
+        const dx = e.changedTouches[0].clientX - touchX.current;
         if (Math.abs(dx) > 40) go(dx < 0 ? 1 : -1);
-        setTouchX(null);
+        touchX.current = null;
       }}
     >
       {list.map((it, i) => (
         <img
-          key={it.id}
-          className={"sb-bill-bg" + (i === idx ? " on" : "")}
-          src={imgUrl(it.backdrop_path, "original")}
+          key={`${typeOf(it)}_${it.id}`}
+          className={"sb-bill-bg" + (i === cur ? " on" : "")}
+          // w1280 is sharp on any phone and a fraction of "original".
+          src={imgUrl(it.backdrop_path, "w1280")}
           alt=""
+          decoding="async"
+          fetchpriority={i === cur ? "high" : "low"}
         />
       ))}
       <div className="sb-bill-shade" />
-      <div className="sb-bill-body" key={item.id}>
+      <div className="sb-bill-body" key={`${typeOf(item)}_${item.id}`}>
         <div className="sb-bill-kicker">
           <span className="sb-bill-n">S</span> {kicker} · {typeOf(item) === "tv" ? "Series" : "Film"}
         </div>
@@ -387,7 +394,7 @@ export function Billboard({ items, apiKey, onSelect, kicker = "Trending Now" }) 
         {list.length > 1 && (
           <div className="sb-bill-dots">
             {list.map((it, i) => (
-              <i key={it.id} className={i === idx ? "on" : ""} onClick={() => setIdx(i)} />
+              <i key={`${typeOf(it)}_${it.id}`} className={i === cur ? "on" : ""} onClick={() => setIdx(i)} />
             ))}
           </div>
         )}
@@ -414,7 +421,7 @@ function WideBackdropRail({ items, onSelect, badge }) {
     <div className="sb-row sb-tape-row">
       {list.slice(0, 20).map((it) => (
         <div className="sb-tape" key={`${it.media_type}_${it.id}`} onClick={() => onSelect(it)}>
-          <img src={imgUrl(it.backdrop_path, "w780")} alt="" loading="lazy" />
+          <img src={imgUrl(it.backdrop_path, "w780")} alt="" loading="lazy" decoding="async" />
           <div className="sb-tape-shade" />
           {badge && <div className="sb-tape-badge" style={{ background: badge.color, color: badge.accent }}>{badge.short}</div>}
           <div className="sb-tape-year">{yearOf(it)}</div>
@@ -437,7 +444,7 @@ function Nostalgia({ rows, onSelect, common }) {
   return (
     <div className="sb-nos">
       <div className="sb-nos-hero">
-        {feat && <img src={imgUrl(feat.backdrop_path, "original")} alt="" />}
+        {feat && <img src={imgUrl(feat.backdrop_path, "w1280")} alt="" decoding="async" loading="lazy" />}
         <div className="sb-nos-scan" />
         <div className="sb-nos-hero-body">
           <div className="sb-nos-rec">● REC  {feat ? yearOf(feat) : "199X"}</div>

@@ -3,7 +3,7 @@
 // paints before React; native storyboards are untouched.
 
 /** How long the splash stays fully visible. */
-export const SPLASH_MS = 600;
+export const SPLASH_MS = 350;
 /** Fade-out length after SPLASH_MS (matches .sp-splash transition). */
 const SPLASH_FADE_MS = 280;
 const ICON_SRC = "./sp-icon.png";
