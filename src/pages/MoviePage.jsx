@@ -382,6 +382,7 @@ export default function MoviePage({
     if (isAnime) {
       fetchAnilistData(item.title || item.name, "ANIME", item.id, {
         kind: "movie",
+        year: (details?.release_date || item.release_date || "").slice(0, 4) || null,
         formats: ANILIST_MOVIE_FORMATS,
       }).then(
         (data) => {

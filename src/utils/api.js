@@ -758,9 +758,12 @@ export const cleanAnilistDescription = (desc) => {
   return clean;
 };
 
+// A page of candidates (not the single top hit), so same-name remakes can be
+// told apart by year: Hunter x Hunter 1999 (136) vs 2011 (11061).
 const ANILIST_QUERY = `
 query ($search: String, $type: MediaType, $formats: [MediaFormat]) {
-  Media(search: $search, type: $type, format_in: $formats, sort: SEARCH_MATCH) {
+  Page(perPage: 8) {
+  media(search: $search, type: $type, format_in: $formats, sort: SEARCH_MATCH) {
     id
     idMal
     format
@@ -791,6 +794,7 @@ query ($search: String, $type: MediaType, $formats: [MediaFormat]) {
       }
     }
   }
+}
 }`;
 
 // ── AniList cache (localStorage + in-memory) ──────────────────────────────────
@@ -838,6 +842,27 @@ export const ANILIST_TV_FORMATS = ["TV", "TV_SHORT", "ONA"];
 // Anime films are sometimes filed as specials/OVAs/ONAs, never as TV series.
 export const ANILIST_MOVIE_FORMATS = ["MOVIE", "SPECIAL", "OVA", "ONA"];
 
+const _alYear = (m) => m?.startDate?.year || m?.seasonYear || null;
+
+/**
+ * Best AniList candidate for a TMDB title. Search order wins, except that a
+ * known TMDB year picks the candidate from that year (or the next/previous
+ * year) over an older/newer same-name show: TMDB "Hunter x Hunter" (2011)
+ * must not land on the 1999 series, which has different episodes.
+ */
+export const pickAnilistMatch = (list, { year = null, formats = null } = {}) => {
+  const ok = (list || []).filter((m) => m && (!formats || !m.format || formats.includes(m.format)));
+  if (!ok.length) return null;
+  const y = Number(year) || null;
+  if (y) {
+    const exact = ok.find((m) => _alYear(m) === y);
+    if (exact) return exact;
+    const near = ok.find((m) => _alYear(m) && Math.abs(_alYear(m) - y) <= 1);
+    if (near) return near;
+  }
+  return ok[0];
+};
+
 /**
  * Search variants for a TMDB title, most AniList-friendly first. AniList's
  * search mis-ranks romanized long vowels ("Shippūden"), so the accent-free
@@ -862,7 +887,7 @@ export const fetchAnilistData = async (
   title,
   type = "ANIME",
   tmdbId = null,
-  { kind = "any", formats = null } = {},
+  { kind = "any", formats = null, year = null } = {},
 ) => {
   const cacheKey = tmdbId
     ? `${type}__${kind}__tmdb_${tmdbId}`
@@ -873,7 +898,9 @@ export const fetchAnilistData = async (
   if (entry && Date.now() - entry.ts <= ANILIST_CACHE_TTL) {
     const wrongFormat =
       entry.data && formats && entry.data.format && !formats.includes(entry.data.format);
-    if (!wrongFormat) return entry.data;
+    const y = Number(year) || null;
+    const wrongYear = entry.data && y && _alYear(entry.data) && Math.abs(_alYear(entry.data) - y) > 1;
+    if (!wrongFormat && !wrongYear) return entry.data;
     delete cache[cacheKey];
     flushAnilistCache();
   }
@@ -896,8 +923,7 @@ export const fetchAnilistData = async (
       const json = await res.json();
       // A 404 "Not Found." answer means no hit for this spelling: try the next.
       if (json?.data) answered = true;
-      data = json?.data?.Media || null;
-      if (data && formats && data.format && !formats.includes(data.format)) data = null;
+      data = pickAnilistMatch(json?.data?.Page?.media, { year, formats });
       if (data) break;
     }
     if (!answered) throw new Error("AniList: no answer");

@@ -822,6 +822,7 @@ export default function TVPage({
       setAnilistLoading(true);
       fetchAnilistData(item.name || item.title, "ANIME", item.id, {
         kind: "tv",
+        year: (details?.first_air_date || item.first_air_date || "").slice(0, 4) || null,
         formats: ANILIST_TV_FORMATS,
       })
         .then((data) => {

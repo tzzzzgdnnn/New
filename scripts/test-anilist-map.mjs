@@ -35,7 +35,7 @@ test("TV lookup sends a TV/TV_SHORT/ONA format filter and never keeps a movie", 
     sent.push(v);
     // AniList's unfiltered answer for the accented title is a movie.
     const media = v.formats ? { id: 1735, format: "TV", episodes: 500, title: { romaji: "NARUTO: Shippuuden" } } : { id: 10589, format: "MOVIE", episodes: 1 };
-    return { json: async () => ({ data: { Media: media } }) };
+    return { json: async () => ({ data: { Page: { media: [media] } } }) };
   };
   const d = await fetchAnilistData("Naruto Shippūden", "ANIME", 31910, { kind: "tv", formats: ANILIST_TV_FORMATS });
   assert.equal(d.id, 1735);
@@ -48,7 +48,7 @@ test("a cached movie for a TV page is dropped and looked up again", async () => 
   let calls = 0;
   globalThis.fetch = async () => {
     calls++;
-    return { json: async () => ({ data: { Media: calls === 1 ? { id: 10589, format: "MOVIE" } : { id: 1735, format: "TV" } } }) };
+    return { json: async () => ({ data: { Page: { media: [calls === 1 ? { id: 10589, format: "MOVIE" } : { id: 1735, format: "TV" }] } } }) };
   };
   // First answer is a movie without a filter (desktop "any" kind)...
   await fetchAnilistData("X", "ANIME", 1, { kind: "tv" });
@@ -61,10 +61,29 @@ test("TV and movie pages with the same TMDB id don't share a cache entry", async
   mem.clear();
   globalThis.fetch = async (_u, o) => {
     const f = JSON.parse(o.body).variables.formats;
-    return { json: async () => ({ data: { Media: f?.includes("MOVIE") ? { id: 2, format: "MOVIE" } : { id: 1, format: "TV" } } }) };
+    return { json: async () => ({ data: { Page: { media: [f?.includes("MOVIE") ? { id: 2, format: "MOVIE" } : { id: 1, format: "TV" }] } } }) };
   };
   assert.equal((await fetchAnilistData("Same", "ANIME", 77, { kind: "tv", formats: ANILIST_TV_FORMATS })).id, 1);
   assert.equal((await fetchAnilistData("Same", "ANIME", 77, { kind: "movie", formats: api.ANILIST_MOVIE_FORMATS })).id, 2);
+});
+
+test("Hunter x Hunter: the TMDB year picks 2011 over the 1999 series", async () => {
+  mem.clear();
+  // AniList's real search order for "Hunter x Hunter" (TV formats).
+  const page = [
+    { id: 136, format: "TV", episodes: 62, seasonYear: 1999, startDate: { year: 1999 } },
+    { id: 11061, format: "TV", episodes: 148, seasonYear: 2011, startDate: { year: 2011 } },
+  ];
+  globalThis.fetch = async () => ({ json: async () => ({ data: { Page: { media: page } } }) });
+  const opts = { kind: "tv", formats: ANILIST_TV_FORMATS };
+  assert.equal((await fetchAnilistData("Hunter x Hunter", "ANIME", 46298, { ...opts, year: "2011" })).id, 11061);
+  assert.equal((await fetchAnilistData("Hunter x Hunter", "ANIME", 45952, { ...opts, year: "1999" })).id, 136);
+  // A cached 1999 entry for the 2011 page is thrown away.
+  mem.clear();
+  await fetchAnilistData("Hunter x Hunter", "ANIME", 46298, opts); // no year -> search order (1999)
+  assert.equal((await fetchAnilistData("Hunter x Hunter", "ANIME", 46298, { ...opts, year: "2011" })).id, 11061);
+  // No candidate near the year: keep AniList's order.
+  assert.equal(api.pickAnilistMatch(page, { year: 2020 }).id, 136);
 });
 
 test("AoT: season 3 maps to Season 3 / Season 3 Part 2, not Season 1", () => {
