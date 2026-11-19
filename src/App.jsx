@@ -36,6 +36,8 @@ import SetupScreen from "./components/SetupScreen";
 // via Settings overrides it.
 const BUILTIN_TMDB_TOKEN = (import.meta.env.VITE_TMDB_TOKEN || "").trim();
 import { useGamepadNav } from "./utils/useGamepadNav";
+import { saveNavState, loadNavState, isRecoveryBoot } from "./utils/navHistory";
+import { getActiveProfileId } from "./utils/profileScope";
 
 const KeyboardShortcutsModal = lazy(() => import("./components/KeyboardShortcutsModal"));
 const SearchModal = lazy(() => import("./components/SearchModal"));
@@ -71,8 +73,15 @@ export default function App() {
   const [apiKeyLoaded, setApiKeyLoaded] = useState(false);
   const [skipped, setSkipped] = useState(false);
   const [apiKeyStatus, setApiKeyStatus] = useState("checking"); // 'checking' | 'ok' | 'invalid_token' | 'unreachable'
-  const [page, setPage] = useState(() => storage.get("startPage") || "home");
-  const [selected, setSelected] = useState(null);
+  // After the iOS web content process was killed and reloaded, come back to
+  // the screen (and back stack) the viewer was on instead of the start page.
+  const [recovered] = useState(() =>
+    isRecoveryBoot() ? loadNavState(getActiveProfileId()) : null,
+  );
+  const [page, setPage] = useState(
+    () => recovered?.page || storage.get("startPage") || "home",
+  );
+  const [selected, setSelected] = useState(() => recovered?.selected ?? null);
   const [showSearch, setShowSearch] = useState(false);
   const [dlSearchOpen, setDlSearchOpen] = useState(false);
   const [librarySort, setLibrarySort] = useState(
@@ -82,7 +91,7 @@ export default function App() {
   const [platform, setPlatform] = useState(null);
 
   // Navigation history stack for Ctrl+Z back navigation
-  const [navStack, setNavStack] = useState([]);
+  const [navStack, setNavStack] = useState(() => recovered?.stack || []);
 
   const [saved, setSaved] = useState(() => storage.get("saved") || {});
   // Separate order array for drag-and-drop reordering
@@ -679,6 +688,11 @@ export default function App() {
   useEffect(() => {
     selectedRef.current = selected;
   }, [selected]);
+
+  // Keep the current screen and back stack so a WebContent reload can restore them.
+  useEffect(() => {
+    saveNavState({ profileId: getActiveProfileId(), page, selected, stack: navStack });
+  }, [page, selected, navStack]);
 
   const navigateBack = useCallback(() => {
     setNavStack((prev) => {

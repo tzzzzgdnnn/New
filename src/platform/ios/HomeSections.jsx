@@ -338,6 +338,14 @@ export function Billboard({ items, apiKey, onSelect, kicker = "Trending Now" }) 
   const cur = list.length ? idx % list.length : 0;
   const item = list[cur];
   const logo = useLogo(item, apiKey);
+  // Only the current backdrop and the one fading out stay in the DOM: every
+  // mounted backdrop is a full-screen decoded bitmap plus its own transform
+  // layer, which added up on each Home remount.
+  const prevRef = useRef(cur);
+  const prev = prevRef.current;
+  useEffect(() => {
+    prevRef.current = cur;
+  }, [cur]);
   useEffect(() => {
     if (list.length < 2) return;
     const t = setTimeout(() => setIdx((i) => (i + 1) % list.length), 8000);
@@ -357,17 +365,19 @@ export function Billboard({ items, apiKey, onSelect, kicker = "Trending Now" }) 
         touchX.current = null;
       }}
     >
-      {list.map((it, i) => (
-        <img
-          key={`${typeOf(it)}_${it.id}`}
-          className={"sb-bill-bg" + (i === cur ? " on" : "")}
-          // w1280 is sharp on any phone and a fraction of "original".
-          src={imgUrl(it.backdrop_path, "w1280")}
-          alt=""
-          decoding="async"
-          fetchpriority={i === cur ? "high" : "low"}
-        />
-      ))}
+      {list.map((it, i) =>
+        i === cur || i === prev ? (
+          <img
+            key={`${typeOf(it)}_${it.id}`}
+            className={"sb-bill-bg" + (i === cur ? " on" : "")}
+            // w1280 is sharp on any phone and a fraction of "original".
+            src={imgUrl(it.backdrop_path, "w1280")}
+            alt=""
+            decoding="async"
+            fetchpriority={i === cur ? "high" : "low"}
+          />
+        ) : null,
+      )}
       <div className="sb-bill-shade" />
       <div className="sb-bill-body" key={`${typeOf(item)}_${item.id}`}>
         <div className="sb-bill-kicker">

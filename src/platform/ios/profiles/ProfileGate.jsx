@@ -2,6 +2,7 @@
 // app for that profile. Switching remounts the app so every screen re-reads
 // the new profile's history, lists, progress and settings.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { ProfileContext } from "./ProfileContext";
 import WhoIsWatching from "./WhoIsWatching";
 import ProfileEditor from "./ProfileEditor";
@@ -13,10 +14,12 @@ import {
   createProfile,
   deleteProfile,
   ensureProfiles,
+  getLastProfileId,
   listProfiles,
   loadProfiles,
   updateProfile,
 } from "./profileStore";
+import { isRecoveryBoot } from "../../../utils/navHistory";
 import "./profiles.css";
 
 // Overlay states: the picker, the picker in manage mode, or none.
@@ -41,10 +44,16 @@ export default function ProfileGate({ children }) {
         // A reload or WebView back-navigation inside this session goes
         // straight back into the profile already entered, not the picker.
         try {
-          const sid = sessionStorage.getItem(SESSION_KEY);
+          // After a WebContent-process kill sessionStorage may be gone with
+          // the process; the native side flags that reload, and the last
+          // profile used (already unlocked this session) is re-entered.
+          let sid = sessionStorage.getItem(SESSION_KEY);
+          if (!sid && isRecoveryBoot()) sid = getLastProfileId();
           const p = sid && list.find((x) => x.id === sid);
           if (p) {
             activateProfile(p);
+            try { sessionStorage.setItem(SESSION_KEY, p.id); } catch {}
+            activeRef.current = p;
             setActive(p);
             setOverlay(null);
           }
@@ -61,8 +70,17 @@ export default function ProfileGate({ children }) {
 
   const refresh = () => setProfiles(listProfiles());
 
+  const activeRef = useRef(null);
+  activeRef.current = active;
   const enteredAt = useRef(0);
   const enter = useCallback((profile) => {
+    // Switching people: unmount the previous person's app *before* the
+    // storage scope changes, so nothing it still writes on the way out
+    // (progress reports, history, settings) lands in the new profile.
+    if (activeRef.current && activeRef.current.id !== profile.id) {
+      flushSync(() => setActive(null));
+    }
+    activeRef.current = profile;
     activateProfile(profile);
     try { sessionStorage.setItem(SESSION_KEY, profile.id); } catch {}
     enteredAt.current = Date.now();
@@ -90,18 +108,26 @@ export default function ProfileGate({ children }) {
         const updated = await updateProfile(editing.id, fields);
         if (updated.id === active?.id) enter(updated);
       }
+      setError(null);
     } catch (err) {
       console.warn("[profiles] save failed", err);
+      setError(err?.message || "Could not save the profile");
     }
     setEditing(null);
     refresh();
   };
+  const [error, setError] = useState(null);
 
   const removeEdited = () => {
     const removedId = editing.id;
-    deleteProfile(removedId).catch((err) => console.warn("[profiles] delete failed", err));
     setEditing(null);
-    refresh();
+    // Refresh once the delete has really happened (it is async).
+    deleteProfile(removedId)
+      .catch((err) => {
+        console.warn("[profiles] delete failed", err);
+        setError(err?.message || "Could not delete the profile");
+      })
+      .finally(refresh);
     if (removedId === active?.id) {
       try { sessionStorage.removeItem(SESSION_KEY); } catch {}
       setActive(null);
@@ -152,6 +178,11 @@ export default function ProfileGate({ children }) {
           onDelete={removeEdited}
           onCancel={() => setEditing(null)}
         />
+      )}
+      {error && (
+        <div className="sp-profile-error" role="alert" onClick={() => setError(null)}>
+          {error}
+        </div>
       )}
       {pinTarget && (
         <PinPad

@@ -442,6 +442,57 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         ucc.add(WeakBridgeHandler(self), name: "sbPrefs")
         ucc.add(WeakBridgeHandler(self), name: "sbUpNext")
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        installWebProcessRecovery(wv)
+    }
+
+    // MARK: Web content process recovery
+    //
+    // When iOS kills the app's WebContent process (memory pressure, crash),
+    // Capacitor reloads the page, which used to land the viewer on the
+    // opening screen with no trace. Capacitor's own handler still reloads;
+    // before it does, a document-start script is added that tells the
+    // reloaded app it is recovering (so it restores the screen it was on)
+    // and records the event for Settings → Diagnostics.
+
+    private var navProxy: NavigationDelegateProxy?
+    private var memoryObserver: NSObjectProtocol?
+
+    private func installWebProcessRecovery(_ wv: WKWebView) {
+        let proxy = NavigationDelegateProxy(inner: wv.navigationDelegate)
+        proxy.onTerminate = { [weak self] webView in self?.webContentTerminated(webView) }
+        navProxy = proxy
+        wv.navigationDelegate = proxy
+        memoryObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            print("[SuperPlayer] memory warning")
+            self?.bridge?.webView?.evaluateJavaScript(
+                "window.dispatchEvent(new CustomEvent('sb-native-diag',{detail:{type:'memory-warning'}}))",
+                completionHandler: nil)
+        }
+    }
+
+    private var terminations = 0
+
+    private func webContentTerminated(_ webView: WKWebView) {
+        terminations += 1
+        let state = UIApplication.shared.applicationState == .active ? "active" : "background"
+        print("[SuperPlayer] web content process terminated (\(terminations)) while \(state)")
+        let payload: [String: Any] = [
+            "reason": "webcontent-terminated",
+            "at": Date().timeIntervalSince1970 * 1000,
+            "count": terminations,
+            "appState": state,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else { return }
+        webView.configuration.userContentController.addUserScript(WKUserScript(
+            source: "window.__sbRecovered = \(json);",
+            injectionTime: .atDocumentStart, forMainFrameOnly: true))
+    }
+
+    deinit {
+        if let o = memoryObserver { NotificationCenter.default.removeObserver(o) }
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
@@ -721,6 +772,30 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         let v = UIDevice.current.systemVersion.replacingOccurrences(of: ".", with: "_")
         let short = UIDevice.current.systemVersion.split(separator: ".").prefix(2).joined(separator: ".")
         return "Mozilla/5.0 (iPhone; CPU iPhone OS \(v) like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/\(short) Mobile/15E148 Safari/604.1"
+    }
+}
+
+/// Sits in front of Capacitor's navigation delegate: forwards every call to
+/// it, and reports WebContent process termination first.
+final class NavigationDelegateProxy: NSObject, WKNavigationDelegate {
+    private weak var inner: WKNavigationDelegate?
+    var onTerminate: ((WKWebView) -> Void)?
+
+    init(inner: WKNavigationDelegate?) { self.inner = inner }
+
+    override func responds(to aSelector: Selector!) -> Bool {
+        super.responds(to: aSelector) || (inner?.responds(to: aSelector) ?? false)
+    }
+
+    override func forwardingTarget(for aSelector: Selector!) -> Any? {
+        if let inner = inner, inner.responds(to: aSelector) { return inner }
+        return super.forwardingTarget(for: aSelector)
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        onTerminate?(webView)
+        if let inner = inner { inner.webViewWebContentProcessDidTerminate?(webView) }
+        else { webView.reload() }
     }
 }
 

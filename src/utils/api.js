@@ -44,7 +44,7 @@ const TMDB_CACHE_TTL = 5 * 60 * 1000; // fresh window
 const TMDB_STALE_MAX = 24 * 60 * 60 * 1000; // oldest copy still served
 const TMDB_MEM_MAX = 200;
 const TMDB_DISK_PREFIX = "sb_tmdb:";
-const TMDB_DISK_MAX = 150;
+const TMDB_DISK_MAX = 80;
 
 const _diskKey = (key) => TMDB_DISK_PREFIX + key.slice(key.indexOf("|") + 1);
 
@@ -59,9 +59,17 @@ function _readDisk(key) {
   }
 }
 
+// One big detail response (a long-running show with credits) can be 100+ KB;
+// 150 of those overran WebKit's ~5 MB localStorage quota, after which the
+// app's own writes (progress, history, profiles) failed silently. Large
+// responses stay in memory only.
+const TMDB_DISK_ENTRY_MAX = 48 * 1024;
+
 function _writeDisk(key, entry) {
   try {
-    localStorage.setItem(_diskKey(key), JSON.stringify(entry));
+    const json = JSON.stringify(entry);
+    if (json.length > TMDB_DISK_ENTRY_MAX) return;
+    localStorage.setItem(_diskKey(key), json);
   } catch {
     _pruneDisk(true);
   }
