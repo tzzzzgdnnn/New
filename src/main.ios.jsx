@@ -36,7 +36,6 @@ if (import.meta.env.VITE_WEB) {
       ".sb-android,.sb-android body,.sb-android #root{background:#000!important}",
       ".sb-android{--surface:#141416;--sp-group-bg:#18181b}",
       ".sb-android body{-webkit-font-smoothing:antialiased;color:#fff}",
-      ".sb-android img{filter:contrast(1.04) saturate(1.05)}",
     ].join("");
     document.head.appendChild(st);
   }
