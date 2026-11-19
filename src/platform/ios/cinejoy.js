@@ -82,5 +82,12 @@ export async function cinejoyCandidates(ctx, { waitMs = WAIT_ON_PLAY_MS } = {}) 
   return [{ id: CINEJOY_ID, label: CINEJOY_LABEL, url: `${r.source}#sb-direct` }];
 }
 
+/** The finished lookup for `ctx` if it is already in hand (sync), else null. */
+export function cachedCinejoy(ctx) {
+  const key = cinejoyKey(ctx);
+  const hit = key && cache.get(key);
+  return hit?.result?.ok ? hit.result : null;
+}
+
 /** Forget every lookup (tests). */
 export const clearCinejoyCache = () => cache.clear();

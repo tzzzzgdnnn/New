@@ -34,9 +34,13 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   const video = document.createElement("video");
   video.className = "sb-direct-video";
   video.controls = true;
-  video.playsInline = true;
+  // iPhone: no playsinline, so play() opens Apple's own full-screen player.
+  const isIPhone = /iPhone|iPod/.test(navigator.userAgent);
+  const nativeHls = !!video.canPlayType("application/vnd.apple.mpegurl");
+  video.playsInline = !isIPhone;
+  if (!isIPhone) video.setAttribute("playsinline", "");
   video.autoplay = true;
-  video.setAttribute("playsinline", "");
+  video.preload = "auto";
   // Required for ManagedMediaSource (hls.js on iPhone, iOS 17.1+).
   video.disableRemotePlayback = true;
   try { video.playbackRate = Number(localStorage.getItem("sbWebRate")) || 1; } catch {}
@@ -50,7 +54,7 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     onFail?.(why);
   };
   const timer = setTimeout(() => !(video.currentTime > 0) && fail("timeout"), timeoutMs);
-  if (Hls.isSupported()) {
+  const startHls = () => {
     hls = new Hls({
       loader: UnwrapLoader,
       enableWorker: true,
@@ -64,21 +68,38 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     hls.on(Hls.Events.ERROR, (_, d) => d.fatal && fail(d.details));
     hls.loadSource(src);
     hls.attachMedia(video);
+    video.play().catch(() => {});
+  };
+  if (nativeHls && isIPhone) {
+    // Safari's own HLS (Apple's player, like the app): fastest start. If it
+    // can't read this host's segments, hls.js takes over.
+    video.src = src;
+    video.addEventListener("error", () => {
+      if (done || hls) return;
+      if (Hls.isSupported()) { video.removeAttribute("src"); video.load(); startHls(); }
+      else fail("video error");
+    });
+  } else if (Hls.isSupported()) {
+    startHls();
   } else {
     video.src = src;
     video.addEventListener("error", () => fail("video error"));
   }
   if (startAt > 0) video.addEventListener("loadedmetadata", () => (video.currentTime = startAt), { once: true });
   // iPhone: open Apple's own full-screen player as soon as the stream plays.
-  const isIPhone = /iPhone|iPod/.test(navigator.userAgent);
   const goFull = () => {
     try {
       if (isIPhone && video.webkitEnterFullscreen) video.webkitEnterFullscreen();
       else (video.requestFullscreen || video.webkitRequestFullscreen)?.call(video)?.catch?.(() => {});
     } catch {}
   };
+  // play() right now, inside the Play tap when the stream was already known,
+  // so iPhone opens its own full-screen player; else on canplay; if the
+  // browser still blocks it, one tap on the button.
+  video.play().catch(() => {});
   video.addEventListener("canplay", () => {
-    video.play().then(goFull).catch(() => {
+    if (!video.paused) return;
+    video.play().then(() => !isIPhone && goFull()).catch(() => {
       // Autoplay blocked: one tap starts it, full screen.
       fullBtn.textContent = "▶  Play";
       fullBtn.style.display = "";

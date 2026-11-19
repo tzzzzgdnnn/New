@@ -19,6 +19,15 @@ installDiagnostics();
 // offline), installed before the app asks whether downloads are available.
 if (import.meta.env.VITE_WEB) {
   document.documentElement.classList.add("sb-web");
+  // Cinejoy (direct, no ads) becomes the default server once on the web app.
+  try {
+    if (!localStorage.getItem("sbWebCinejoyDefault")) {
+      localStorage.setItem("sbWebCinejoyDefault", "1");
+      for (const k of Object.keys(localStorage)) {
+        if (/playerSource/i.test(k) && !/anime/i.test(k)) localStorage.setItem(k, JSON.stringify("cinejoy-direct"));
+      }
+    }
+  } catch {}
   import("./platform/web/web.css");
 }
 const webReady = import.meta.env.VITE_WEB

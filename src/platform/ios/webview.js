@@ -17,7 +17,8 @@ import { autoOrder, prefetchRanking } from "./autoRank";
 import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
 import { anipmCandidates, ANIPM_ID } from "./anipm";
 import { movyCandidates, MOVY_ID } from "./movy";
-import { cinejoyCandidates, CINEJOY_ID } from "./cinejoy";
+import { cinejoyCandidates, cachedCinejoy, prefetchCinejoy, CINEJOY_ID } from "./cinejoy";
+import { playDirect } from "../web/directPlayer";
 import { parseServerKey } from "../../utils/servers/catalog";
 import { diag } from "../../utils/diag";
 
@@ -456,27 +457,38 @@ function upgrade(wv) {
   const tryWebDirect = (url) => {
     const ctx = currentCtx();
     if (!ctx || ctx.isAnime || !ctx.tmdbId) return false;
-    if (readStored("playerSource") && readStored("playerSource") !== CINEJOY_ID && !isAutoPick()) return false;
+    const picked = readStored("playerSource");
+    if (picked && picked !== CINEJOY_ID && !isAutoPick() && !/cinejoy\.invalid/.test(url)) return false;
     directFor = url;
     iframe.src = "about:blank";
-    showCard("Loading…", false);
     fire("dom-ready");
-    Promise.all([cinejoyCandidates(ctx, { waitMs: 6000 }), import("../web/directPlayer")])
-      .then(([cands, m]) => {
+    const start = (src) => {
+      hideCard();
+      log("playing", "Cinejoy (direct)");
+      fire("did-finish-load");
+      // Called synchronously from the Play tap when the stream is already
+      // known, so iPhone opens its own full-screen player right away.
+      stopDirect = playDirect(wv, src, {
+        startAt: ctx.startAt || 0,
+        onFail: (why) => {
+          if (directFor !== url) return;
+          diag("player", `web direct failed: ${why}`);
+          stopDirect = null;
+          loadUrl(url, { webOnly: true });
+        },
+      });
+    };
+    const hit = cachedCinejoy(ctx);
+    if (hit) {
+      start(hit.source);
+      return true;
+    }
+    showCard("Finding the stream…", false);
+    Promise.race([prefetchCinejoy(ctx), new Promise((r) => setTimeout(() => r(null), 8000))])
+      .then((r) => {
         if (directFor !== url) return;
-        if (!cands.length) throw new Error("no stream");
-        hideCard();
-        log("playing", "Cinejoy (direct)");
-        fire("did-finish-load");
-        stopDirect = m.playDirect(wv, cands[0].url.replace(/#sb-direct$/, ""), {
-          startAt: ctx.startAt || 0,
-          onFail: (why) => {
-            if (directFor !== url) return;
-            diag("player", `web direct failed: ${why}`);
-            stopDirect = null;
-            loadUrl(url, { webOnly: true });
-          },
-        });
+        if (!r?.ok) throw new Error("no stream");
+        start(r.source);
       })
       .catch(() => {
         if (directFor === url) { hideCard(); loadUrl(url, { webOnly: true }); }
