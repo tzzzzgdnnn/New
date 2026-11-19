@@ -659,6 +659,65 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         ucc.add(WeakBridgeHandler(self), name: "sbUpNext")
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         installWebProcessRecovery(wv)
+        ucc.addScriptMessageHandler(DownloadMessageHandler(self), contentWorld: .page, name: "sbDownload")
+        DownloadManager.shared.onEvent = { [weak self] e in self?.sendToJS("__sbDownloadEvent", e) }
+    }
+
+    // MARK: Downloads (sbDownload)
+
+    private lazy var dlSniffer = StreamSniffer(container: view)
+
+    /// Finds a stream for a title (same servers as Play) and reports what can
+    /// be downloaded: an MP4, a media playlist, or a master playlist's variants.
+    fileprivate func probeDownload(_ body: [String: Any], reply: @escaping ([String: Any]) -> Void) {
+        let list = (body["candidates"] as? [[String: Any]] ?? []).compactMap { d -> SniffCandidate? in
+            guard let u = (d["url"] as? String).flatMap({ URL(string: $0) }), let id = d["id"] as? String else { return nil }
+            return SniffCandidate(id: id, label: (d["label"] as? String) ?? id, url: u)
+        }
+        guard !list.isEmpty else { reply(["ok": false, "error": "No server for this title"]); return }
+        dlSniffer.start(list) { [weak self] r in
+            self?.dlSniffer.cancel()
+            guard let r = r else { reply(["ok": false, "error": "No server returned a downloadable stream"]); return }
+            var headers = r.headers
+            if !r.cookies.isEmpty {
+                headers["Cookie"] = r.cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+            }
+            var result: [String: Any] = [
+                "ok": true, "streamUrl": r.url.absoluteString, "headers": headers, "server": r.server.id,
+                "subtitles": r.subtitles.map { ["url": $0.url.absoluteString, "lang": $0.label ?? "sub"] },
+            ]
+            if r.url.pathExtension.lowercased() == "mp4" {
+                result["kind"] = "mp4"
+                reply(result); return
+            }
+            result["kind"] = "hls"
+            var req = URLRequest(url: r.url, timeoutInterval: 15)
+            headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
+            URLSession.shared.dataTask(with: req) { data, resp, _ in
+                let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                if text.contains("#EXT-X-STREAM-INF") {
+                    result["variants"] = HLSMaster.variants(text, base: resp?.url ?? r.url)
+                }
+                DispatchQueue.main.async { reply(result) }
+            }.resume()
+        }
+    }
+
+    /// Plays a finished download in the native player, offline: no server
+    /// list or retry from the last online session carries over.
+    fileprivate func playDownload(_ id: String, ctx: [String: Any]) -> Bool {
+        guard let url = DownloadManager.shared.playURL(id) else { return false }
+        sniffer.cancel()
+        resolveToken = nil
+        resolveList = []
+        context = ["ctx": ctx]
+        let vc = makePlayer(currentServer: nil, sniffBased: false)
+        presentOnTop(vc)
+        vc.load(url: url, headers: [:], cookies: [], server: nil)
+        let subs = DownloadManager.shared.subtitleFiles(id)
+        if !subs.isEmpty { vc.setStreamSubtitles(subs, headers: [:]) }
+        sbLog("offline play \(id)")
+        return true
     }
 
     // MARK: Web content process recovery
@@ -1026,6 +1085,53 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         let v = UIDevice.current.systemVersion.replacingOccurrences(of: ".", with: "_")
         let short = UIDevice.current.systemVersion.split(separator: ".").prefix(2).joined(separator: ".")
         return "Mozilla/5.0 (iPhone; CPU iPhone OS \(v) like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/\(short) Mobile/15E148 Safari/604.1"
+    }
+}
+
+/// window.webkit.messageHandlers.sbDownload: {op, …} -> reply.
+final class DownloadMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
+    private weak var bridge: StreambertBridgeViewController?
+    init(_ bridge: StreambertBridgeViewController) { self.bridge = bridge }
+
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage,
+                               replyHandler: @escaping (Any?, String?) -> Void) {
+        let dm = DownloadManager.shared
+        guard let b = message.body as? [String: Any], let op = b["op"] as? String else {
+            replyHandler(nil, "bad message"); return
+        }
+        let id = b["id"] as? String ?? ""
+        switch op {
+        case "list": replyHandler(dm.list(), nil)
+        case "probe":
+            guard let bridge = bridge else { replyHandler(["ok": false, "error": "unavailable"], nil); return }
+            bridge.probeDownload(b) { replyHandler($0, nil) }
+        case "start":
+            guard let s = (b["streamUrl"] as? String).flatMap({ URL(string: $0) }) else {
+                replyHandler(["ok": false, "error": "No stream"], nil); return
+            }
+            let subs = (b["subtitles"] as? [[String: Any]] ?? []).compactMap { d -> (url: URL, lang: String)? in
+                guard let u = (d["url"] as? String).flatMap({ URL(string: $0) }) else { return nil }
+                return (u, (d["lang"] as? String) ?? "sub")
+            }
+            let req = DownloadManager.StartRequest(
+                id: id, name: b["name"] as? String ?? "Video", url: s,
+                variant: (b["variantUrl"] as? String).flatMap { URL(string: $0) },
+                audio: (b["audioUrl"] as? String).flatMap { URL(string: $0) },
+                headers: b["headers"] as? [String: String] ?? [:],
+                estBytes: (b["estBytes"] as? NSNumber)?.int64Value ?? 0,
+                subtitles: subs, meta: b["meta"] as? String ?? "{}")
+            dm.start(req) { err in
+                let result: [String: Any] = err.map { ["ok": false, "error": $0] as [String: Any] } ?? ["ok": true, "id": id]
+                replyHandler(result, nil)
+            }
+        case "pause": dm.pause(id); replyHandler(true, nil)
+        case "resume": dm.resume(id); replyHandler(true, nil)
+        case "remove": dm.remove(id); replyHandler(true, nil)
+        case "play":
+            replyHandler(bridge?.playDownload(id, ctx: b["ctx"] as? [String: Any] ?? [:]) ?? false, nil)
+        default: replyHandler(nil, "unknown op")
+        }
     }
 }
 
