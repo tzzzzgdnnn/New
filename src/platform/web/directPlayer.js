@@ -88,7 +88,7 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     stop();
     onFail?.(why);
   };
-  const timer = setTimeout(() => !(video.currentTime > 0) && fail("timeout"), timeoutMs);
+  const timer = setTimeout(() => (IS_IPHONE ? video.readyState < 1 && !(video.currentTime > 0) : !(video.currentTime > 0)) && fail("timeout"), timeoutMs);
 
   // Big centre button: Play (when the browser wants a tap) or Full screen.
   const bigBtn = document.createElement("button");
@@ -144,17 +144,31 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   }
   if (startAt > 0) on(video, "loadedmetadata", () => (video.currentTime = startAt), { once: true });
 
-  // Start now (inside the Play tap when the stream was already known) and go
-  // full screen in the same tap.
-  if (!canBoxFullscreen(box) || !fsElement()) goFull();
-  const tapPlay = video.play();
+  // iPhone: Apple's own player only opens from a tap made once the video has
+  // loaded, so (unless Apple's player is already up from the last episode)
+  // it waits on one big Play button; that tap opens Apple's player and plays.
+  const iphoneWait = IS_IPHONE && !video.webkitDisplayingFullscreen;
+  if (iphoneWait) {
+    video.autoplay = false;
+    showBtn("▶  Play");
+    if (video.readyState < 1) {
+      bigBtn.textContent = "Loading…";
+      on(video, "loadedmetadata", () => showBtn("▶  Play"), { once: true });
+    }
+  }
+  // Any play on iPhone (the inline controls too) goes to Apple's player.
+  if (IS_IPHONE) on(video, "play", () => { if (!video.webkitDisplayingFullscreen && video.readyState >= 1) try { video.webkitEnterFullscreen(); } catch {} });
+  // Elsewhere: start now and go full screen in the same tap.
+  if (!IS_IPHONE && (!canBoxFullscreen(box) || !fsElement())) goFull();
+  const tapPlay = iphoneWait ? null : video.play();
   tapPlay?.catch?.(() => {
     if (done || !video.paused) return;
     showBtn("▶  Play");
     clearTimeout(timer);
   });
-  on(video, "loadedmetadata", goFull, { once: true });
+  if (!iphoneWait) on(video, "loadedmetadata", goFull, { once: true });
   on(video, "canplay", () => {
+    if (iphoneWait && video.paused) return;
     if (!video.paused) return goFull();
     video.play().then(goFull).catch(() => showBtn("▶  Play"));
   }, { once: true });
@@ -166,6 +180,12 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     setTimeout(() => !done && !isFull() && !video.paused && showBtn("⛶  Full screen"), 600);
   });
   bigBtn.onclick = () => {
+    // iPhone before the video has loaded: Apple's player can't open yet.
+    if (IS_IPHONE && video.readyState < 1) {
+      bigBtn.textContent = "Loading…";
+      on(video, "loadedmetadata", () => showBtn("▶  Play"), { once: true });
+      return;
+    }
     bigBtn.style.display = "none";
     // Inside the tap: play and full screen together (iPhone needs both here).
     const p = video.play();
