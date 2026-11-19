@@ -640,13 +640,17 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
             guard let key = progressKey else { return }
             self?.sendToJS("__sbNativeProgress", ["key": key, "time": time, "duration": duration, "inOutro": inOutro])
         }
-        vc.onClose = { [weak self] position in
+        vc.onClose = { [weak self, weak vc] position in
             guard let self = self else { return }
             self.sniffer.cancel()
             if let t = self.failedToken { self.notifyJS(token: t, ok: false, server: nil) }
             self.failedToken = nil
             self.resolveToken = nil
             self.candidates = []
+            // Player UI state ends with the player: the next episode opens a
+            // fresh player instead of reusing a dismissed one.
+            if self.playerVC == nil || self.playerVC === vc { self.playerVC = nil }
+            self.presentedFor = nil
             self.sendToJS("__sbNativeClosed", ["time": position])
         }
         playerVC = vc
@@ -882,6 +886,18 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private var landscapeVideoConstraints: [NSLayoutConstraint] = []
     private var portraitVideoConstraints: [NSLayoutConstraint] = []
     private var portraitLayoutActive = false
+    // Bottom bar layout: stacked in portrait, one row in landscape.
+    private let bottomColumn = UIStackView()
+    private let optionsDivider = UIView()
+    private let optionsScroll = UIScrollView()
+    private var portraitControlConstraints: [NSLayoutConstraint] = []
+    private var landscapeControlConstraints: [NSLayoutConstraint] = []
+    /// "Watch Subbed" while a Dub stream is slow to turn up, and on the failure screen.
+    private let watchSubbedButton = UIButton(type: .system)
+    private let failureSubbedButton = UIButton(type: .system)
+    private var dubStallWork: DispatchWorkItem?
+    private static let dubStallDelay: TimeInterval = 20
+    fileprivate var qualityMenuHasSize = false
     private let healthDot = HealthDotView()
     private let healthLabel = PaddedLabel()
     private let healthMonitor = ConnectionHealthMonitor()
@@ -1021,10 +1037,19 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         applyVideoLayout()
     }
 
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        videoView.playerLayer.frame = videoView.bounds
+    // Rotation: switch layouts with the size change so the video re-centers
+    // (portrait) or fills the screen (landscape) in the same animation.
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        _ = coordinator.animate(alongsideTransition: { [weak self] _ in
+            self?.view.setNeedsLayout()
+            self?.view.layoutIfNeeded()
+        })
     }
+
+    // No manual layer frame here: playerLayer is videoView's own backing
+    // layer, so it already follows the view. Setting its frame to `bounds`
+    // moved the whole view to (0, 0), which put portrait video at the top.
 
     private var isPortrait: Bool { view.bounds.height > view.bounds.width }
 
@@ -1035,8 +1060,20 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         portraitLayoutActive = portrait
         NSLayoutConstraint.deactivate(portrait ? landscapeVideoConstraints : portraitVideoConstraints)
         NSLayoutConstraint.activate(portrait ? portraitVideoConstraints : landscapeVideoConstraints)
+        applyControlsLayout(portrait: portrait)
         let symbol = portrait ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left"
         rotateButton.setImage(UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
+    }
+
+    /// Portrait: scrubber on top, option buttons below. Landscape: a single
+    /// row (scrubber left, options right), so the bar stays short and reads
+    /// across the wide screen instead of stacking the portrait layout.
+    private func applyControlsLayout(portrait: Bool) {
+        NSLayoutConstraint.deactivate(portrait ? landscapeControlConstraints : portraitControlConstraints)
+        bottomColumn.axis = portrait ? .vertical : .horizontal
+        bottomColumn.alignment = portrait ? .fill : .center
+        bottomColumn.spacing = portrait ? 8 : 14
+        NSLayoutConstraint.activate(portrait ? portraitControlConstraints : landscapeControlConstraints)
     }
 
     /// Rotate button: turn to landscape (or back to portrait) on request only.
@@ -1067,6 +1104,47 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         failureView.isHidden = true
         spinner.startAnimating()
         setStatus(text)
+        scheduleDubStallHint()
+    }
+
+    // MARK: No Dub available (UI only: switching uses the normal server menu path)
+
+    private var wantsDub: Bool { isAnime && (subtitleInfo["dubMode"] as? String) == "dub" }
+
+    /// The same server with Japanese audio and subtitles ("<id>:sub").
+    private func subbedServerId() -> String? {
+        guard let cur = currentServer ?? servers.first?.0 else { return nil }
+        let base = (cur.hasSuffix(":dub") || cur.hasSuffix(":sub")) ? String(cur.dropLast(4)) : cur
+        return base.isEmpty ? nil : base + ":sub"
+    }
+
+    /// Dub still not found after a while: say so and offer Watch Subbed, once
+    /// per attempt, instead of leaving only a spinner.
+    private func scheduleDubStallHint() {
+        guard wantsDub, dubStallWork == nil else { return }
+        let w = DispatchWorkItem { [weak self] in
+            guard let self = self, self.wantsDub, self.failureView.isHidden,
+                  self.player?.currentItem?.status != .readyToPlay else { return }
+            self.setStatus("No dub found yet. This episode may only be subbed.")
+            self.watchSubbedButton.isHidden = self.subbedServerId() == nil
+        }
+        dubStallWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.dubStallDelay, execute: w)
+    }
+
+    private func clearDubStallHint() {
+        dubStallWork?.cancel()
+        dubStallWork = nil
+        watchSubbedButton.isHidden = true
+    }
+
+    private func watchSubbed() {
+        guard let id = subbedServerId() else { return }
+        clearDubStallHint()
+        subtitleInfo["dubMode"] = "sub"
+        failureSubbedButton.isHidden = true
+        failureView.isHidden = true
+        switchServer(id)
     }
 
     /// Every server failed: message, Retry and a server picker. Never an
@@ -1077,6 +1155,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         spinner.stopAnimating()
         setStatus(nil)
         failureLabel.text = text
+        clearDubStallHint()
+        failureSubbedButton.isHidden = !wantsDub || subbedServerId() == nil
         failureView.isHidden = false
         setControls(visible: true)
     }
@@ -1138,6 +1218,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             pendingSeek = lastPosition
         }
         failureView.isHidden = true
+        clearDubStallHint()
         resetStreamSubtitles()
         setStatus(nil)
         spinner.startAnimating()
@@ -1167,11 +1248,18 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             videoView.topAnchor.constraint(equalTo: view.topAnchor),
             videoView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ]
+        // Portrait: a 16:9 box, full width, centered in the safe area (the
+        // video itself is aspect-fit inside it by videoGravity).
+        let safe = view.safeAreaLayoutGuide
+        let fullWidth = videoView.widthAnchor.constraint(equalTo: view.widthAnchor)
+        fullWidth.priority = .defaultHigh
         portraitVideoConstraints = [
-            videoView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            videoView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            videoView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            videoView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            fullWidth,
+            videoView.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor),
+            videoView.centerYAnchor.constraint(equalTo: safe.centerYAnchor),
             videoView.heightAnchor.constraint(equalTo: videoView.widthAnchor, multiplier: 9.0 / 16.0),
+            videoView.heightAnchor.constraint(lessThanOrEqualTo: safe.heightAnchor),
         ]
         NSLayoutConstraint.activate(landscapeVideoConstraints)
 
@@ -1266,6 +1354,10 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private func tick(_ t: Double) {
         updateSubtitle(t)
         guard let item = player?.currentItem else { return }
+        if !qualityMenuHasSize, item.presentationSize.height > 0 {
+            qualityMenuHasSize = true
+            refreshQualityMenu()
+        }
         if item.status == .readyToPlay, t > 1, pendingSeek == 0 { lastPosition = t }
         if Date().timeIntervalSince(lastReportAt) >= Self.progressReportInterval,
            player?.timeControlStatus == .playing {
@@ -1391,7 +1483,6 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         optionsRow.spacing = 4
         optionsRow.translatesAutoresizingMaskIntoConstraints = false
         // Narrow screens: the row scrolls sideways instead of clipping labels.
-        let optionsScroll = UIScrollView()
         optionsScroll.showsHorizontalScrollIndicator = false
         optionsScroll.alwaysBounceHorizontal = false
         optionsScroll.addSubview(optionsRow)
@@ -1408,15 +1499,29 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             b.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.optionButtonMinWidth).isActive = true
         }
 
-        let divider = UIView()
-        divider.backgroundColor = UIColor(white: 1, alpha: 0.12)
-        divider.heightAnchor.constraint(equalToConstant: 1).isActive = true
-
-        let bottomColumn = UIStackView(arrangedSubviews: [bottomStack, divider, optionsScroll])
-        bottomColumn.axis = .vertical
-        bottomColumn.spacing = 8
+        optionsDivider.backgroundColor = UIColor(white: 1, alpha: 0.12)
+        for v in [bottomStack, optionsDivider, optionsScroll] { bottomColumn.addArrangedSubview(v) }
         bottomColumn.translatesAutoresizingMaskIntoConstraints = false
         bottomBar.contentView.addSubview(bottomColumn)
+
+        portraitControlConstraints = [
+            optionsDivider.heightAnchor.constraint(equalToConstant: 1),
+        ]
+        let optionsWidth = optionsScroll.widthAnchor.constraint(
+            equalToConstant: 5 * Self.optionButtonMinWidth + 4 * optionsRow.spacing)
+        optionsWidth.priority = .defaultHigh
+        let sliderMin = slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 140)
+        sliderMin.priority = .defaultHigh
+        landscapeControlConstraints = [
+            optionsDivider.widthAnchor.constraint(equalToConstant: 1),
+            optionsDivider.heightAnchor.constraint(equalToConstant: 28),
+            optionsWidth,
+            optionsScroll.widthAnchor.constraint(lessThanOrEqualTo: bottomBar.widthAnchor, multiplier: 0.55),
+            sliderMin,
+        ]
+        // Matches the landscape video constraints active at this point;
+        // applyVideoLayout switches both together.
+        applyControlsLayout(portrait: false)
 
         // Skip pill (bottom-right of the control layer, above the bar)
         skipButton.translatesAutoresizingMaskIntoConstraints = false
@@ -1593,6 +1698,26 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         buttons.spacing = 12
         failureView.addArrangedSubview(failureLabel)
         failureView.addArrangedSubview(buttons)
+
+        for b in [watchSubbedButton, failureSubbedButton] {
+            var c = UIButton.Configuration.filled()
+            c.title = "Watch Subbed"
+            c.subtitle = "Japanese audio with subtitles"
+            c.titleAlignment = .center
+            c.image = UIImage(systemName: "captions.bubble.fill")
+            c.imagePadding = 8
+            c.cornerStyle = .capsule
+            c.baseBackgroundColor = b === watchSubbedButton ? red : UIColor(white: 1, alpha: 0.16)
+            c.baseForegroundColor = .white
+            c.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 22, bottom: 10, trailing: 22)
+            b.configuration = c
+            b.isHidden = true
+            b.accessibilityLabel = "Watch subbed"
+            b.addAction(UIAction { [weak self] _ in self?.watchSubbed() }, for: .touchUpInside)
+        }
+        failureView.addArrangedSubview(failureSubbedButton)
+        watchSubbedButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(watchSubbedButton)
         failureView.axis = .vertical
         failureView.alignment = .center
         failureView.spacing = 18
@@ -1609,6 +1734,9 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             failureView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
             failureView.leadingAnchor.constraint(greaterThanOrEqualTo: safe.leadingAnchor, constant: 24),
             failureView.trailingAnchor.constraint(lessThanOrEqualTo: safe.trailingAnchor, constant: -24),
+            watchSubbedButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            watchSubbedButton.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 18),
+            watchSubbedButton.leadingAnchor.constraint(greaterThanOrEqualTo: safe.leadingAnchor, constant: 24),
         ])
     }
 
@@ -1673,7 +1801,10 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             self.controls.alpha = visible ? 1 : 0
             self.view.layoutIfNeeded()
         }
-        if visible { scheduleHide() }
+        if visible {
+            scheduleHide()
+            refreshQualityMenu()
+        }
     }
 
     private func scheduleHide() {
@@ -1699,10 +1830,30 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         healthMonitor.stop()
         let cb = onClose
         let position = lastPosition
+        resetSessionState()
         dismiss(animated: true) {
             cb?(position)
             after?()
         }
+    }
+
+    /// Closing ends this session: timers, observers, hints and the item go,
+    /// so nothing (audio, a watchdog, a stuck spinner or menu) carries over
+    /// to the next time an episode is opened.
+    private func resetSessionState() {
+        hideWork?.cancel(); hideWork = nil
+        toastWork?.cancel(); toastWork = nil
+        healthLabelWork?.cancel(); healthLabelWork = nil
+        clearDubStallHint()
+        if let t = timeObserver { player?.removeTimeObserver(t); timeObserver = nil }
+        statusObs?.invalidate(); statusObs = nil
+        if pip?.isPictureInPictureActive == true { pip?.stopPictureInPicture() }
+        player?.replaceCurrentItem(with: nil)
+        isScrubbing = false
+        userPaused = false
+        activeSkip = nil
+        skipButton.isHidden = true
+        spinner.stopAnimating()
     }
 
     @objc private func playTapped() {
@@ -2292,7 +2443,11 @@ extension StreambertPlayerViewController {
         audioButton.menu = deferred { [weak self] in self?.audioMenuItems() ?? [] }
         ccButton.menu = deferred { [weak self] in self?.subtitleMenuItems() ?? [] }
         speedButton.menu = deferred { [weak self] in self?.speedMenuItems() ?? [] }
-        qualityButton.menu = deferred { [weak self] in self?.qualityMenuItems() ?? [] }
+        // Not deferred: a deferred menu is measured before its rows load and
+        // comes up clipped. Fixed order keeps Max first even though the
+        // button sits at the bottom of the screen.
+        refreshQualityMenu()
+        if #available(iOS 16.0, *) { qualityButton.preferredMenuElementOrder = .fixed }
         for b in [audioButton, ccButton, speedButton, qualityButton, serverButton] {
             b.showsMenuAsPrimaryAction = true
             b.addAction(UIAction { [weak self] _ in self?.hideWork?.cancel() }, for: .menuActionTriggered)
@@ -2353,6 +2508,11 @@ extension StreambertPlayerViewController {
         }
     }
 
+    /// Rebuild the Quality menu so its checkmark and "Now playing" are current.
+    func refreshQualityMenu() {
+        qualityButton.menu = UIMenu(title: "Quality", children: qualityMenuItems())
+    }
+
     fileprivate func qualityMenuItems() -> [UIMenuElement] {
         // Caps the bit rate the HLS player may pick; Auto lets it adapt.
         // This screen's own resolution (iPhone 16e: 1170p), long side first.
@@ -2368,7 +2528,7 @@ extension StreambertPlayerViewController {
             ("480p", 1_500_000, CGSize(width: 854, height: 480)),
             ("Data saver (360p)", 800_000, CGSize(width: 640, height: 360)),
         ]
-        var items: [UIMenuElement] = options.map { o in
+        let choices: [UIMenuElement] = options.map { o in
             UIAction(title: o.0, state: qualityCap == o.1 ? .on : .off) { [weak self] _ in
                 guard let self = self, let item = self.player?.currentItem else { return }
                 self.qualityCap = o.1
@@ -2377,11 +2537,16 @@ extension StreambertPlayerViewController {
                 item.preferredMaximumResolution = o.2
                 let sym = UIImage(systemName: "sparkles.tv") == nil ? "tv" : "sparkles.tv"
                 self.pill(self.qualityButton, symbol: sym, title: o.1 == 0 ? "Max" : o.0.components(separatedBy: " ").first ?? o.0)
+                self.refreshQualityMenu()
             }
         }
+        var items: [UIMenuElement] = []
         if let size = player?.currentItem?.presentationSize, size.height > 0 {
-            items.append(UIAction(title: "Now playing: \(Int(size.width))×\(Int(size.height))", attributes: .disabled) { _ in })
+            items.append(UIMenu(title: "", options: .displayInline, children: [
+                UIAction(title: "Now playing: \(Int(size.width))×\(Int(size.height))", attributes: .disabled) { _ in },
+            ]))
         }
+        items.append(UIMenu(title: "", options: .displayInline, children: choices))
         return items
     }
 }
