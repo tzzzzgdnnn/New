@@ -326,36 +326,60 @@ private final class WeakHandler: NSObject, WKScriptMessageHandler {
 }
 
 final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
+    // Servers are resolved in parallel: up to `parallel` hidden embed pages
+    // load at once and the first that yields a stream wins. Before, servers
+    // were tried one by one with a 16 s timeout each, so one dead server
+    // (the recording: "Finding a stream on Vidnest · Dub…" with no progress)
+    // cost 16 s before the next was even loaded.
+    private final class Slot {
+        let index: Int
+        let webView: WKWebView
+        var streams: [(url: URL, page: URL?)] = []
+        var subs: [SniffSub] = []
+        var timeout: Timer?
+        var settle: Timer?
+        init(index: Int, webView: WKWebView) { self.index = index; self.webView = webView }
+    }
+
     private weak var container: UIView?
     private var candidates: [SniffCandidate] = []
-    private var index = -1
-    private var webView: WKWebView?
-    private var timeout: Timer?
-    private var settle: Timer?
-    private var streams: [(url: URL, page: URL?)] = []
-    private var subs: [SniffSub] = []
+    private var nextIndex = 0
+    private var slots: [Int: Slot] = [:]
+    private var ready = Set<Int>()
+    private var firstReadyAt: Date?
+    private var preferTimer: Timer?
+    private var shownIndex: Int?
+    private var lingerSlot: Slot?
     private var completion: ((SniffResult?) -> Void)?
     private(set) var running = false
-    /// Called on the main thread whenever a new server is tried.
+    /// Called on the main thread when the lowest server still being tried changes.
     var onAdvance: ((SniffCandidate, Int) -> Void)?
     /// Subtitles found after the stream was handed to the player.
     var onLateSubtitle: ((SniffSub) -> Void)?
-    static let perServerTimeout: TimeInterval = 16
+    /// Hidden embed pages loading at the same time.
+    static let parallel = 3
+    static let perServerTimeout: TimeInterval = 10
+    /// Wait after the first stream for a master playlist to show up.
+    static let settleTime: TimeInterval = 0.8
+    /// A stream from a lower-priority server waits this long for the
+    /// viewer's own server (earlier in the list) before it is used.
+    static let preferWindow: TimeInterval = 1.5
     /// After a stream is picked the page stays loaded this long, so subtitle
     /// files it fetches later still reach the player.
     static let lingerAfterPick: TimeInterval = 12
-    private var lingering = false
     private var lingerTimer: Timer?
+    private var startedAt = Date()
 
     init(container: UIView) { self.container = container }
 
     func start(_ list: [SniffCandidate], from: Int = 0, completion: @escaping (SniffResult?) -> Void) {
         cancel()
         candidates = list
-        index = from - 1
+        nextIndex = max(0, from)
         self.completion = completion
         running = true
-        next()
+        startedAt = Date()
+        fill()
     }
 
     func resume(after i: Int, completion: @escaping (SniffResult?) -> Void) {
@@ -363,33 +387,54 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     }
 
     func cancel() {
-        timeout?.invalidate(); settle?.invalidate()
-        teardown()
+        preferTimer?.invalidate(); preferTimer = nil
+        for slot in slots.values { drop(slot) }
+        slots = [:]
+        ready = []
+        firstReadyAt = nil
+        shownIndex = nil
+        stopLingering()
         running = false
         completion = nil
     }
 
-    private func teardown() {
-        lingerTimer?.invalidate(); lingerTimer = nil
-        lingering = false
-        guard let wv = webView else { return }
+    private func drop(_ slot: Slot) {
+        slot.timeout?.invalidate(); slot.settle?.invalidate()
+        let wv = slot.webView
         wv.stopLoading()
         wv.configuration.userContentController.removeScriptMessageHandler(forName: "sbMedia")
         wv.navigationDelegate = nil
         wv.uiDelegate = nil
         wv.loadHTMLString("", baseURL: nil)
         wv.removeFromSuperview()
-        webView = nil
     }
 
-    private func next() {
-        teardown()
-        streams = []; subs = []
-        index += 1
-        guard index < candidates.count, let container = container else { finish(nil); return }
-        let c = candidates[index]
-        sbLog("trying \(c.id) \(c.url.absoluteString)")
-        onAdvance?(c, index)
+    private func stopLingering() {
+        lingerTimer?.invalidate(); lingerTimer = nil
+        if let s = lingerSlot { drop(s) }
+        lingerSlot = nil
+    }
+
+    /// Keep `parallel` servers loading; report the lowest one being tried.
+    private func fill() {
+        guard running else { return }
+        while slots.count < Self.parallel, nextIndex < candidates.count {
+            launch(nextIndex)
+            nextIndex += 1
+        }
+        if slots.isEmpty && ready.isEmpty {
+            finish(nil); return
+        }
+        if let low = slots.keys.min(), low != shownIndex {
+            shownIndex = low
+            onAdvance?(candidates[low], low)
+        }
+    }
+
+    private func launch(_ i: Int) {
+        guard let container = container else { return }
+        let c = candidates[i]
+        sbLog("trying \(c.id) \(c.url.absoluteString) (slot \(slots.count + 1)/\(Self.parallel))")
         let cfg = WKWebViewConfiguration()
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
@@ -410,90 +455,144 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         // Behind the app's web view: in the window (so media/JS run at full
         // speed) but covered, so it is never seen and never overlays anything.
         container.insertSubview(wv, at: 0)
-        webView = wv
+        let slot = Slot(index: i, webView: wv)
+        slots[i] = slot
         wv.load(URLRequest(url: c.url))
-        timeout?.invalidate()
-        timeout = Timer.scheduledTimer(withTimeInterval: Self.perServerTimeout, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
-            if self.streams.isEmpty { self.next() } else { self.pick() }
+        slot.timeout = Timer.scheduledTimer(withTimeInterval: Self.perServerTimeout, repeats: false) { [weak self, weak slot] _ in
+            guard let self = self, let slot = slot, self.slots[slot.index] === slot else { return }
+            if slot.streams.isEmpty {
+                sbLog("no stream from \(c.id) after \(Int(Self.perServerTimeout)) s")
+                self.remove(slot)
+            } else {
+                self.markReady(slot)
+            }
         }
     }
 
+    private func remove(_ slot: Slot) {
+        drop(slot)
+        slots[slot.index] = nil
+        ready.remove(slot.index)
+        fill()
+        decide()
+    }
+
+    private func slot(for wv: WKWebView?) -> Slot? {
+        guard let wv = wv else { return nil }
+        return slots.values.first { $0.webView === wv } ?? (lingerSlot?.webView === wv ? lingerSlot : nil)
+    }
+
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
-        guard running || lingering, let b = m.body as? [String: Any],
-              let s = b["url"] as? String, let u = URL(string: s) else { return }
+        guard let b = m.body as? [String: Any], let s = b["url"] as? String, let u = URL(string: s),
+              let slot = slot(for: m.webView) else { return }
         let page = (b["page"] as? String).flatMap { URL(string: $0) }
         if (b["kind"] as? String) == "sub" {
-            guard !subs.contains(where: { $0.url == u }) else { return }
+            guard !slot.subs.contains(where: { $0.url == u }) else { return }
             let sub = SniffSub(url: u, label: b["label"] as? String)
-            subs.append(sub)
-            if lingering {
+            slot.subs.append(sub)
+            if slot === lingerSlot {
                 sbLog("late subtitle \(u.absoluteString)")
                 onLateSubtitle?(sub)
             }
             return
         }
-        guard running else { return }
-        streams.append((u, page))
+        guard running, slots[slot.index] === slot else { return }
+        slot.streams.append((u, page))
         // Short settle window to prefer a master playlist over a variant.
-        if settle == nil || settle?.isValid == false {
-            settle = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { [weak self] _ in self?.pick() }
+        if slot.settle == nil || slot.settle?.isValid == false {
+            slot.settle = Timer.scheduledTimer(withTimeInterval: Self.settleTime, repeats: false) { [weak self, weak slot] _ in
+                guard let self = self, let slot = slot else { return }
+                self.markReady(slot)
+            }
         }
     }
 
-    private func pick() {
-        settle?.invalidate(); timeout?.invalidate()
-        guard running, !streams.isEmpty, index < candidates.count else { return }
+    private func markReady(_ slot: Slot) {
+        guard running, slots[slot.index] === slot, !slot.streams.isEmpty else { return }
+        slot.timeout?.invalidate(); slot.settle?.invalidate()
+        ready.insert(slot.index)
+        if firstReadyAt == nil {
+            firstReadyAt = Date()
+            preferTimer?.invalidate()
+            preferTimer = Timer.scheduledTimer(withTimeInterval: Self.preferWindow, repeats: false) { [weak self] _ in
+                self?.decide(force: true)
+            }
+        }
+        decide()
+    }
+
+    /// Use the best ready server: the lowest index, unless a server before it
+    /// is still loading and the prefer window has not run out.
+    private func decide(force: Bool = false) {
+        guard running, let best = ready.min(), let slot = slots[best] else { return }
+        let waiting = slots.keys.contains { $0 < best && !ready.contains($0) }
+        if waiting && !force { return }
+        pick(slot)
+    }
+
+    private func pick(_ slot: Slot) {
+        preferTimer?.invalidate(); preferTimer = nil
+        guard running else { return }
+        let streams = slot.streams
         let hls = streams.filter { $0.url.absoluteString.lowercased().contains("m3u8") || !$0.url.absoluteString.lowercased().contains(".mp4") }
         guard let best = hls.first(where: { $0.url.absoluteString.lowercased().contains("master") })
             ?? hls.first(where: { !$0.url.absoluteString.lowercased().contains("audio") }) ?? hls.first ?? streams.first
         else { return }
-        sbLog("stream \(best.url.absoluteString) from \(candidates[index].id)")
+        let cand = candidates[slot.index]
+        let ms = Int(Date().timeIntervalSince(startedAt) * 1000)
+        sbLog("stream \(best.url.absoluteString) from \(cand.id) in \(ms) ms")
         var headers: [String: String] = ["User-Agent": StreambertBridgeViewController.safariUserAgent]
         if let page = best.page, let scheme = page.scheme, let host = page.host {
             let origin = "\(scheme)://\(host)" + (page.port.map { ":\($0)" } ?? "")
             headers["Referer"] = origin + "/"
             headers["Origin"] = origin
         }
-        let cand = candidates[index]
-        let i = index
-        let subtitles = subs
-        let store = webView?.configuration.websiteDataStore.httpCookieStore
+        // The winner stays loaded (late subtitles); every other page goes.
+        for other in slots.values where other !== slot { drop(other) }
+        slots = [:]
+        ready = []
+        stopLingering()
+        lingerSlot = slot
+        running = false
+        let i = slot.index
+        let subtitles = slot.subs
         let host = best.url.host ?? ""
         let done: ([HTTPCookie]) -> Void = { [weak self] cookies in
             guard let self = self else { return }
             self.startLingering()
-            self.finish(SniffResult(candidateIndex: i, server: cand, url: best.url, headers: headers,
-                                    cookies: cookies, subtitles: subtitles))
+            self.deliver(SniffResult(candidateIndex: i, server: cand, url: best.url, headers: headers,
+                                     cookies: cookies, subtitles: subtitles))
         }
-        if let store = store {
-            store.getAllCookies { all in
-                done(all.filter { c in
-                    let d = c.domain.hasPrefix(".") ? String(c.domain.dropFirst()) : c.domain
-                    return host == d || host.hasSuffix("." + d)
-                })
-            }
-        } else { done([]) }
+        slot.webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { all in
+            done(all.filter { c in
+                let d = c.domain.hasPrefix(".") ? String(c.domain.dropFirst()) : c.domain
+                return host == d || host.hasSuffix("." + d)
+            })
+        }
     }
 
     private func startLingering() {
-        guard webView != nil else { return }
-        lingering = true
+        guard lingerSlot != nil else { return }
         lingerTimer?.invalidate()
         lingerTimer = Timer.scheduledTimer(withTimeInterval: Self.lingerAfterPick, repeats: false) { [weak self] _ in
-            self?.teardown()
+            self?.stopLingering()
         }
     }
 
-    // The hidden page's web content process died: move on, or stop lingering.
+    // A hidden page's web content process died: drop that server, or stop lingering.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         sbLog("sniffer web process terminated")
-        if lingering { teardown() } else if running { next() }
+        guard let slot = slot(for: webView) else { return }
+        if slot === lingerSlot { stopLingering() } else if running { remove(slot) }
     }
 
     private func finish(_ r: SniffResult?) {
-        timeout?.invalidate(); settle?.invalidate()
+        preferTimer?.invalidate(); preferTimer = nil
         running = false
+        deliver(r)
+    }
+
+    private func deliver(_ r: SniffResult?) {
         let cb = completion
         completion = nil
         cb?(r)
@@ -1209,7 +1308,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private static let optionButtonMinWidth: CGFloat = 66
     private var toastWork: DispatchWorkItem?
     /// Seconds a stream may sit at 0:00 before the next server is tried.
-    private static let startWatchdog: TimeInterval = 15
+    private static let startWatchdog: TimeInterval = 10
 
     // Controls (all inside `controls`, part of this view's own hierarchy)
     private let controls = UIView()

@@ -108,7 +108,43 @@ function tmdbUrl(src, ctx) {
  * then every other server for this kind of content. Ids match the native
  * server menu so the playing server gets its checkmark.
  */
+// Last server that actually played each title (per Sub/Dub mode): tried
+// first next time, since it is known to work for exactly this title.
+const LAST_GOOD_KEY = "sb_lastGoodServer";
+const LAST_GOOD_MAX = 200;
+const titleKey = (ctx) =>
+  ctx?.tmdbId ? `${ctx.type || "movie"}:${ctx.tmdbId}${ctx.isAnime ? `:${dubModeOf(ctx)}` : ""}` : null;
+
+function readLastGood() {
+  try {
+    return JSON.parse(localStorage.getItem(LAST_GOOD_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberLastGood(ctx, serverId) {
+  const key = titleKey(ctx);
+  if (!key || !serverId) return;
+  try {
+    const map = readLastGood();
+    delete map[key];
+    map[key] = serverId;
+    const keys = Object.keys(map);
+    for (const k of keys.slice(0, Math.max(0, keys.length - LAST_GOOD_MAX))) delete map[k];
+    localStorage.setItem(LAST_GOOD_KEY, JSON.stringify(map));
+  } catch {}
+}
+
 function buildCandidates(url) {
+  const list = buildCandidateList(url);
+  const good = readLastGood()[titleKey(currentCtx())];
+  const i = good ? list.findIndex((c) => c.id === good) : -1;
+  if (i > 0) list.unshift(...list.splice(i, 1));
+  return list;
+}
+
+function buildCandidateList(url) {
   const ctx = currentCtx();
   const isAnime = !!ctx.isAnime;
   const mode = dubModeOf(ctx);
@@ -246,6 +282,7 @@ function upgrade(wv) {
       if (nativeFor !== url || nativeToken !== token) return;
       if (r.ok) {
         log("playing", r.server);
+        rememberLastGood(currentCtx(), r.server);
         showCard("Playing in the native player", true);
         return;
       }
