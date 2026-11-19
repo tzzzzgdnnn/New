@@ -14,6 +14,8 @@ const EXCLUDE_GENRES = new Set([18, 9648, 10765, 80, 10759]); // Drama, Mystery,
 
 /** True when random episodes make sense for this show. */
 export function isShuffleable(show, { isAnime = false } = {}) {
+  // Random Episode shows on every TV show (anime included).
+  if (show) return true;
   if (!show || isAnime) return false;
   const name = (show.name || show.original_name || "").trim();
   if (ALLOW_IDS.has(Number(show.id)) || ALLOW_NAMES.test(name)) return true;
