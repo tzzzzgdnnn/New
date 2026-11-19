@@ -1,3 +1,4 @@
+import "./tv.css";
 // Fire TV / Android TV: the same Android app, driven by the remote.
 //  - D-pad moves a visible focus ring between anything you can tap (spatial
 //    navigation: the nearest item in the pressed direction), OK presses it.
@@ -69,7 +70,7 @@ function focusEl(el) {
   if (!el) return;
   if (!el.matches(FOCUSABLE) && !el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
   el.focus({ preventScroll: true });
-  el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+  el.scrollIntoView({ block: el.closest(".sb-row,.cards-grid,.sb-tape-row") ? "center" : "nearest", inline: "nearest", behavior: "smooth" });
   // Rows scroll sideways: keep a little of the next card in view.
   const r = el.getBoundingClientRect();
   if (r.top < 70) window.scrollBy(0, r.top - 90);
@@ -182,7 +183,6 @@ export function installTV() {
     ".sb-tv [class*=skeleton],.sb-tv [class*=shimmer]{animation:none!important}",
     ".sb-tv video{will-change:auto}",
     // TV safe area (overscan): keep content off the very edge.
-    ".sb-tv #root{padding:0 2.5vw}",
   ].join("\n");
   document.head.appendChild(st);
 
