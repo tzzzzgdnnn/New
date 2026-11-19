@@ -19,7 +19,13 @@ installDiagnostics();
 // offline), installed before the app asks whether downloads are available.
 if (import.meta.env.VITE_WEB) {
   document.documentElement.classList.add("sb-web");
-  if (import.meta.env.VITE_ANDROID) document.documentElement.classList.add("sb-android");
+  if (import.meta.env.VITE_ANDROID) {
+    document.documentElement.classList.add("sb-android");
+    // Light on GPU: no live blur layers (the costliest effect on Android).
+    const st = document.createElement("style");
+    st.textContent = ".sb-android *{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}";
+    document.head.appendChild(st);
+  }
   // Cinejoy (direct, no ads) becomes the default server once on the web app.
   try {
     if (!localStorage.getItem("sbWebCinejoyDefault")) {

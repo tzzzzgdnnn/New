@@ -188,6 +188,8 @@ public class PlayerActivity extends AppCompatActivity {
         view = new PlayerView(this);
         view.setBackgroundColor(0xFF000000);
         view.setKeepScreenOn(true);
+        // Lighter on the GPU than a TextureView.
+        view.setUseArtwork(false);
         view.setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS);
         view.setShowNextButton(false);
         view.setShowPreviousButton(false);
@@ -247,7 +249,11 @@ public class PlayerActivity extends AppCompatActivity {
 
         // Small start buffer = picture in well under a second, then buffer ahead.
         DefaultLoadControl load = new DefaultLoadControl.Builder()
-                .setBufferDurationsMs(15_000, 60_000, 700, 1500)
+                // Light on RAM: at most ~30 s / 24 MB of video held in memory.
+                .setBufferDurationsMs(10_000, 30_000, 700, 1500)
+                .setTargetBufferBytes(24 * 1024 * 1024)
+                .setPrioritizeTimeOverSizeThresholds(false)
+                .setBackBuffer(0, false)
                 .build();
 
         player = new ExoPlayer.Builder(this)

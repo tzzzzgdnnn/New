@@ -32,7 +32,9 @@ android {
     buildTypes {
         release {
             signingConfig System.getenv("SP_KEYSTORE") ? signingConfigs.release : signingConfigs.debug
-            minifyEnabled false
+            // Smaller, faster app: strip unused code and resources.
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }

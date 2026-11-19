@@ -103,6 +103,38 @@ public class MainActivity extends BridgeActivity {
         });
     }
 
+    // While the app is hidden (or the built-in player is on top), the web view
+    // stops drawing and running animations, and its renderer may be dropped
+    // first when the phone needs memory.
+    @Override
+    public void onStop() {
+        super.onStop();
+        WebView wv = getBridge() == null ? null : getBridge().getWebView();
+        if (wv != null) {
+            wv.onPause();
+            if (android.os.Build.VERSION.SDK_INT >= 26)
+                wv.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_WAIVED, true);
+        }
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        WebView wv = getBridge() == null ? null : getBridge().getWebView();
+        if (wv != null) {
+            wv.onResume();
+            if (android.os.Build.VERSION.SDK_INT >= 26)
+                wv.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
+        }
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        WebView wv = getBridge() == null ? null : getBridge().getWebView();
+        if (wv != null && level >= TRIM_MEMORY_RUNNING_LOW) wv.clearCache(false);
+    }
+
     private void setPlayerFullscreen(boolean on) {
         WindowInsetsControllerCompat c =
                 WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
