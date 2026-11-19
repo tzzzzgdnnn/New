@@ -12,7 +12,8 @@ import { serverKey } from "../../utils/servers/catalog";
 import { createFallback } from "../../utils/servers/fallback";
 import { probeAndRank } from "../../utils/servers/ranking";
 import { probeUrl } from "../../utils/servers/probe";
-import { isAutoPick, recordLookup, serverStats } from "./autoServer";
+import { isAutoPick, isAnipmPinned, recordLookup, serverStats } from "./autoServer";
+import { autoOrder, prefetchRanking } from "./autoRank";
 import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
 import { anipmCandidates, ANIPM_ID } from "./anipm";
 import { parseServerKey } from "../../utils/servers/catalog";
@@ -42,7 +43,14 @@ const nativeAvailable = () => !!window.webkit?.messageHandlers?.sbResolve;
 
 /** Server list for the native server menu, built from the latest context. */
 function serverListFor(ctx) {
-  return nativeServerList(!!ctx.isAnime);
+  const list = nativeServerList(!!ctx.isAnime);
+  if (!ctx.isAnime) return list;
+  // ani.pm leads the native menu for anime (Sub and Dub entries).
+  return [
+    { id: `${ANIPM_ID}:sub`, label: "ani.pm · Sub" },
+    { id: `${ANIPM_ID}:dub`, label: "ani.pm · Dub" },
+    ...list,
+  ];
 }
 
 /**
@@ -167,7 +175,7 @@ function rankedCandidates(url, ctx, { signal, exclude = [] } = {}) {
 export function withAnipm(ranked, anipm) {
   if (!anipm?.length) return ranked;
   const rest = ranked.filter((c) => parseServerKey(c.id).sourceId !== ANIPM_ID);
-  if (!isAutoPick() && rest.length && readStored("playerSource")) {
+  if (!isAutoPick() && !isAnipmPinned() && rest.length && readStored("playerSource")) {
     return [rest[0], ...anipm, ...rest.slice(1)].slice(0, MAX_CANDIDATES + anipm.length);
   }
   return [...anipm, ...rest].slice(0, MAX_CANDIDATES + anipm.length);
@@ -222,6 +230,28 @@ function buildCandidateList(url, ctx) {
     if (!animeRoute(s)) add(s, tmdbUrl(s, ctx));
   }
   return list;
+}
+
+/**
+ * Player Auto order: in Auto, servers measured on this network (speed, then
+ * ping) lead, the last server that played this title first; a server picked
+ * by hand keeps the probe order with that server first. ani.pm is put in
+ * front afterwards (withAnipm). Player only: downloads never use this.
+ */
+export function playerOrder(ranked, ctx) {
+  if (!isAutoPick()) return ranked;
+  return autoOrder(ranked, { pinned: readLastGood()[titleKey(ctx)] || null });
+}
+
+/**
+ * Title page opened: measure its play servers now (parallel, ~2 s, cached
+ * per session/network), so Play starts on the fastest one without waiting.
+ */
+export function prefetchTitle(ctx) {
+  if (!ctx?.tmdbId) return Promise.resolve(null);
+  const list = buildCandidateList(null, ctx);
+  const key = `${titleKey(ctx)}:${ctx.season ?? ""}:${ctx.episode ?? ""}`;
+  return prefetchRanking(list, { key }).catch(() => null);
 }
 
 /**
@@ -362,7 +392,7 @@ function upgrade(wv) {
         ctx.isAnime ? anipmCandidates(ctx) : [],
       ]);
       if (nativeToken !== token) return;
-      const candidates = withAnipm(ranked, anipm);
+      const candidates = withAnipm(playerOrder(ranked, ctx), anipm);
       diag(
         "player",
         `play: candidates in ${Date.now() - tRank} ms (tap→send ${Date.now() - lastNativeAt} ms): ` +
