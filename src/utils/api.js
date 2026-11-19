@@ -34,18 +34,81 @@ export const setApiErrorHandlers = (onAuth, onUnreachable) => {
   _onUnreachable = onUnreachable;
 };
 
-// ── In-memory TMDB response cache (session-scoped, cleared on page reload) ───
-// Avoids redundant network calls when navigating back to the same show.
-// TTL: 5 minutes
-const _tmdbCache = new Map(); // key → { data, expiresAt }
-const TMDB_CACHE_TTL = 5 * 60 * 1000;
+// ── TMDB response cache: memory + storage, stale-while-revalidate ─────────
+// Fresh for 5 minutes. After that the cached copy is still returned at once
+// and a background request refreshes it. Copies are kept in localStorage
+// (up to a day) so a cold start paints from cache instead of the network.
+const _tmdbCache = new Map(); // key → { data, savedAt }
+const _tmdbPending = new Map(); // key → Promise<data> (in-flight dedupe)
+const TMDB_CACHE_TTL = 5 * 60 * 1000; // fresh window
+const TMDB_STALE_MAX = 24 * 60 * 60 * 1000; // oldest copy still served
+const TMDB_MEM_MAX = 200;
+const TMDB_DISK_PREFIX = "sb_tmdb:";
+const TMDB_DISK_MAX = 150;
 
-/** Clears the in-memory TMDB cache and the persisted trending cache.
- * Calling this when the metadata language changes. */
+const _diskKey = (key) => TMDB_DISK_PREFIX + key.slice(key.indexOf("|") + 1);
+
+function _readDisk(key) {
+  try {
+    const raw = localStorage.getItem(_diskKey(key));
+    if (!raw) return null;
+    const entry = JSON.parse(raw);
+    return entry && entry.data !== undefined && entry.savedAt ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
+function _writeDisk(key, entry) {
+  try {
+    localStorage.setItem(_diskKey(key), JSON.stringify(entry));
+  } catch {
+    _pruneDisk(true);
+  }
+}
+
+// Drop expired copies, and the oldest ones past the cap (or half on quota).
+function _pruneDisk(aggressive = false) {
+  try {
+    const now = Date.now();
+    const keep = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(TMDB_DISK_PREFIX)) continue;
+      let savedAt = 0;
+      try {
+        savedAt = JSON.parse(localStorage.getItem(k))?.savedAt || 0;
+      } catch {}
+      if (now - savedAt > TMDB_STALE_MAX) localStorage.removeItem(k);
+      else keep.push([k, savedAt]);
+    }
+    const cap = aggressive ? Math.floor(keep.length / 2) : TMDB_DISK_MAX;
+    if (keep.length > cap) {
+      keep.sort((a, b) => a[1] - b[1]);
+      keep.slice(0, keep.length - cap).forEach(([k]) => localStorage.removeItem(k));
+    }
+  } catch {}
+}
+setTimeout(() => _pruneDisk(), 4000);
+
+function _remember(key, data) {
+  const entry = { data, savedAt: Date.now() };
+  _tmdbCache.delete(key);
+  _tmdbCache.set(key, entry);
+  if (_tmdbCache.size > TMDB_MEM_MAX) _tmdbCache.delete(_tmdbCache.keys().next().value);
+  _writeDisk(key, entry);
+}
+
+/** Clears the TMDB caches (memory and storage) and the persisted trending
+ * cache. Called when the metadata language changes. */
 export function clearTmdbCache() {
   _tmdbCache.clear();
   try {
     localStorage.removeItem("streambert_trendingCache");
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(TMDB_DISK_PREFIX)) localStorage.removeItem(k);
+    }
   } catch {}
 }
 
@@ -75,9 +138,43 @@ function _releaseSlot() {
 export const tmdbFetch = async (path, apiKey) => {
   const localizedPath = withLanguage(path);
   const cacheKey = `${apiKey}|${localizedPath}`;
-  const cached = _tmdbCache.get(cacheKey);
-  if (cached && Date.now() < cached.expiresAt) return forActiveProfile(cached.data);
+  let cached = _tmdbCache.get(cacheKey);
+  if (!cached) {
+    cached = _readDisk(cacheKey);
+    if (cached) _tmdbCache.set(cacheKey, cached);
+  }
+  if (cached) {
+    const age = Date.now() - cached.savedAt;
+    if (age < TMDB_CACHE_TTL) return forActiveProfile(cached.data);
+    if (age < TMDB_STALE_MAX) {
+      // Stale: answer now, refresh quietly for next time.
+      _tmdbNetwork(localizedPath, apiKey, cacheKey).catch(() => {});
+      return forActiveProfile(cached.data);
+    }
+  }
+  return forActiveProfile(await _tmdbNetwork(localizedPath, apiKey, cacheKey));
+};
 
+/**
+ * Warm the cache for a path (card press-in, hover). Never throws.
+ * @param {string} path e.g. "/tv/1399"
+ */
+export const prefetchTmdb = (path, apiKey) => {
+  if (!apiKey || !path) return;
+  tmdbFetch(path, apiKey).catch(() => {});
+};
+
+function _tmdbNetwork(localizedPath, apiKey, cacheKey) {
+  const inflight = _tmdbPending.get(cacheKey);
+  if (inflight) return inflight;
+  const p = _tmdbRequest(localizedPath, apiKey, cacheKey).finally(() =>
+    _tmdbPending.delete(cacheKey),
+  );
+  _tmdbPending.set(cacheKey, p);
+  return p;
+}
+
+async function _tmdbRequest(localizedPath, apiKey, cacheKey) {
   await _acquireSlot();
 
   let res;
@@ -89,11 +186,6 @@ export const tmdbFetch = async (path, apiKey) => {
     _releaseSlot();
     _onUnreachable?.();
     throw new Error("TMDB unreachable");
-  } finally {
-    // releaseSlot is called in the catch above for network errors;
-    // for successful responses it is called immediately below, before
-    // parsing, so the slot is held only during the actual in-flight
-    // request, not during res.json().
   }
 
   _releaseSlot();
@@ -105,18 +197,9 @@ export const tmdbFetch = async (path, apiKey) => {
 
   if (!res.ok) throw new Error(`TMDB ${res.status}`);
   const data = await res.json();
-  _tmdbCache.set(cacheKey, { data, expiresAt: Date.now() + TMDB_CACHE_TTL });
-
-  // Evict stale entries to prevent unbounded memory growth
-  if (_tmdbCache.size > 80) {
-    const now = Date.now();
-    for (const [k, v] of _tmdbCache) {
-      if (now >= v.expiresAt) _tmdbCache.delete(k);
-    }
-  }
-
-  return forActiveProfile(data);
-};
+  _remember(cacheKey, data);
+  return data;
+}
 
 // Responses are cached unfiltered; Kids profiles get a filtered view of lists.
 const forActiveProfile = (data) =>

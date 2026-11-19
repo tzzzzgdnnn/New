@@ -1,6 +1,7 @@
 // iOS home: Netflix-style rails (poster rows, Top 10 with big rank numbers,
 // wide Continue Watching cards) plus genre sections and a curated
 // Nostalgia block. Rendered only in the iOS build.
+import { prefetchDetails } from "../../utils/prefetch";
 import { useEffect, useRef, useState } from "react";
 import MediaCard from "../../components/MediaCard";
 import { PlayIcon } from "../../components/Icons";
@@ -58,7 +59,7 @@ export function PosterRail({ title, sub, items, onSelect, watched, onMarkWatched
             <div className="sb-row-item" key={`${item.media_type}_${item.id}`}>
               <MediaCard
                 item={item}
-                onClick={() => onSelect(item)}
+                onClick={() => onSelect(item)} onPointerDown={() => prefetchDetails(item)}
                 progress={0}
                 watched={watched}
                 onMarkWatched={onMarkWatched}
@@ -105,7 +106,7 @@ export function WideRail({ title, items, progress, onSelect }) {
           const pct = Math.max(0, Math.min(100, progress?.[pk] || 0));
           const img = item.backdrop_path || item.still_path || item.poster_path;
           return (
-            <div className="sb-wide-item" key={`${item.media_type}_${item.id}`} onClick={() => onSelect({ ...item, autoResume: true })}>
+            <div className="sb-wide-item" key={`${item.media_type}_${item.id}`} onClick={() => onSelect({ ...item, autoResume: true })} onPointerDown={() => prefetchDetails(item)}>
               <div className="sb-wide-img">
                 {img && <img src={imgUrl(img, "w780")} alt="" loading="lazy" decoding="async" />}
                 <div className="sb-wide-play">
@@ -384,10 +385,10 @@ export function Billboard({ items, apiKey, onSelect, kicker = "Trending Now" }) 
           ))}
         </div>
         <div className="sb-bill-actions">
-          <button className="sb-btn-play" onClick={() => onSelect(item)}>
+          <button className="sb-btn-play" onClick={() => onSelect(item)} onPointerDown={() => prefetchDetails(item)}>
             <PlayIcon /> Play
           </button>
-          <button className="sb-btn-info" onClick={() => onSelect(item)}>
+          <button className="sb-btn-info" onClick={() => onSelect(item)} onPointerDown={() => prefetchDetails(item)}>
             ⓘ More Info
           </button>
         </div>
@@ -420,7 +421,7 @@ function WideBackdropRail({ items, onSelect, badge }) {
   return (
     <div className="sb-row sb-tape-row">
       {list.slice(0, 20).map((it) => (
-        <div className="sb-tape" key={`${it.media_type}_${it.id}`} onClick={() => onSelect(it)}>
+        <div className="sb-tape" key={`${it.media_type}_${it.id}`} onClick={() => onSelect(it)} onPointerDown={() => prefetchDetails(it)}>
           <img src={imgUrl(it.backdrop_path, "w780")} alt="" loading="lazy" decoding="async" />
           <div className="sb-tape-shade" />
           {badge && <div className="sb-tape-badge" style={{ background: badge.color, color: badge.accent }}>{badge.short}</div>}
@@ -451,7 +452,7 @@ function Nostalgia({ rows, onSelect, common }) {
           <div className="sb-nos-big">Nostalgia</div>
           <div className="sb-nos-tag">Remember {feat ? (feat.title || feat.name) : "this"}?</div>
           {feat && (
-            <button className="sb-btn-play" onClick={() => onSelect(feat)}>
+            <button className="sb-btn-play" onClick={() => onSelect(feat)} onPointerDown={() => prefetchDetails(feat)}>
               <PlayIcon /> Rewind & Play
             </button>
           )}

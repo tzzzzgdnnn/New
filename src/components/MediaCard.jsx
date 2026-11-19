@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { imgUrl, isAnimeContent } from "../utils/api";
+import { prefetchDetails } from "../utils/prefetch";
 import {
   PlayIcon,
   FilmIcon,
@@ -83,6 +84,7 @@ const MediaCard = memo(function MediaCard({
       <div
         className={`card${isWatched ? " ep-watched" : ""}${isUnreleased ? " card--unreleased" : ""}`}
         onClick={onClick}
+        onPointerDown={() => prefetchDetails(item)}
         onContextMenu={isUnreleased ? undefined : openMenu}
       >
         <div className="card-poster">

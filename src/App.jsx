@@ -10,7 +10,6 @@ import {
   Suspense,
 } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
-import KeyboardShortcutsModal from "./components/KeyboardShortcutsModal";
 import WindowTitlebar from "./components/WindowTitlebar";
 import { storage, secureStorage, STORAGE_KEYS } from "./utils/storage";
 import {
@@ -30,17 +29,19 @@ import {
 } from "./utils/discordPresence";
 
 import Sidebar from "./components/Sidebar";
-import SearchModal from "./components/SearchModal";
 import SetupScreen from "./components/SetupScreen";
 
 // Build-time TMDB token (iOS CI injects VITE_TMDB_TOKEN from a repo secret).
 // Empty/missing -> the normal setup screen. A token saved in the Keychain
 // via Settings overrides it.
 const BUILTIN_TMDB_TOKEN = (import.meta.env.VITE_TMDB_TOKEN || "").trim();
-import CloseConfirmModal from "./components/CloseConfirmModal";
-import UpdateModal from "./components/UpdateModal";
 import { useGamepadNav } from "./utils/useGamepadNav";
 
+const KeyboardShortcutsModal = lazy(() => import("./components/KeyboardShortcutsModal"));
+const SearchModal = lazy(() => import("./components/SearchModal"));
+const CloseConfirmModal = lazy(() => import("./components/CloseConfirmModal"));
+const UpdateModal = lazy(() => import("./components/UpdateModal"));
+// Modals and pages load on first use (route-level code splitting).
 // Lazy-loaded pages: each chunk is only downloaded when the user first visits
 const HomePage = lazy(() => import("./pages/HomePage"));
 const MoviePage = lazy(() => import("./pages/MoviePage"));
