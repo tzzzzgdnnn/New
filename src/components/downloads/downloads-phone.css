@@ -337,3 +337,7 @@
 .pd-batchbar .pd-btn { min-width: 88px; }
 .pd-batchbar .pd-btn:disabled { opacity: 0.45; }
 .pd-row--check:has(input:disabled) { cursor: default; }
+
+/* Anime audio: Dub / Sub copies told apart at a glance. */
+.pd-chip--dub { background: #e50914; color: #fff; }
+.pd-chip--sub { background: #2a62d6; color: #fff; }
