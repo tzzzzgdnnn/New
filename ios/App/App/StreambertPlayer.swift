@@ -947,6 +947,13 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private let failureSubbedButton = UIButton(type: .system)
     private var dubStallWork: DispatchWorkItem?
     private static let dubStallDelay: TimeInterval = 20
+    // Startup: fast first frame, then normal buffering (see startPlayback).
+    fileprivate var handoffAt: Date?
+    fileprivate var firstFrameSeen = false
+    fileprivate var firstFrameObs: NSKeyValueObservation?
+    fileprivate var startupWorkDone = false
+    /// Page-side play tap (ms since 1970), for the load-time readout.
+    fileprivate var tapAtMs: Double = 0
     /// Height of the video last shown on the Quality button (0 = unknown).
     fileprivate var shownVideoHeight = 0
     /// Heights the loaded stream's variants confirm (read from the item).
@@ -1068,8 +1075,10 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         setupSubtitles()
         setupUpNext()
         loadSkipTimes()
-        searchOnlineSubtitles()
         observeAppLifecycle()
+        // Online subtitle search waits for the first frame (see firstFrameShown),
+        // with a fallback in case it never comes.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in self?.runStartupWork() }
     }
 
     /// Save the position when the app goes to the background or quits.
@@ -1296,8 +1305,11 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         setStatus(nil)
         spinner.startAnimating()
         print("[SuperPlayer] play \(url.absoluteString) on \(server ?? "?")")
+        handoffAt = Date()
+        firstFrameSeen = false
         startPlayback(url)
-        if isViewLoaded, view.window != nil { resumePlayback() }
+        // Start right away; viewDidAppear calls this again harmlessly.
+        resumePlayback()
         scheduleHide()
     }
 
@@ -1306,6 +1318,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         statusObs?.invalidate()
         lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
         if let o = upNextEndObserver { NotificationCenter.default.removeObserver(o) }
+        firstFrameObs?.invalidate()
         upNextTimer?.invalidate()
         healthMonitor.stop()
     }
@@ -1356,12 +1369,16 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         // Max quality = no caps, and start on the best variant instead of
         // climbing up from the lowest one.
         applyQuality(to: item)
-        loadVariants(for: item)
+        // Auto: a modest cap for the first segments so the first frame comes
+        // fast; lifted (applyQuality) once playback runs.
+        if qualityHeight == 0 { item.preferredPeakBitRate = 2_500_000 }
         if #available(iOS 14.0, *) { item.startsOnFirstEligibleVariant = false }
-        item.preferredForwardBufferDuration = 0
+        // Small buffer to start; raised after the first frame.
+        item.preferredForwardBufferDuration = 2
         let p = player ?? AVPlayer()
         p.replaceCurrentItem(with: item)
-        p.automaticallyWaitsToMinimizeStalling = true
+        // Don't wait to "minimize stalling" before the first frame; restored after it.
+        p.automaticallyWaitsToMinimizeStalling = false
         p.allowsExternalPlayback = true
         p.usesExternalPlaybackWhileExternalScreenIsActive = true
         player = p
@@ -1399,6 +1416,15 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             guard !ready || !(t > 0.5) else { return }
             print("[SuperPlayer] no playback after \(Int(Self.startWatchdog)) s (ready: \(ready))")
             self.failAndClose()
+        }
+
+        firstFrameObs?.invalidate()
+        firstFrameObs = videoView.playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+            guard layer.isReadyForDisplay else { return }
+            DispatchQueue.main.async {
+                guard let self = self, gen == self.generation else { return }
+                self.firstFrameShown(item)
+            }
         }
 
         timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.2, preferredTimescale: 600),
@@ -2790,6 +2816,7 @@ extension StreambertPlayerViewController {
     /// Settings saved for the active profile, sent by the page.
     func applyPrefs(_ prefs: [String: Any]) {
         if let q = (prefs["quality"] as? NSNumber)?.intValue { qualityHeight = q }
+        if let tap = (prefs["tapAt"] as? NSNumber)?.doubleValue { tapAtMs = tap }
         if let on = prefs["subsOn"] as? Bool { subsOnPref = on }
         if let sc = (prefs["subScale"] as? NSNumber)?.doubleValue, sc > 0 { subScale = CGFloat(sc) }
         if let lang = prefs["subLang"] as? String, !lang.isEmpty { subtitleInfo["subLang"] = lang }
@@ -2986,3 +3013,51 @@ extension StreambertPlayerViewController {
         closePlayer { cb?() }
     }
 }
+
+// MARK: - Startup speed and load-time readout
+
+extension StreambertPlayerViewController {
+
+    /// First frame on screen: restore normal buffering, lift the startup cap,
+    /// then do the work that could wait (variants, online subtitles), and
+    /// report how long it took.
+    func firstFrameShown(_ item: AVPlayerItem) {
+        guard !firstFrameSeen, player?.currentItem === item else { return }
+        firstFrameSeen = true
+        firstFrameObs?.invalidate()
+        firstFrameObs = nil
+        player?.automaticallyWaitsToMinimizeStalling = true
+        item.preferredForwardBufferDuration = 30
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self, weak item] in
+            guard let self = self, let item = item, self.player?.currentItem === item else { return }
+            self.applyQuality(to: item)
+        }
+        loadVariants(for: item)
+        runStartupWork()
+        let now = Date()
+        let handoff = handoffAt ?? now
+        let nowMs = now.timeIntervalSince1970 * 1000
+        let handoffMs = handoff.timeIntervalSince1970 * 1000
+        // A tap more than 3 minutes before the hand-off isn't this load's.
+        let tapValid = tapAtMs > 0 && handoffMs - tapAtMs >= 0 && handoffMs - tapAtMs < 180_000
+        let toFrame = Int(nowMs - handoffMs)
+        let toHandoff = tapValid ? Int(handoffMs - tapAtMs) : -1
+        print("[SuperPlayer] load time: tap→url \(toHandoff) ms, url→first frame \(toFrame) ms")
+        onPref?("loadTiming", [
+            "at": nowMs,
+            "title": titleText,
+            "server": currentServer ?? "",
+            "tapToUrl": toHandoff,
+            "urlToFrame": toFrame,
+            "total": tapValid ? Int(nowMs - tapAtMs) : -1,
+        ] as [String: Any])
+    }
+
+    /// Once per player: the Wyzie subtitle search.
+    func runStartupWork() {
+        guard !startupWorkDone, !isClosing else { return }
+        startupWorkDone = true
+        searchOnlineSubtitles()
+    }
+}
+

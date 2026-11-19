@@ -1858,7 +1858,7 @@ export default function TVPage({
   const upNextRef = useRef(null);
   useEffect(() => {
     if (!IS_IOS) return;
-    syncPlayerPrefs();
+    syncPlayerPrefs({ tap: playing });
   }, [playing, currentProgressKey]);
   useEffect(() => {
     if (!IS_IOS || !playing || !selectedEp || !currentProgressKey) return;

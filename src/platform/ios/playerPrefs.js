@@ -4,14 +4,28 @@
 import { storage, STORAGE_KEYS } from "../../utils/storage";
 import { SUBTITLE_LANGUAGES } from "../../utils/subtitles";
 
+let lastTapAt = 0; // last play tap (ms), for the load-time readout
+const LOAD_TIMES_KEY = "sb_loadTimes";
+
+/** Last 10 native load timings, newest first. */
+export function getLoadTimes() {
+  try {
+    return JSON.parse(localStorage.getItem(LOAD_TIMES_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
 const handler = (name) => window.webkit?.messageHandlers?.[name];
 
 /** Send the active profile's player settings to the native player. */
-export function syncPlayerPrefs() {
+export function syncPlayerPrefs({ tap = false } = {}) {
   const h = handler("sbPrefs");
   if (!h) return;
+  if (tap) lastTapAt = Date.now();
   try {
     h.postMessage({
+      tapAt: lastTapAt,
       quality: Number(storage.get(STORAGE_KEYS.PLAYER_QUALITY) ?? 0) || 0,
       subsOn: storage.get(STORAGE_KEYS.PLAYER_SUBS_ON) ?? undefined,
       subScale: storage.get(STORAGE_KEYS.PLAYER_SUB_SCALE) ?? undefined,
@@ -42,6 +56,13 @@ window.__sbPlayerPref = ({ key, value } = {}) => {
       break;
     case "subLang":
       if (value) storage.set(STORAGE_KEYS.SUBTITLE_LANG, langCode(value));
+      break;
+    case "loadTiming":
+      try {
+        const list = [value, ...getLoadTimes()].slice(0, 10);
+        localStorage.setItem(LOAD_TIMES_KEY, JSON.stringify(list));
+        console.log("[native] load time", value);
+      } catch {}
       break;
     default:
   }

@@ -118,7 +118,7 @@ export default function MoviePage({
   // have no Up Next.
   useEffect(() => {
     if (!IS_IOS) return;
-    syncPlayerPrefs();
+    syncPlayerPrefs({ tap: playing });
     if (playing) postUpNext(null);
   }, [playing]);
   const [showDownload, setShowDownload] = useState(false);

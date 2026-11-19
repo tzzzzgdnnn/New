@@ -18,6 +18,7 @@ import { DEFAULT_INVIDIOUS_BASE } from "../../../components/TrailerModal";
 import { HOME_ROWS, loadHomeLayout, saveHomeLayout } from "../../../utils/homeLayout";
 import { collectBackupData, restoreBackupData } from "../../../utils/backup";
 import { version as APP_VERSION } from "../../../../package.json";
+import { getLoadTimes } from "../playerPrefs";
 
 // Tile colors: one accent family plus iOS system hues so rows scan quickly.
 const C = {
@@ -771,6 +772,10 @@ function StoragePage() {
 }
 
 function AboutPage({ apiKey, onChangeApiKey }) {
+  // Hidden: tap the version 5 times for Diagnostics (native load times).
+  const [taps, setTaps] = useState(0);
+  const loads = taps >= 5 ? getLoadTimes() : [];
+  const ms = (v) => (v == null || v < 0 ? "–" : v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${v} ms`);
   const builtIn = (import.meta.env.VITE_TMDB_TOKEN || "").trim();
   const tokenLabel = !apiKey ? "Not set" : builtIn && builtIn === apiKey ? "Built-in" : `${apiKey.slice(0, 6)}…`;
   return (
@@ -778,8 +783,23 @@ function AboutPage({ apiKey, onChangeApiKey }) {
       <div className="sps-about-hero">
         <img src="./sp-icon.png" alt="" className="sps-about-icon" />
         <div className="sps-about-name">{IOS_APP_NAME}</div>
-        <div className="sps-about-ver">Version {APP_VERSION}</div>
+        <div className="sps-about-ver" onClick={() => setTaps((n) => n + 1)}>Version {APP_VERSION}</div>
       </div>
+      {taps >= 5 && (
+        <Group header="Diagnostics" footer="Last 10 native player loads: play tap → stream handed to the player → first frame.">
+          {loads.length ? (
+            loads.map((l, i) => (
+              <Row
+                key={l.at || i}
+                label={`${l.title || "Video"}${l.server ? ` · ${l.server}` : ""}`}
+                value={`${ms(l.tapToUrl)} + ${ms(l.urlToFrame)} = ${ms(l.total)}`}
+              />
+            ))
+          ) : (
+            <Row label="No loads recorded yet" />
+          )}
+        </Group>
+      )}
       <Group header="Data Source" footer="Movie and TV metadata, posters and ratings come from The Movie Database.">
         <Row icon="key" iconColor={C.gray} label="TMDB Token" value={tokenLabel} onClick={onChangeApiKey} />
       </Group>
