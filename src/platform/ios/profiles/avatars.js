@@ -37,7 +37,7 @@ export function gradientBackground(avatar) {
 export const avatarImageUrl = (avatar, size = "w185") => {
   if (isGradientAvatar(avatar) || !avatar) return null;
   // Character art is stored as its full https URL; older avatars as TMDB paths.
-  return /^https:\/\//.test(avatar) ? avatar : imgUrl(avatar, size);
+  return /^(https:\/\/|data:image\/)/.test(avatar) ? avatar : imgUrl(avatar, size);
 };
 
 /** Gradient for the n-th new profile, so new profiles look distinct. */
