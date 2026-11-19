@@ -15,7 +15,7 @@ const FETCH_TIMEOUT_MS = 2500;
 const BUILTIN = PLAYER_SOURCES.slice();
 // Web app only: Hexa shows a "Verification Required" captcha; Vidrift refuses
 // to play sandboxed.
-const WEB_BLOCKED = new Set(["hexa"]);
+const WEB_BLOCKED = new Set(["hexa", "vidnest"]); // both show a captcha wall
 let _mirrorMap = []; // [{ origin, mirrors: [origin...] }]
 
 const fill = (tpl, v) =>
@@ -77,7 +77,10 @@ export function applyServers(cfg) {
     // human" wall or refuse to run sandboxed never appear.
     const ok = added.filter((s) => !WEB_BLOCKED.has(s.id));
     const direct = builtins.filter((s) => /\.invalid\//.test(s.movieUrl?.("1") || ""));
-    const rest = builtins.filter((s) => !direct.includes(s) && !WEB_BLOCKED.has(s.id));
+    // Vidrift first after Cinejoy: the best anime server (sub + dub by AniList id).
+    const rest = builtins
+      .filter((s) => !direct.includes(s) && !WEB_BLOCKED.has(s.id))
+      .sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"));
     PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct, ...rest, ...ok);
   } else {
     PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...added, ...builtins);

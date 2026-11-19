@@ -443,7 +443,7 @@ const WEB_DIRECT_SOURCES = [
   },
 ];
 export const PLAYER_SOURCES = import.meta.env?.VITE_WEB
-  ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id))]
+  ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id) && s.id !== "vidnest").sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"))]
   : ALL_PLAYER_SOURCES;
 
 // Sources that require a transparent webRequest intercept to load properly
