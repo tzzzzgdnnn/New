@@ -294,3 +294,36 @@ enum PlayerTap {
         return .hideAfterDoubleTapWindow
     }
 }
+
+// When the Skip Intro / Skip Outro pill shows. Pure, checked off-device in
+// scripts/DownloadMathTests.swift. A real AniSkip opening/ending shows the pill
+// only while playback is inside it. The generic "jump" (series without
+// timestamps) sits in a 20 s to 5 min window, so on its own it would stay up
+// for minutes after the intro: it shows for `jumpVisibleFor` seconds of
+// playback and is then retired for the episode, also when the viewer seeks
+// past its window without tapping.
+enum SkipPill {
+    struct Interval: Equatable { let kind: String; let start: Double; let end: Double }
+
+    static let jumpVisibleFor: Double = 12
+
+    /// The interval whose pill should show at time `t`, or nil.
+    /// `jumpShownAt` is the playback time the jump pill first appeared.
+    static func visible(_ intervals: [Interval], at t: Double, jumpShownAt: Double?) -> Interval? {
+        for iv in intervals where t >= iv.start && t < iv.end - 1 {
+            if iv.kind == "jump", let shown = jumpShownAt, t - shown >= jumpVisibleFor || t < shown {
+                continue
+            }
+            return iv
+        }
+        return nil
+    }
+
+    /// The jump is done for this episode once its pill showed long enough,
+    /// or playback got past its window.
+    static func retireJump(at t: Double, jumpShownAt: Double?, window: (start: Double, end: Double)) -> Bool {
+        if t >= window.end - 1 { return true }
+        if let shown = jumpShownAt, t - shown >= jumpVisibleFor { return true }
+        return false
+    }
+}

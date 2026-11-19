@@ -213,4 +213,28 @@ check("player tap: second tap of a double-tap cancels the pending hide") {
         && PlayerTap.singleTap(controlsShown: false, sinceShown: 2, hidePending: true) == .cancelPendingHide
 }
 
+let jumpIv = SkipPill.Interval(kind: "jump", start: 20, end: 300)
+let opIv = SkipPill.Interval(kind: "op", start: 90, end: 180)
+
+check("skip pill: the generic jump shows, then leaves after a few seconds of watching") {
+    SkipPill.visible([jumpIv], at: 25, jumpShownAt: nil) == jumpIv
+        && SkipPill.visible([jumpIv], at: 30, jumpShownAt: 25) == jumpIv
+        && SkipPill.visible([jumpIv], at: 25 + SkipPill.jumpVisibleFor, jumpShownAt: 25) == nil
+        && SkipPill.visible([jumpIv], at: 200, jumpShownAt: 25) == nil
+}
+
+check("skip pill: the jump is retired once shown long enough or once past its window") {
+    !SkipPill.retireJump(at: 30, jumpShownAt: 25, window: (20, 300))
+        && SkipPill.retireJump(at: 40, jumpShownAt: 25, window: (20, 300))
+        && SkipPill.retireJump(at: 299, jumpShownAt: nil, window: (20, 300))
+}
+
+check("skip pill: a real opening shows only while inside it, and goes away after it") {
+    SkipPill.visible([opIv], at: 95, jumpShownAt: nil) == opIv
+        && SkipPill.visible([opIv], at: 178, jumpShownAt: nil) == opIv
+        && SkipPill.visible([opIv], at: 179.5, jumpShownAt: nil) == nil
+        && SkipPill.visible([opIv], at: 400, jumpShownAt: nil) == nil
+        && SkipPill.visible([opIv], at: 50, jumpShownAt: nil) == nil
+}
+
 print("\n\(passed) Swift download-math checks passed")

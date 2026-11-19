@@ -1495,6 +1495,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     // Real skip timestamps only (AniSkip); no manual fallbacks.
     private var skipIntervals: [(kind: String, start: Double, end: Double)] = []
     private var activeSkip: (kind: String, start: Double, end: Double)?
+    /// Playback time the generic "jump" pill first showed (nil = not yet).
+    private var jumpShownAt: Double?
 
     init(title: String, mediaType: String,
          season: Int?, episode: Int?, isAnime: Bool,
@@ -2475,6 +2477,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         isScrubbing = false
         userPaused = false
         activeSkip = nil
+        jumpShownAt = nil
         skipButton.isHidden = true
         spinner.stopAnimating()
         hideUpNext()
@@ -2527,7 +2530,17 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     // MARK: Skip intro / outro (real timestamps only)
 
     private func updateSkip(_ t: Double) {
-        let hit = skipIntervals.first(where: { t >= $0.start && t < $0.end - 1 })
+        // The generic jump pill shows for a few seconds, then is gone for the
+        // episode (it used to stay up for its whole 20 s - 5 min window when
+        // the viewer just kept watching).
+        if skipIntervals.contains(where: { $0.kind == "jump" }),
+           SkipPill.retireJump(at: t, jumpShownAt: jumpShownAt, window: Self.introJumpWindow) {
+            skipIntervals.removeAll { $0.kind == "jump" }
+        }
+        let all = skipIntervals.map { SkipPill.Interval(kind: $0.kind, start: $0.start, end: $0.end) }
+        let pick = SkipPill.visible(all, at: t, jumpShownAt: jumpShownAt)
+        if pick?.kind == "jump", jumpShownAt == nil { jumpShownAt = t }
+        let hit = pick.map { (kind: $0.kind, start: $0.start, end: $0.end) }
         if hit?.kind != activeSkip?.kind || hit?.start != activeSkip?.start {
             activeSkip = hit
             if let h = hit {
@@ -2536,10 +2549,15 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
                 skipButton.isHidden = false
                 UIView.animate(withDuration: 0.25) { self.skipButton.alpha = 1 }
             } else {
-                UIView.animate(withDuration: 0.25, animations: { self.skipButton.alpha = 0 },
-                               completion: { _ in self.skipButton.isHidden = self.activeSkip == nil })
+                hideSkipPill()
             }
         }
+    }
+
+    private func hideSkipPill() {
+        skipButton.layer.removeAllAnimations()
+        UIView.animate(withDuration: 0.25, animations: { self.skipButton.alpha = 0 },
+                       completion: { _ in if self.activeSkip == nil { self.skipButton.isHidden = true } })
     }
 
     @objc private func skipTapped() {
@@ -2553,6 +2571,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             skipButton.isHidden = true
             seek(to: now + Self.introJumpSeconds)
         } else {
+            activeSkip = nil
+            skipButton.isHidden = true
             seek(to: s.end)
         }
     }
@@ -2565,6 +2585,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     private static let introJumpWindow: (start: Double, end: Double) = (20, 300)
 
     private func loadSkipTimes() {
+        jumpShownAt = nil
         if mediaType == "tv" {
             // Generic fallback until a real opening arrives (replaced if it does).
             skipIntervals = [(kind: "jump", start: Self.introJumpWindow.start, end: Self.introJumpWindow.end)]
