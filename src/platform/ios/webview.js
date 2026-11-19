@@ -320,7 +320,11 @@ function upgrade(wv) {
   if (wv.__sbUpgraded) return;
   wv.__sbUpgraded = true;
   const iframe = document.createElement("iframe");
-  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-presentation");
+  // Web app: players such as vidrift refuse to run in a sandboxed frame
+  // ("Remove sandboxing to enable playback"), so the web build leaves it off.
+  if (!import.meta.env.VITE_WEB) {
+    iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-presentation");
+  }
   iframe.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media");
   iframe.setAttribute("allowfullscreen", "");
   iframe.setAttribute("playsinline", "");
