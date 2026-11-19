@@ -11,6 +11,10 @@ export const HOME_ROWS = [
   { id: "topRated", label: "Top Rated" },
 ];
 
+// Rows the iOS Home never shows (no "Top 10 Today" rails on the phone), so
+// iOS Settings leaves them out of the row editor too. Desktop shows all.
+export const IOS_HIDDEN_HOME_ROWS = ["trendingMovies", "trendingTV"];
+
 const DEFAULT_ROW_ORDER = HOME_ROWS.map((r) => r.id);
 const DEFAULT_ROW_VISIBLE = Object.fromEntries(
   HOME_ROWS.map((r) => [r.id, true]),

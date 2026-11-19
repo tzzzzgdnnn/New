@@ -9,10 +9,18 @@ let _lastStorageEvent = 0;
 // The log names ordinary settings keys, but never the keys that hold
 // credentials (API keys, tokens, PINs): those show as "a secure key".
 const SENSITIVE_KEY = /key|token|secret|pass|pin|auth/i;
+// Only names from a fixed list of plain settings keys are ever logged. The
+// label is read from that list, never copied from the caller, so nothing a
+// caller passes in (such as a credential key) can reach the log.
+let _loggable = null;
 function logLabel(key) {
-  const name = String(key ?? "");
-  if (SENSITIVE_KEY.test(name)) return "a secure key";
-  return name.replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 64);
+  try {
+    _loggable ||= Object.values(STORAGE_KEYS).filter((k) => typeof k === "string" && !SENSITIVE_KEY.test(k));
+    const i = _loggable.indexOf(String(key ?? ""));
+    return i >= 0 ? _loggable[i] : "a secure or unlisted key";
+  } catch {
+    return "a key";
+  }
 }
 function reportStorageProblem(kind, key, err) {
   try {
@@ -188,6 +196,7 @@ export const PROFILE_SCOPED_KEYS = new Set([
   STORAGE_KEYS.PLAYER_SUBS_ON,
   STORAGE_KEYS.PLAYER_SUB_SCALE,
   "searchHistory",
+  "kidsFavorites",
 ]);
 
 /**
