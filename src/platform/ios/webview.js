@@ -165,7 +165,9 @@ function upgrade(wv) {
   const hideCard = () => (card.style.display = "none");
 
   let nativeFor = null;
+  let lastNativeAt = 0;
   const playNative = (url) => {
+    lastNativeAt = Date.now();
     const token = Math.random().toString(36).slice(2);
     nativeFor = url;
     iframe.src = "about:blank";
@@ -260,6 +262,22 @@ function upgrade(wv) {
   wv.insertCSS = () => Promise.resolve();
   wv.getURL = () => iframe.src;
   wv.reload = () => loadUrl(wv.getAttribute("src"));
+
+  // Server picked in the native player: the page swaps the URL, which
+  // reopens the player. If the URL didn't change (same server, or the page
+  // was still waiting on anime data), reopen it ourselves so one tap is enough.
+  window.addEventListener("sb-select-server", () => {
+    if (!wv.isConnected) return;
+    const picked = Date.now();
+    const retry = (left) =>
+      setTimeout(() => {
+        if (lastNativeAt >= picked) return;
+        const u = wv.getAttribute("src");
+        if (u && u !== "about:blank" && nativeAvailable()) playNative(u);
+        else if (left > 0) retry(left - 1);
+      }, 700);
+    retry(4);
+  });
 
   new MutationObserver(() => loadUrl(wv.getAttribute("src"))).observe(wv, {
     attributes: true,
