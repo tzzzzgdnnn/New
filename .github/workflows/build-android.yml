@@ -1,0 +1,87 @@
+name: Build Android (APK)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, ipa-test-build, apk-port]
+    paths-ignore:
+      - "servers.json"
+permissions:
+  contents: write
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - name: Install deps
+        run: npm ci --no-audit --no-fund --ignore-scripts
+      - name: Build web (Android mode)
+        run: npx vite build --mode android
+      - name: Capacitor sync
+        run: npx cap sync android
+
+      # One signing key for every build, so a new APK installs over the old one.
+      # Uses the ANDROID_KEYSTORE_B64 / ANDROID_KEYSTORE_PASS secrets when set;
+      # otherwise a key made once and kept in the Actions cache.
+      - name: Signing key (cache)
+        id: ks
+        uses: actions/cache@v4
+        with:
+          path: ~/.sp-keystore
+          key: superplayer-android-keystore-v1
+      - name: Signing key
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+        run: |
+          mkdir -p ~/.sp-keystore
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > ~/.sp-keystore/release.jks
+            echo "SP_KEYSTORE_PASS=$KS_PASS" >> "$GITHUB_ENV"
+          else
+            if [ ! -f ~/.sp-keystore/release.jks ]; then
+              keytool -genkeypair -v -keystore ~/.sp-keystore/release.jks -alias superplayer \
+                -keyalg RSA -keysize 2048 -validity 10000 -storepass superplayer -keypass superplayer \
+                -dname "CN=Super Player"
+            fi
+            echo "SP_KEYSTORE_PASS=superplayer" >> "$GITHUB_ENV"
+          fi
+          echo "SP_KEYSTORE=$HOME/.sp-keystore/release.jks" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        env:
+          SP_VERSION_CODE: ${{ github.run_number }}
+          SP_VERSION_NAME: 2.7.${{ github.run_number }}
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/Super-Player.apk"
+          ls -lh "$RUNNER_TEMP/Super-Player.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Super-Player-apk
+          path: ${{ runner.temp }}/Super-Player.apk
+          if-no-files-found: error
+
+      # Phone-friendly download: the newest APK on one fixed release page.
+      - name: Publish to the "android-latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view android-latest >/dev/null 2>&1 || \
+            gh release create android-latest --title "Super Player for Android (latest)" \
+              --notes "Newest Android build. Download Super-Player.apk on your phone and open it to install." --prerelease
+          gh release upload android-latest "$RUNNER_TEMP/Super-Player.apk" --clobber

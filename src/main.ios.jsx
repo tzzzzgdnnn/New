@@ -19,6 +19,7 @@ installDiagnostics();
 // offline), installed before the app asks whether downloads are available.
 if (import.meta.env.VITE_WEB) {
   document.documentElement.classList.add("sb-web");
+  if (import.meta.env.VITE_ANDROID) document.documentElement.classList.add("sb-android");
   // Cinejoy (direct, no ads) becomes the default server once on the web app.
   try {
     if (!localStorage.getItem("sbWebCinejoyDefault")) {
@@ -46,7 +47,7 @@ if (import.meta.env.VITE_WEB) {
 const webReady = import.meta.env.VITE_WEB
   ? import("./platform/web/offlineDownloads").then((m) => m.installWebDownloads()).catch(() => {})
   : Promise.resolve();
-if (import.meta.env.VITE_WEB && "serviceWorker" in navigator) {
+if (import.meta.env.VITE_WEB && !import.meta.env.VITE_ANDROID && "serviceWorker" in navigator) {
   window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
 }
 showLaunchSplash();

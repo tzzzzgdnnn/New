@@ -20,6 +20,7 @@
     "dist:appimage": "cross-env ELECTRON_DIST=1 vite build && electron-builder --linux AppImage --publish never",
     "dist:win": "cross-env ELECTRON_DIST=1 vite build && electron-builder --win --publish never",
     "dist:mac": "cross-env ELECTRON_DIST=1 vite build && electron-builder --mac --universal --publish never",
+    "build:android": "vite build --mode android && cap sync android",
     "build:ios": "vite build --mode ios && cap sync ios",
     "build:web": "vite build --mode web --outDir dist-web",
     "test:ios": "sh scripts/run-ios-tests.sh",
@@ -32,6 +33,7 @@
   },
   "devDependencies": {
     "@aparajita/capacitor-secure-storage": "^8.0.1",
+    "@capacitor/android": "^8.6.2",
     "@capacitor/cli": "^8.6.2",
     "@capacitor/core": "^8.6.2",
     "@capacitor/ios": "^8.6.2",

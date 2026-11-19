@@ -13,6 +13,13 @@
   },
   "server": {
     "iosScheme": "capacitor",
-    "hostname": "localhost"
+    "hostname": "localhost",
+    "androidScheme": "https"
+  },
+  "android": {
+    "backgroundColor": "#0A0A0A",
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": false,
+    "captureInput": true
   }
 }

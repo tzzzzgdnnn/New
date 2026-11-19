@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Super Player</string>
+    <string name="title_activity_main">Super Player</string>
+    <string name="package_name">com.tezz.tezzdagoat</string>
+    <string name="custom_url_scheme">com.tezz.tezzdagoat</string>
+</resources>

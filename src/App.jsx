@@ -805,6 +805,25 @@ export default function App() {
     else navigate("home");
   }, [navigateBack, navigate]);
 
+  // Android: the system Back button (MainActivity asks window.__sbAndroidBack).
+  // Leaves full screen first, then goes back a screen; false = nothing left,
+  // so Android puts the app in the background.
+  useEffect(() => {
+    if (!import.meta.env.VITE_ANDROID) return;
+    window.__sbAndroidBack = () => {
+      if (document.fullscreenElement) {
+        document.exitFullscreen?.().catch(() => {});
+        return true;
+      }
+      if (navStackRef.current.length || showSearchRef.current || nestedBack > 0) {
+        navigateBack("android back");
+        return true;
+      }
+      return false;
+    };
+    return () => delete window.__sbAndroidBack;
+  }, [navigateBack, nestedBack]);
+
   // iOS: swipe in from the left edge = Back (WKWebView keeps no history of
   // its own here). Settings sub-pages are handled through runBackHandlers.
   useEffect(() => {

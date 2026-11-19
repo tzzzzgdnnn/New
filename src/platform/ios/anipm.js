@@ -32,7 +32,8 @@ async function relayGet(url, headers, signal) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
-const webRelay = !!(import.meta.env?.VITE_WEB && ANIPM_RELAY);
+// Android app: Capacitor's native HTTP (no CORS), so no relay is needed.
+const webRelay = !!(import.meta.env?.VITE_WEB && !import.meta.env?.VITE_ANDROID && ANIPM_RELAY);
 
 let http = webRelay ? relayGet : nativeGet;
 /** Tests swap the HTTP client. */
@@ -143,4 +144,4 @@ export function cachedAnipm(ctx, now = Date.now()) {
   const e = cache.get(anipmKey(ctx));
   return fresh(e, now) && e.result?.ok ? e.result : null;
 }
-export const anipmWebReady = webRelay;
+export const anipmWebReady = webRelay || !!import.meta.env?.VITE_ANDROID;

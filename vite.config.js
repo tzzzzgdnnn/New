@@ -7,7 +7,9 @@ export default defineConfig(({ mode }) => {
   const isDist = process.env.ELECTRON_DIST === "1";
   // "web" = the iPhone/Android UI as an installable web app (PWA).
   const isWeb = mode === "web";
-  const isIOS = mode === "ios" || isWeb;
+  // "android" = the same phone app as iOS, wrapped by Capacitor as an APK.
+  const isAndroid = mode === "android";
+  const isIOS = mode === "ios" || isWeb || isAndroid;
   // iOS (Capacitor) build: swap the entry for src/main.ios.jsx. Desktop unchanged.
   const iosEntry = {
     name: "streambert-ios-entry",
