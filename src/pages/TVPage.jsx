@@ -1695,11 +1695,11 @@ export default function TVPage({
   useEffect(() => {
     if (!IS_IOS || !isAnime) return;
     const ok = sourcesForContent(true).filter((s) => !s.async);
-    if (!ok.some((s) => s.id === playerSource) && ok.length) {
-      const pick = ok.find((s) => s.animeUrl) || ok[0];
-      setPlayerSource(pick.id);
-    }
-  }, [isAnime, playerSource]);
+    const animeRoute = ok.find((s) => s.animeUrl);
+    // Dub needs the anime route; Sub may stay on any anime server.
+    const valid = ok.some((s) => s.id === playerSource) && (dubMode !== "dub" || !animeRoute || playerSource === animeRoute.id);
+    if (!valid && ok.length) setPlayerSource((animeRoute || ok[0]).id);
+  }, [isAnime, playerSource, dubMode]);
 
   // ── iOS: context for the native player + its server switcher ──────────
   useEffect(() => {

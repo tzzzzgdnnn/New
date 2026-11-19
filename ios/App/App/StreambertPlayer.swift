@@ -184,7 +184,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     private var subs: [URL] = []
     private var completion: ((SniffResult?) -> Void)?
     private(set) var running = false
-    static let perServerTimeout: TimeInterval = 12
+    static let perServerTimeout: TimeInterval = 16
 
     init(container: UIView) { self.container = container }
 

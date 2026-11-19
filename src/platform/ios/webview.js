@@ -77,28 +77,38 @@ function buildCandidates(url) {
   const cur = PLAYER_SOURCES.find((s) => s.id === current);
   const isAnime = !!ctx.isAnime;
   const mode = ctx.dubMode === "dub" ? "dub" : "sub";
-  const curId = cur ? (isAnime && cur.animeUrl ? `${cur.id}:${mode}` : cur.id) : "current";
-  const list = [{ id: curId, label: cur?.label || "Server", url }];
-  for (const m of mirrorsFor(url)) list.push({ id: curId, label: cur?.label || "Server", url: m });
-  const seen = new Set(list.map((c) => c.url));
+  const list = [];
+  const seen = new Set();
   const add = (id, label, u) => {
     if (!u || !/^https?:/.test(u) || seen.has(u) || list.length >= MAX_CANDIDATES) return;
     seen.add(u);
     list.push({ id, label, url: u });
   };
-  const id = ctx.tmdbId;
   const sources = sourcesForContent(isAnime).filter((s) => !s.async && !s.idType);
-  // Anime: dedicated anime routes first, in the chosen language (Sub/Dub).
+  const ep = ctx.episode ?? 1;
+
+  // Anime: the dedicated anime routes (AniList id, chosen Sub/Dub) go first,
+  // so Dub really plays dubbed instead of a TMDB server's subbed stream.
   if (isAnime && ctx.anilistId) {
-    const ep = ctx.episode ?? 1;
     for (const s of sources) {
       if (!s.animeUrl) continue;
-      try { add(`${s.id}:${mode}`, `${s.label} · ${mode === "dub" ? "Dub" : "Sub"}`, s.animeUrl(ctx.anilistId, ep, mode)); } catch {}
+      try {
+        add(`${s.id}:${mode}`, `${s.label} · ${mode === "dub" ? "Dub" : "Sub"}`, s.animeUrl(ctx.anilistId, ep, mode));
+      } catch {}
     }
   }
-  if (id) {
+  // The page's own URL (current server) and its mirrors. Skipped for Dub when
+  // it is a TMDB-route server, since those only carry the subbed version.
+  const curIsAnimeRoute = !!(cur?.animeUrl && ctx.anilistId);
+  if (!(isAnime && mode === "dub" && !curIsAnimeRoute)) {
+    const curId = cur ? (curIsAnimeRoute && isAnime ? `${cur.id}:${mode}` : cur.id) : "current";
+    add(curId, cur?.label || "Server", url);
+    for (const m of mirrorsFor(url)) add(curId, cur?.label || "Server", m);
+  }
+  // Remaining servers via TMDB ids (Sub only for anime).
+  const id = ctx.tmdbId;
+  if (id && !(isAnime && mode === "dub")) {
     for (const s of sources) {
-      if (s.id === cur?.id && !isAnime) continue;
       if (isAnime && s.animeUrl && ctx.anilistId) continue;
       let u = null;
       try {
@@ -112,6 +122,7 @@ function buildCandidates(url) {
       if (u) add(s.id, s.label, withParams(s, u));
     }
   }
+  if (!list.length) add(cur?.id || "current", cur?.label || "Server", url);
   return list;
 }
 
