@@ -1,6 +1,26 @@
 // First-run choice for anime audio, shown once on the first anime title.
 // The answer is saved and can be changed later in Settings.
-import { setAnimeDubMode } from "./playerBridge";
+import { hasChosenAnimeDubMode, setAnimeDubMode } from "./playerBridge";
+import { storage, STORAGE_KEYS } from "../../utils/storage";
+
+// Asked at most once per app session, even before the answer is stored.
+let askedThisSession = false;
+
+/**
+ * Whether to show the "Sub or Dub?" prompt: only until the viewer has an
+ * anime audio preference. A mode saved by the player's SUB/DUB toggle or a
+ * server pick counts as an answer too (those paths set the mode but not the
+ * "chosen" flag, which made the prompt come back on every anime title).
+ */
+export function shouldAskAnimeDub() {
+  if (askedThisSession || hasChosenAnimeDubMode()) return false;
+  const saved = storage.get(STORAGE_KEYS.HIANIME_DUB_MODE);
+  if (saved === "sub" || saved === "dub") {
+    storage.set(STORAGE_KEYS.ANIME_DUB_CHOSEN, true); // record it as the answer
+    return false;
+  }
+  return true;
+}
 
 const OPTIONS = [
   { mode: "sub", title: "Sub", detail: "Japanese audio with subtitles" },
@@ -8,6 +28,7 @@ const OPTIONS = [
 ];
 
 export default function AnimeDubPrompt({ onChoose }) {
+  askedThisSession = true;
   const choose = (mode) => onChoose?.(setAnimeDubMode(mode));
   return (
     <div className="sb-dub-prompt" role="dialog" aria-modal="true" aria-labelledby="sb-dub-title">

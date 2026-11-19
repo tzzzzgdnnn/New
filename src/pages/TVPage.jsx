@@ -1,8 +1,7 @@
 import { IS_IOS } from "../platform/target";
-import AnimeDubPrompt from "../platform/ios/AnimeDubPrompt";
+import AnimeDubPrompt, { shouldAskAnimeDub } from "../platform/ios/AnimeDubPrompt";
 import {
   getAnimeDubMode,
-  hasChosenAnimeDubMode,
   publishPlayerContext,
   useAnimeServerGuard,
   useNativeServerSelect,
@@ -484,7 +483,7 @@ export default function TVPage({
   const [dubMode, setDubMode] = useState(getAnimeDubMode);
   // iOS: ask "Sub or Dub?" once, on the first anime title
   const [askDubMode, setAskDubMode] = useState(
-    () => IS_IOS && !hasChosenAnimeDubMode(),
+    () => IS_IOS && shouldAskAnimeDub(),
   );
   // async URL resolution
   const [resolvedPlayerUrl, setResolvedPlayerUrl] = useState(null);
