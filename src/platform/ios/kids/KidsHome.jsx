@@ -59,7 +59,7 @@ function GenreGrid({ genre, apiKey, offline, onSelect }) {
     <div className="kids-grid">
       {items.map((it) => (
         <button type="button" key={`${it.media_type}_${it.id}`} className="kids-tile" onClick={() => onSelect(it)}>
-          {it.poster_path && <img src={imgUrl(it.poster_path, "w342")} alt="" loading="lazy" decoding="async" />}
+          {it.poster_path && <img src={imgUrl(it.poster_path, "w185")} alt="" loading="lazy" decoding="async" />}
           <span className="kids-tile-name">{it.title || it.name}</span>
         </button>
       ))}
@@ -116,7 +116,7 @@ export default function KidsHome({
   ];
 
   return (
-    <div className="kids-home fade-in">
+    <div className="kids-home">
       <nav className="kids-tabs" aria-label="Kids">
         {tabs.map((t) => (
           <button
