@@ -13,6 +13,9 @@ const CACHE_KEY = "streambert_serversCache";
 const FETCH_TIMEOUT_MS = 2500;
 
 const BUILTIN = PLAYER_SOURCES.slice();
+// Web app only: Hexa shows a "Verification Required" captcha; Vidrift refuses
+// to play sandboxed.
+const WEB_BLOCKED = new Set(["hexa", "vidrift"]);
 let _mirrorMap = []; // [{ origin, mirrors: [origin...] }]
 
 const fill = (tpl, v) =>
@@ -69,7 +72,16 @@ export function applyServers(cfg) {
     .filter((s) => s && s.movie && Array.isArray(s.mirrors) && s.mirrors.length)
     .map((s) => ({ origin: originOf(s.movie), mirrors: s.mirrors.map(originOf).filter(Boolean) }));
   // Mutate in place: every module imported PLAYER_SOURCES by reference.
-  PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...added, ...builtins);
+  if (import.meta.env?.VITE_WEB) {
+    // Web app: Cinejoy direct always first; servers that show a "verify you're
+    // human" wall or refuse to run sandboxed never appear.
+    const ok = added.filter((s) => !WEB_BLOCKED.has(s.id));
+    const direct = builtins.filter((s) => /\.invalid\//.test(s.movieUrl?.("1") || ""));
+    const rest = builtins.filter((s) => !direct.includes(s) && !WEB_BLOCKED.has(s.id));
+    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct, ...rest, ...ok);
+  } else {
+    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...added, ...builtins);
+  }
   return true;
 }
 

@@ -454,6 +454,14 @@ function upgrade(wv) {
   // Falls back to the embed server if Cinejoy has nothing or it won't play.
   let stopDirect = null;
   let directFor = null;
+  // Cinejoy has nothing for this title: the next server's page for it.
+  const embedFor = (url) => {
+    const m = /cinejoy\.invalid\/(movie|tv)\/([^/?#]+)(?:\/(\d+)\/(\d+))?/.exec(url);
+    if (!m) return url;
+    const next = PLAYER_SOURCES.find((s) => !/\.invalid\//.test(s.movieUrl?.("1") || "") && !s.async && (m[1] === "movie" ? s.movieUrl : s.tvUrl));
+    if (!next) return url;
+    return m[1] === "movie" ? next.movieUrl(m[2]) : next.tvUrl(m[2], m[3] || 1, m[4] || 1);
+  };
   const tryWebDirect = (url) => {
     const ctx = currentCtx();
     if (!ctx || ctx.isAnime || !ctx.tmdbId) return false;
@@ -474,7 +482,7 @@ function upgrade(wv) {
           if (directFor !== url) return;
           diag("player", `web direct failed: ${why}`);
           stopDirect = null;
-          loadUrl(url, { webOnly: true });
+          loadUrl(embedFor(url), { webOnly: true });
         },
       });
     };
@@ -491,7 +499,7 @@ function upgrade(wv) {
         start(r.source);
       })
       .catch(() => {
-        if (directFor === url) { hideCard(); loadUrl(url, { webOnly: true }); }
+        if (directFor === url) { hideCard(); loadUrl(embedFor(url), { webOnly: true }); }
       });
     return true;
   };
