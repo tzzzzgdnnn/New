@@ -2,7 +2,7 @@
 // Single source of truth for which keys are included in backups.
 // Used by manual export/import (SettingsPage) and scheduled backups (App.jsx).
 
-const PREFIX = "streambert_";
+import { STORAGE_PREFIX as PREFIX, profileKey } from "./storage";
 
 // All localStorage keys (without prefix) that are included in backups
 export const BACKUP_KEYS = [
@@ -63,7 +63,7 @@ export function collectBackupData() {
   const data = {};
   for (const key of BACKUP_KEYS) {
     try {
-      const raw = localStorage.getItem(PREFIX + key);
+      const raw = localStorage.getItem(PREFIX + profileKey(key));
       if (raw !== null) data[key] = JSON.parse(raw);
     } catch {
       // skip unparseable entries
@@ -80,7 +80,7 @@ export function restoreBackupData(data) {
   if (!data || typeof data !== "object") throw new Error("Invalid backup data");
   for (const key of BACKUP_KEYS) {
     if (data[key] !== undefined && data[key] !== null) {
-      localStorage.setItem(PREFIX + key, JSON.stringify(data[key]));
+      localStorage.setItem(PREFIX + profileKey(key), JSON.stringify(data[key]));
     }
   }
 }

@@ -1,5 +1,7 @@
 // ── Age Rating Backend ────────────────────────────────────────────────────────
 import { tmdbFetch } from "./api";
+import { isKidsProfileActive } from "./profileScope";
+import { KIDS_MAX_AGE } from "./kidsFilter";
 
 export const RATING_COUNTRIES = [
   { code: "US", label: "United States (MPAA / TV Parental)" },
@@ -163,10 +165,12 @@ export async function fetchTVRating(tvId, apiKey, countryCode) {
   }
 }
 
+/** The age limit in Settings, capped at PG / TV-PG while a Kids profile is active. */
 export function getAgeLimitSetting(storage) {
   const val = storage.get("ageLimit");
-  if (val === null || val === undefined || val === "") return null;
-  return Number(val);
+  const limit = val === null || val === undefined || val === "" ? null : Number(val);
+  if (!isKidsProfileActive()) return limit;
+  return limit === null ? KIDS_MAX_AGE : Math.min(limit, KIDS_MAX_AGE);
 }
 
 export function getRatingCountry(storage) {

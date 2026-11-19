@@ -1,5 +1,6 @@
 import { IS_IOS as __IS_IOS } from "../platform/target";
 import { AnimeDubSetting } from "../platform/ios/AnimeDubPrompt";
+import ProfileSettingsSection from "../platform/ios/profiles/ProfileSettingsSection";
 import { getAnimeDubMode } from "../platform/ios/playerBridge";
 import { useState, useEffect, useRef } from "react";
 import UpdateModal from "../components/UpdateModal";
@@ -3659,6 +3660,13 @@ export default function SettingsPage({
         <div style={{ color: "var(--text3)", fontSize: 14, marginBottom: 48 }}>
           App configuration for Streambert
         </div>
+
+        {__IS_IOS && (
+          <>
+            <SectionGroupHeader title="Profiles" subtitle="Who is watching on this device" />
+            <ProfileSettingsSection />
+          </>
+        )}
 
         {/* ══════════════════════════════════════════════════════════════════ */}
         {/* GROUP: GENERAL                                                     */}

@@ -1,11 +1,13 @@
 // localStorage-based persistence (works in both Vite dev and prod)
+import { getActiveProfileId, scopedKey } from "./profileScope";
 
-const PREFIX = "streambert_";
+export const STORAGE_PREFIX = "streambert_";
+const PREFIX = STORAGE_PREFIX;
 
 export const storage = {
   get(key) {
     try {
-      let raw = localStorage.getItem(PREFIX + key);
+      let raw = localStorage.getItem(PREFIX + profileKey(key));
       // Legacy AllManga → HiAnime migration (settings saved by older versions)
       if (!raw && key === "hianimeDubMode") {
         raw = localStorage.getItem(PREFIX + "allmangaDubMode");
@@ -19,12 +21,15 @@ export const storage = {
   },
   set(key, value) {
     try {
-      localStorage.setItem(PREFIX + key, JSON.stringify(value));
+      const json = JSON.stringify(value);
+      localStorage.setItem(PREFIX + profileKey(key), json);
+      if (isNativeMirrored(key)) localStorage.setItem(PREFIX + key, json);
     } catch {}
   },
   remove(key) {
     try {
-      localStorage.removeItem(PREFIX + key);
+      localStorage.removeItem(PREFIX + profileKey(key));
+      if (isNativeMirrored(key)) localStorage.removeItem(PREFIX + key);
     } catch {}
   },
   // Remove all streambert_ keys (used by reset)
@@ -107,6 +112,65 @@ export const STORAGE_KEYS = {
   // Controller / gamepad navigation
   GAMEPAD_ENABLED: "gamepadEnabled",
 };
+
+// ── Profiles ──────────────────────────────────────────────────────────────────
+// Per-person keys live under the active profile's namespace (iOS profiles).
+// App-wide keys (TMDB token, servers, caches, appearance) stay global.
+
+/** Per-person logical keys, stored once per profile. */
+export const PROFILE_SCOPED_KEYS = new Set([
+  STORAGE_KEYS.HISTORY,
+  STORAGE_KEYS.WATCH_PROGRESS,
+  STORAGE_KEYS.WATCHED,
+  STORAGE_KEYS.SAVED,
+  STORAGE_KEYS.SAVED_ORDER,
+  STORAGE_KEYS.LIBRARY_SORT,
+  STORAGE_KEYS.HISTORY_ENABLED,
+  STORAGE_KEYS.HIANIME_DUB_MODE,
+  STORAGE_KEYS.ANIME_DUB_CHOSEN,
+  STORAGE_KEYS.SUBTITLE_ENABLED,
+  STORAGE_KEYS.SUBTITLE_LANG,
+  STORAGE_KEYS.INTRO_SKIP_MODE,
+  STORAGE_KEYS.AUTOPLAY_NEXT_ENABLED,
+  STORAGE_KEYS.AUTOPLAY_NEXT_DURATION,
+  STORAGE_KEYS.AUTOPLAY_NEXT_LAYOUT,
+  STORAGE_KEYS.WATCHED_THRESHOLD,
+  "searchHistory",
+]);
+
+/**
+ * Per-person key prefixes: playback position ("dlTime_<progressKey>"),
+ * runtime ("sbDur_") and last episode per series ("sbLastEp_"), see
+ * platform/ios/resume.js.
+ */
+export const PROFILE_SCOPED_PREFIXES = ["dlTime_", "sbDur_", "sbLastEp_"];
+
+/**
+ * Per-person keys the native player glue reads straight from localStorage
+ * under their global name (platform/ios/webview.js). Writes also refresh that
+ * global copy, which always mirrors the active profile.
+ */
+export const NATIVE_MIRRORED_KEYS = new Set([STORAGE_KEYS.SUBTITLE_LANG]);
+
+/** Whether a logical key holds per-person data. */
+export const isProfileScoped = (key) =>
+  PROFILE_SCOPED_KEYS.has(key) ||
+  PROFILE_SCOPED_PREFIXES.some((prefix) => key.startsWith(prefix));
+
+const isNativeMirrored = (key) =>
+  getActiveProfileId() !== null && NATIVE_MIRRORED_KEYS.has(key);
+
+/**
+ * Resolve a logical key to the key it is stored under: per-person keys get
+ * the active profile's namespace, everything else is returned unchanged.
+ * Every per-person read and write goes through here (via `storage`).
+ * @param {string} key logical key, e.g. "history" or "dlTime_movie_550"
+ * @returns {string}
+ */
+export function profileKey(key) {
+  const id = getActiveProfileId();
+  return id !== null && isProfileScoped(key) ? scopedKey(id, key) : key;
+}
 
 export const getApiKey = () => storage.get(STORAGE_KEYS.API_KEY);
 

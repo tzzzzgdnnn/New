@@ -6,6 +6,7 @@ import MediaCard from "../../components/MediaCard";
 import { PlayIcon } from "../../components/Icons";
 import { imgUrl, tmdbFetch } from "../../utils/api";
 import NOSTALGIA from "./nostalgia.json";
+import { isKidsProfileActive } from "../../utils/profileScope";
 
 const tag = (type) => (r) => (r.results || []).map((i) => ({ ...i, media_type: type }));
 
@@ -37,14 +38,21 @@ function RowTitle({ title, sub }) {
   );
 }
 
+const ratingOf = (ratingsMap, item) =>
+  ratingsMap?.[`${item.media_type === "tv" ? "tv" : "movie"}_${item.id}`] || {};
+
 export function PosterRail({ title, sub, items, onSelect, watched, onMarkWatched, onMarkUnwatched, ratingsMap }) {
-  if (!items?.length) return null;
+  // Kids profiles never see restricted titles, not even as a locked card.
+  const visible = isKidsProfileActive()
+    ? (items || []).filter((item) => !ratingOf(ratingsMap, item).restricted)
+    : items;
+  if (!visible?.length) return null;
   return (
     <div className="section sb-row-section">
       <RowTitle title={title} sub={sub} />
       <div className="sb-row">
-        {items.map((item) => {
-          const rd = ratingsMap?.[`${item.media_type === "tv" ? "tv" : "movie"}_${item.id}`] || {};
+        {visible.map((item) => {
+          const rd = ratingOf(ratingsMap, item);
           return (
             <div className="sb-row-item" key={`${item.media_type}_${item.id}`}>
               <MediaCard

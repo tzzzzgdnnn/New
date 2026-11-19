@@ -6,10 +6,15 @@ import "./styles/global.css";
 import { bootIOS } from "./platform/ios/index.js";
 
 bootIOS().then(async () => {
-  const { default: App } = await import("./App");
+  const [{ default: App }, { default: ProfileGate }] = await Promise.all([
+    import("./App"),
+    import("./platform/ios/profiles/ProfileGate"),
+  ]);
   ReactDOM.createRoot(document.getElementById("root")).render(
     <React.StrictMode>
-      <App />
+      <ProfileGate>
+        <App />
+      </ProfileGate>
     </React.StrictMode>,
   );
 });

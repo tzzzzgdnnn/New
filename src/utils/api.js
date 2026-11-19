@@ -1,3 +1,6 @@
+import { isKidsProfileActive } from "./profileScope";
+import { filterKidSafeResults } from "./kidsFilter";
+
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMG_BASE = "https://image.tmdb.org/t/p";
 
@@ -73,7 +76,7 @@ export const tmdbFetch = async (path, apiKey) => {
   const localizedPath = withLanguage(path);
   const cacheKey = `${apiKey}|${localizedPath}`;
   const cached = _tmdbCache.get(cacheKey);
-  if (cached && Date.now() < cached.expiresAt) return cached.data;
+  if (cached && Date.now() < cached.expiresAt) return forActiveProfile(cached.data);
 
   await _acquireSlot();
 
@@ -112,8 +115,12 @@ export const tmdbFetch = async (path, apiKey) => {
     }
   }
 
-  return data;
+  return forActiveProfile(data);
 };
+
+// Responses are cached unfiltered; Kids profiles get a filtered view of lists.
+const forActiveProfile = (data) =>
+  isKidsProfileActive() ? filterKidSafeResults(data) : data;
 
 // Documentation:
 // https://vsembed.su/api/
