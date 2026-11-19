@@ -198,7 +198,7 @@ function Root({ push }) {
 
 function PlaybackPage() {
   const [autoNext, setAutoNext] = useState(() => storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_ENABLED) ?? true);
-  const [countdown, setCountdown] = useState(() => Number(storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_DURATION) ?? 5));
+  const [countdown, setCountdown] = useState(() => Number(storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_DURATION) ?? 10));
   const [introSkip, setIntroSkip] = useState(() => storage.get(STORAGE_KEYS.INTRO_SKIP_MODE) || "off");
   const [threshold, setThreshold] = useState(() => Number(storage.get(STORAGE_KEYS.WATCHED_THRESHOLD) ?? 20));
   return (

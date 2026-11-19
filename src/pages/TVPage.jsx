@@ -8,6 +8,7 @@ import {
 } from "../platform/ios/playerBridge";
 import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
 import { isShuffleable, pickRandomEpisode } from "../utils/shuffle";
+import { syncPlayerPrefs, postUpNext } from "../platform/ios/playerPrefs";
 import {
   clearResume,
   formatClock,
@@ -1847,6 +1848,82 @@ export default function TVPage({
       setShuffling(false);
     }
   }, [shuffling, playing, selectedEp, selectedSeason, d, apiKey, startEpisode]);
+
+  // ── iOS native player: Up Next card ─────────────────────────────────────
+  // The native player shows the card (at the outro or the end) with a
+  // countdown from Settings > Playback; accepting it closes the player and
+  // opens the episode through startEpisode, the same path as an episode tap.
+  // Season end rolls over to S+1 E1, the finale stops, shuffle picks another
+  // random episode. Autoplay setting and countdown are per profile.
+  const upNextRef = useRef(null);
+  useEffect(() => {
+    if (!IS_IOS) return;
+    syncPlayerPrefs();
+  }, [playing, currentProgressKey]);
+  useEffect(() => {
+    if (!IS_IOS || !playing || !selectedEp || !currentProgressKey) return;
+    let cancelled = false;
+    upNextRef.current = null;
+    const enabled = storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_ENABLED) ?? true;
+    if (!enabled || restricted) {
+      postUpNext(null);
+      return;
+    }
+    const countdown = Number(storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_DURATION) ?? 10);
+    const offer = (season, ep, fallbackName) => {
+      if (cancelled) return;
+      upNextRef.current = { season, episode: ep?.episode_number ?? 1 };
+      postUpNext({
+        progressKey: currentProgressKey,
+        title: ep?.name || fallbackName || `Episode ${upNextRef.current.episode}`,
+        subtitle: `S${season} · E${upNextRef.current.episode}`,
+        thumb: imgUrl(ep?.still_path, "w300") || imgUrl(d.backdrop_path, "w780") || undefined,
+        countdown: Number.isFinite(countdown) ? countdown : 10,
+      });
+    };
+    const tmdbSeasons = !useAnilistSeasons && !episodeGroupSeasons;
+    const fetchEp = async (season, episode) => {
+      if (!tmdbSeasons) return null;
+      const data = await tmdbFetch(`/tv/${item.id}/season/${season}`, apiKey).catch(() => null);
+      return (data?.episodes || []).find((e) => e.episode_number === episode) || null;
+    };
+    (async () => {
+      try {
+        if (shuffleOn && canShuffle) {
+          const avoid = { season: selectedSeason, episode: selectedEp.episode_number };
+          const pick = await pickRandomEpisode(d, apiKey, avoid);
+          if (!pick) return postUpNext(null);
+          return offer(pick.season, (await fetchEp(pick.season, pick.episode)) || { episode_number: pick.episode });
+        }
+        if (nextEp) return offer(selectedSeason, nextEp);
+        // Last episode of the season: S+1 E1 if it has aired, else the finale.
+        const idx = currentSeasonEpisodes.findIndex((e) => e.episode_number === selectedEp.episode_number);
+        const isLast = idx >= 0 && idx === currentSeasonEpisodes.length - 1;
+        const next = seasons.find((x) => x.season_number === selectedSeason + 1 && (x.episode_count ?? 1) > 0);
+        if (!isLast || !next || isUnreleased(next.air_date)) return postUpNext(null);
+        const ep1 = await fetchEp(next.season_number, 1);
+        if (tmdbSeasons && (!ep1 || isUnreleased(ep1.air_date))) return postUpNext(null);
+        offer(next.season_number, ep1 || { episode_number: 1 }, next.name);
+      } catch (err) {
+        console.warn("[up next] could not prepare the next episode", err);
+        postUpNext(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, currentProgressKey, nextEp, shuffleOn, restricted, seasons]);
+  useEffect(() => {
+    if (!IS_IOS) return;
+    const onPlay = () => {
+      const target = upNextRef.current;
+      upNextRef.current = null;
+      if (target) startEpisode(target.season, target.episode);
+    };
+    window.addEventListener("sb-up-next-play", onPlay);
+    return () => window.removeEventListener("sb-up-next-play", onPlay);
+  }, [startEpisode]);
 
   // Continue Watching opens straight into the episode it was left on.
   const autoResumedRef = useRef(null);

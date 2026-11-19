@@ -3398,7 +3398,7 @@ function DesktopSettingsPage({
     () => storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_ENABLED) ?? true,
   );
   const [autoplayNextDuration, setAutoplayNextDuration] = useState(
-    () => storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_DURATION) ?? 5,
+    () => storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_DURATION) ?? 10,
   );
   const [autoplayNextLayout, setAutoplayNextLayout] = useState(
     () => storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_LAYOUT) || "right",

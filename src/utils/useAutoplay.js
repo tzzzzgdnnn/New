@@ -44,7 +44,7 @@ export function useAutoplay({ nextEp, playEpisode, restricted }) {
       : false;
     if (restricted || epUnreleased) return;
 
-    const duration = storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_DURATION) ?? 5;
+    const duration = storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_DURATION) ?? 10;
 
     cancelAutoplay(); // Clear any existing active timer
 
