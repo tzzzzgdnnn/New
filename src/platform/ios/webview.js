@@ -462,6 +462,12 @@ function upgrade(wv) {
     showCard("Not available on the web yet. Try again later or use the app.", false);
   };
   const embedFor = (url) => {
+    // Stale "Cinejoy" pick on an anime: the first real anime server instead.
+    const a = /cinejoy\.invalid\/anime\/([^/?#]+)\/([^/?#]+)\/?([a-z]*)/.exec(url);
+    if (a) {
+      const s = PLAYER_SOURCES.find((x) => x.animeUrl && !/\.invalid\//.test(x.movieUrl?.("1") || ""));
+      return s ? s.animeUrl(a[1], a[2], a[3] || "sub") : url;
+    }
     const m = /cinejoy\.invalid\/(movie|tv)\/([^/?#]+)(?:\/(\d+)\/(\d+))?/.exec(url);
     if (!m) return url;
     const next = PLAYER_SOURCES.find((s) => !/\.invalid\//.test(s.movieUrl?.("1") || "") && !s.async && (m[1] === "movie" ? s.movieUrl : s.tvUrl));
@@ -513,7 +519,11 @@ function upgrade(wv) {
   };
   const tryWebDirect = (url) => {
     const ctx = currentCtx();
-    if (ctx?.isAnime) return tryWebAnipm(url, ctx);
+    if (ctx?.isAnime) {
+      if (tryWebAnipm(url, ctx)) return true;
+      if (/cinejoy\.invalid\//.test(url)) { loadUrl(embedFor(url), { webOnly: true }); return true; }
+      return false;
+    }
     if (!ctx || !ctx.tmdbId) return false;
     const picked = readStored("playerSource");
     if (picked && picked !== CINEJOY_ID && !isAutoPick() && !/cinejoy\.invalid/.test(url)) return false;
