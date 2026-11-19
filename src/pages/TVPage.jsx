@@ -1240,7 +1240,12 @@ export default function TVPage({
   );
 
   const currentProgressKey = selectedEp
-    ? `tv_${item.id}_s${selectedSeason}e${selectedEp.episode_number}`
+    ? progressKeyFor({
+        type: "tv",
+        id: item.id,
+        season: selectedSeason,
+        episode: selectedEp.episode_number,
+      })
     : null;
 
   // Check if currently-playing episode is already downloaded or downloading
@@ -2786,7 +2791,7 @@ export default function TVPage({
               (seasonData?.episodes || episodeGroupCurrentEpisodes?.length) && (
                 <div className="episodes-grid">
                   {currentSeasonEpisodes.map((ep) => {
-                    const pk = `tv_${item.id}_s${selectedSeason}e${ep.episode_number}`;
+                    const pk = progressKeyFor({ type: "tv", id: item.id, season: selectedSeason, episode: ep.episode_number });
                     return (
                       <EpisodeCard
                         key={ep.episode_number}

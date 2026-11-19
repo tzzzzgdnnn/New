@@ -8,7 +8,12 @@ import {
   useNativeServerSelect,
 } from "../platform/ios/playerBridge";
 import ResumeButtons, { replayNative } from "../platform/ios/ResumeButtons";
-import { clearResume, formatClock, getResumeSeconds } from "../platform/ios/resume";
+import {
+  clearResume,
+  formatClock,
+  getResumeSeconds,
+  progressKeyFor,
+} from "../platform/ios/resume";
 import {
   useState,
   useEffect,
@@ -226,7 +231,7 @@ export default function MoviePage({
   const ratingCountry = useMemo(() => getRatingCountry(storage), []);
   const restricted = isRestricted(rating.minAge, ageLimitSetting);
 
-  const progressKey = `movie_${item.id}`;
+  const progressKey = progressKeyFor({ type: "movie", id: item.id });
   const pct = progress[progressKey] || 0;
   const isWatched = !!watched?.[progressKey];
   const hasProgress = pct > 0;

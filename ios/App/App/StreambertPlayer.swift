@@ -925,6 +925,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     fileprivate let qualityButton = UIButton(type: .system)
     fileprivate var speed: Float = 1.0
     fileprivate var qualityCap: Double = 0  // 0 = auto (peak bit rate)
+    fileprivate var qualityMaxResolution: CGSize = .zero  // .zero = no cap
     fileprivate let subLabel = UILabel()
     fileprivate var subAboveControls: NSLayoutConstraint?
     fileprivate var subTracks: [SubTrack] = []
@@ -1005,7 +1006,14 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        player?.play()
+        resumePlayback()
+    }
+
+    /// Play at the chosen speed (plain play() resets to 1x before iOS 16).
+    private func resumePlayback() {
+        guard let p = player, p.currentItem != nil else { return }
+        p.play()
+        if speed != 1 { p.rate = speed }
     }
 
     override func viewWillLayoutSubviews() {
@@ -1135,7 +1143,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         spinner.startAnimating()
         print("[SuperPlayer] play \(url.absoluteString) on \(server ?? "?")")
         startPlayback(url)
-        if isViewLoaded, view.window != nil { player?.play() }
+        if isViewLoaded, view.window != nil { resumePlayback() }
         scheduleHide()
     }
 
@@ -1181,10 +1189,11 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         if !cookies.isEmpty { opts[AVURLAssetHTTPCookiesKey] = cookies }
         let asset = AVURLAsset(url: url, options: opts)
         let item = AVPlayerItem(asset: asset)
+        // Quality choice survives server switches and failover.
+        // Max quality = no caps, and start on the best variant instead of
+        // climbing up from the lowest one.
         item.preferredPeakBitRate = qualityCap
-        // Max quality: no resolution cap, and start on the best variant
-        // instead of climbing up from the lowest one.
-        item.preferredMaximumResolution = .zero
+        item.preferredMaximumResolution = qualityMaxResolution
         if #available(iOS 14.0, *) { item.startsOnFirstEligibleVariant = false }
         item.preferredForwardBufferDuration = 0
         let p = player ?? AVPlayer()
@@ -1762,12 +1771,12 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         guard let s = activeSkip else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         if s.kind == "jump" {
-            // No real timestamps: jump 85 s (a typical opening) once.
+            // No real timestamps: jump a typical opening's length, once.
             let now = player?.currentTime().seconds ?? 0
             skipIntervals.removeAll { $0.kind == "jump" }
             activeSkip = nil
             skipButton.isHidden = true
-            seek(to: now + 85)
+            seek(to: now + Self.introJumpSeconds)
         } else {
             seek(to: s.end)
         }
@@ -1777,10 +1786,13 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     /// Anime: MAL id (from the AniList id the page knows, else a Jikan title
     /// search), then real AniSkip op/ed timestamps.
     /// Series without data: a "Skip Intro" jump of 85 s in the first 5 minutes.
+    private static let introJumpSeconds: Double = 85
+    private static let introJumpWindow: (start: Double, end: Double) = (20, 300)
+
     private func loadSkipTimes() {
         if mediaType == "tv" {
-            // Generic fallback until real data arrives (replaced if it does).
-            skipIntervals = [(kind: "jump", start: 20, end: 300)]
+            // Generic fallback until a real opening arrives (replaced if it does).
+            skipIntervals = [(kind: "jump", start: Self.introJumpWindow.start, end: Self.introJumpWindow.end)]
         }
         guard isAnime, !titleText.isEmpty else { return }
         let ep = episode ?? 1
@@ -1802,7 +1814,12 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
                     out.append((kind: kind == "op" ? "op" : "ed", start: s, end: e))
                 }
                 guard !out.isEmpty else { return }
-                DispatchQueue.main.async { self?.skipIntervals = out }
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    // Keep the generic intro jump when AniSkip only knows the outro.
+                    let keepJump = !out.contains { $0.kind == "op" }
+                    self.skipIntervals = out + (keepJump ? self.skipIntervals.filter { $0.kind == "jump" } : [])
+                }
             }.resume()
         }
     }
@@ -1823,7 +1840,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     }
 
     private func jikanMalId(_ done: @escaping (Int?) -> Void) {
-        var comps = URLComponents(string: "https://api.jikan.moe/v4/anime")!
+        guard var comps = URLComponents(string: "https://api.jikan.moe/v4/anime") else { return done(nil) }
         comps.queryItems = [URLQueryItem(name: "q", value: titleText), URLQueryItem(name: "limit", value: "1")]
         guard let url = comps.url else { return done(nil) }
         URLSession.shared.dataTask(with: url) { data, _, _ in
@@ -2355,6 +2372,7 @@ extension StreambertPlayerViewController {
             UIAction(title: o.0, state: qualityCap == o.1 ? .on : .off) { [weak self] _ in
                 guard let self = self, let item = self.player?.currentItem else { return }
                 self.qualityCap = o.1
+                self.qualityMaxResolution = o.2
                 item.preferredPeakBitRate = o.1
                 item.preferredMaximumResolution = o.2
                 let sym = UIImage(systemName: "sparkles.tv") == nil ? "tv" : "sparkles.tv"

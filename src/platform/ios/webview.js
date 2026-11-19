@@ -58,7 +58,9 @@ function postContext(url) {
       ctx,
       servers: serverListFor(ctx),
     });
-  } catch {}
+  } catch (e) {
+    console.warn("[native] sbContext failed", e);
+  }
 }
 
 // Subtitle settings the native player needs: the Wyzie key (Keychain) and
@@ -67,7 +69,9 @@ async function subtitleContext() {
   let wyzieKey = null;
   try {
     wyzieKey = (await window.electron?.secureGet?.("wyzieApiKey")) || null;
-  } catch {}
+  } catch (e) {
+    console.warn("[native] could not read the Wyzie key", e);
+  }
   return { wyzieKey, subLang: readStored("subtitleLang", "en") || "en" };
 }
 
@@ -264,7 +268,8 @@ function upgrade(wv) {
           current: candidates[0]?.id ?? null,
           servers: serverListFor(ctx),
         });
-      } catch {
+      } catch (e) {
+        console.warn("[native] sbResolve failed, using the web player", e);
         pending.delete(token);
         hideCard();
         loadUrl(url, { webOnly: true });
