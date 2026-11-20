@@ -447,6 +447,7 @@ export default function App() {
     setApiErrorHandlers(
       () => setApiKeyStatus("invalid_token"), // 401 / 403
       () => setApiKeyStatus("unreachable"), // network failure
+      () => setApiKeyStatus((s) => (s === "unreachable" ? "ok" : s)), // a request got through again
     );
   }, []);
 
@@ -619,6 +620,40 @@ export default function App() {
   useEffect(() => {
     fetchTrending();
   }, [fetchTrending]);
+
+  // "Can't reach TMDB" heals itself: retry every few seconds, when the
+  // phone comes back online, and when the app returns to the screen (the
+  // Android WebView often has no network for a moment at launch/resume).
+  useEffect(() => {
+    if (apiKeyStatus !== "unreachable" || !apiKey) return;
+    let stop = false, delay = 2000, timer = 0;
+    const probe = () => {
+      if (stop) return;
+      clearTimeout(timer);
+      fetch("https://api.themoviedb.org/3/configuration", { headers: { Authorization: `Bearer ${apiKey}` } })
+        .then((res) => {
+          if (stop) return;
+          if (res.status === 401 || res.status === 403) setApiKeyStatus("invalid_token");
+          else { setApiKeyStatus("ok"); fetchTrending(); }
+        })
+        .catch(() => {
+          if (stop) return;
+          timer = setTimeout(probe, delay);
+          delay = Math.min(delay * 2, 30000);
+        });
+    };
+    const now = () => { delay = 2000; probe(); };
+    const vis = () => document.visibilityState === "visible" && now();
+    timer = setTimeout(probe, delay);
+    window.addEventListener("online", now);
+    document.addEventListener("visibilitychange", vis);
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+      window.removeEventListener("online", now);
+      document.removeEventListener("visibilitychange", vis);
+    };
+  }, [apiKeyStatus, apiKey, fetchTrending]);
 
   const retryHome = useCallback(() => {
     if (offline) return;
