@@ -13,8 +13,11 @@ import { registerPlugin } from "@capacitor/core";
 // iPhone app's native player. Undefined in every other build.
 const SbPlayer = import.meta.env.VITE_ANDROID ? registerPlugin("SbPlayer") : null;
 
-function playAndroid(box, src, { startAt = 0, onFail, onTime, referer = "" }) {
+function playAndroid(box, src, { startAt = 0, onFail, onTime, referer = "", headers = null }) {
   let done = false;
+  // Events carry the session they belong to (offline downloads use the same player).
+  const session = `stream:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const mine = (e) => !e?.session || e.session === session;
   const subs = [];
   let lastPos = startAt;
   const cleanup = () => {
@@ -26,7 +29,7 @@ function playAndroid(box, src, { startAt = 0, onFail, onTime, referer = "" }) {
   btn.textContent = "▶  Play";
   btn.style.cssText =
     "position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;padding:16px 34px;border-radius:28px;border:0;background:rgba(229,9,20,.92);color:#fff;font-size:20px;font-weight:600";
-  const open = (at) => SbPlayer.play({ url: src, startAt: at, referer }).catch(() => { cleanup(); btn.remove(); onFail?.("plugin"); });
+  const open = (at) => SbPlayer.play({ url: src, startAt: at, referer, headers: headers || {}, session }).catch(() => { cleanup(); btn.remove(); onFail?.("plugin"); });
   btn.onclick = () => {
     if (done) return;
     btn.textContent = "Resume";
@@ -37,10 +40,10 @@ function playAndroid(box, src, { startAt = 0, onFail, onTime, referer = "" }) {
   box.appendChild(black);
   box.appendChild(btn);
   Promise.all([
-    SbPlayer.addListener("progress", (e) => { if (!done && e.pos > 0) { lastPos = e.pos; onTime?.(e.pos, e.dur); } }),
-    SbPlayer.addListener("closed", (e) => { if (!done && e.pos > 0) { lastPos = e.pos; onTime?.(e.pos, e.dur); } btn.textContent = "▶  Resume"; }),
+    SbPlayer.addListener("progress", (e) => { if (!done && mine(e) && e.pos > 0) { lastPos = e.pos; onTime?.(e.pos, e.dur); } }),
+    SbPlayer.addListener("closed", (e) => { if (done || !mine(e)) return; if (e.pos > 0) { lastPos = e.pos; onTime?.(e.pos, e.dur); } btn.textContent = "▶  Resume"; }),
     SbPlayer.addListener("failed", (e) => {
-      if (done) return;
+      if (done || !mine(e)) return;
       cleanup();
       black.remove();
       btn.remove();
@@ -220,8 +223,8 @@ export function forceFullscreen(el) {
  * or on a fatal error. onTime(position, duration) reports progress every few
  * seconds, on pause, at the end and on stop. Returns a stop() function.
  */
-export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 12000, nativeOnly = false, referer = "" } = {}) {
-  if (SbPlayer) return playAndroid(box, src, { startAt, onFail, onTime, referer });
+export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 12000, nativeOnly = false, referer = "", headers = null } = {}) {
+  if (SbPlayer) return playAndroid(box, src, { startAt, onFail, onTime, referer, headers });
   const w = takeWarm(src, nativeOnly);
   const video = w ? w.video : makeVideo();
   const isIPhone = isIPhoneUA();

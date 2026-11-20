@@ -68,9 +68,13 @@ if (import.meta.env.VITE_WEB) {
     true,
   );
 }
-const webReady = import.meta.env.VITE_WEB
-  ? import("./platform/web/offlineDownloads").then((m) => m.installWebDownloads()).catch(() => {})
-  : Promise.resolve();
+// Android app: the native downloader (like the iPhone app's). Web app: the
+// browser downloader.
+const webReady = import.meta.env.VITE_ANDROID
+  ? import("./platform/web/androidDownloads").then((m) => m.installAndroidDownloads()).catch(() => {})
+  : import.meta.env.VITE_WEB
+    ? import("./platform/web/offlineDownloads").then((m) => m.installWebDownloads()).catch(() => {})
+    : Promise.resolve();
 if (import.meta.env.VITE_WEB && !import.meta.env.VITE_ANDROID && "serviceWorker" in navigator) {
   window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
 }

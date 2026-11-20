@@ -35,6 +35,13 @@ public class UnwrapDataSource implements DataSource {
 
     @Override
     public long open(DataSpec spec) throws IOException {
+        // Cookies the embed page got (Cloudflare / token cookies), per host,
+        // so the stream is fetched the way the page fetched it.
+        String scheme = spec.uri.getScheme();
+        if (("http".equals(scheme) || "https".equals(scheme)) && !spec.httpRequestHeaders.containsKey("Cookie")) {
+            String c = StreamSniffer.cookiesFor(spec.uri.toString());
+            if (c != null) spec = spec.withAdditionalHeaders(java.util.Collections.singletonMap("Cookie", c));
+        }
         long len = up.open(spec);
         head = null; headPos = 0; headLen = 0;
         String p = spec.uri.getPath() == null ? "" : spec.uri.getPath().toLowerCase();

@@ -59,6 +59,12 @@ jobs:
           fi
           echo "SP_KEYSTORE=$HOME/.sp-keystore/release.jks" >> "$GITHUB_ENV"
 
+      - name: Unit tests (download math)
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:testDebugUnitTest
+
       - name: Build APK
         env:
           SP_VERSION_CODE: ${{ github.run_number }}

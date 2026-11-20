@@ -36,6 +36,17 @@ const playableHere = async (url) => {
   }
 };
 
+// Android app: the same check through the native HTTP client.
+const playableNatively = async (url) => {
+  try {
+    const { CapacitorHttp } = await import("@capacitor/core");
+    const r = await CapacitorHttp.get({ url, responseType: "text", connectTimeout: 5000, readTimeout: 5000 });
+    return r.status < 400 && String(r.data || "").startsWith("#EXTM3U");
+  } catch {
+    return false;
+  }
+};
+
 const cache = new Map(); // key -> { at, promise, result?, error? }
 
 /** Cache key, or null when Cinejoy isn't used (anime has ani.pm). */
@@ -65,7 +76,10 @@ export function prefetchCinejoy(ctx, { now = Date.now } = {}) {
       imdbId,
       season: ctx.tmdbSeason ?? ctx.season ?? 1,
       episode: ctx.tmdbEpisode ?? ctx.episode ?? 1,
-    }, undefined, import.meta.env?.VITE_WEB ? playableHere : null);
+      // Web app: the browser must be able to read the playlist (CORS). The
+  // Android app reads and plays it natively (no CORS), like the iPhone app,
+  // so only a removed / dead stream is turned away there.
+  }, undefined, import.meta.env?.VITE_ANDROID ? playableNatively : import.meta.env?.VITE_WEB ? playableHere : null);
   })()
     .then((r) => {
       entry.result = r;
