@@ -19,6 +19,11 @@ Live web app: https://tzzzzgdnnn.github.io/New/ (gh-pages, built by `.github/wor
   out; TMDB 429 from sandbox IP at that moment). Suspects left: one `window` "message" listener per upgrade(wv) never
   removed (webview.js ~372, leak per title mount); prewarm <video data-sb-warm> buffering while an embed plays
   (memory -> iOS WebContent jetsam); webAutoNext loop is bounded by failedServers but uses menuId("auto").
+- Data reset report (18:55): no commit 362bf26..e4588cb (or any web commit today) clears/renames storage keys,
+  bumps a schema, or deletes caches/IndexedDB (sw.js untouched). Hardened src/platform/web/keepData.js anyway:
+  restore also when localStorage lost most keys / profiles (fill missing keys only), and a much smaller snapshot no
+  longer silently replaces the backup (old copy kept under IndexedDB sp-keep/kv "rescue"). iOS: a Home Screen web
+  app and a Safari tab have SEPARATE storage; data from one only moves via the #sp-import carry-over.
 - Relay (#20/#21): DROPPED by Montez (no hosting). relay/deno/relay.ts + main.ts committed, unused. Verified locally
   with deno 2.9: /anipm (ani.pm + settlar session + media via Referer/Origin embed.settlar.io), /relay + /media for
   7Movies Orion & Evion (movie 550, tv 1396) and Rive Citadel/PrimeVids (playlist rewrite + Range 206 OK); Movy
