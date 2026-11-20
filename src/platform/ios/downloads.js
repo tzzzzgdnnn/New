@@ -6,6 +6,7 @@ import { downloadCandidates, downloadContext, currentAudioMode, directCandidates
 import { recordLookup } from "./autoServer";
 import { getResumeSeconds, progressKeyFor } from "./resume";
 import { diag } from "../../utils/diag";
+import { storage, STORAGE_KEYS } from "../../utils/storage";
 import { cinejoyCandidates, prefetchCinejoy } from "./cinejoy";
 import { prefetchAnipm, ANIPM_RELAY } from "./anipm";
 
@@ -37,6 +38,7 @@ import {
   downloadMeta,
   episodeDownloadName,
   measureItems,
+  nextDownloadedEpisode,
   qualityOptions,
   sameQuality,
   streamHeight,
@@ -55,15 +57,22 @@ export const DL_SCHEME = "sbdl://";
 
 export { formatBytes, qualityLabel, qualityOptions, tierOf, QUALITY_TIERS, STATUS_LABEL } from "../../utils/downloadMath";
 
-/** Asks the native downloader for every option's size; never throws. */
+/**
+ * Asks the native downloader for every option's size; never throws. A size
+ * that can't be worked out shows "Size unknown" and its reason is logged.
+ */
 export async function measureOptions(probe, options) {
+  const fallbackDurationSec = (Number(probe.ctx?.runtime) || 0) * 60; // TMDB minutes, when the page knows them
+  let results = [];
   try {
     const res = await call("measure", { items: measureItems(probe, options), headers: probe.headers || {} });
-    return applyMeasurements(options, Array.isArray(res) ? res : []);
+    results = Array.isArray(res) ? res : [];
   } catch (e) {
     diag("download", "measure failed:", e?.message || e);
-    return applyMeasurements(options, []);
   }
+  const sized = applyMeasurements(options, results, { fallbackDurationSec });
+  for (const o of sized) if (o.sizeReason) diag("download", `size unknown for ${o.name}: ${o.sizeReason}`);
+  return sized;
 }
 
 /** Native job -> download record used across the app (formatting only). */
@@ -195,6 +204,7 @@ async function startJob(args) {
     id,
     name: args.name,
     streamUrl: probe.streamUrl,
+    kind: probe.kind || null,
     variantUrl: option?.url || null,
     audioUrl: option?.audio || null,
     headers: probe.headers || {},
@@ -274,6 +284,9 @@ export const iosDownloadApi = {
   },
   pauseDownload: (id) => call("pause", { id }),
   resumeDownload: (id) => call("resume", { id }),
+  // Several at once (a show's episodes) in one native step; no ids = all.
+  pauseDownloads: (ids) => call("pauseMany", ids ? { ids } : {}),
+  resumeDownloads: (ids) => call("resumeMany", ids ? { ids } : {}),
   // The native side drops finished downloads whose folder is gone, so a
   // known completed record means the files are there.
   fileExists: async (path) => records.get(idOf(path))?.status === "completed",
@@ -295,6 +308,7 @@ export const iosDownloadApi = {
       episode: r.episode ?? null,
       progressKey,
       startAt: seconds > 0 ? seconds : progressKey ? getResumeSeconds(progressKey) : 0,
+      upNext: offlineUpNext(r, progressKey),
     };
     if (!(await call("play", { id, ctx }))) diag("download", `offline play ${id} failed`);
     return undefined;
@@ -313,6 +327,35 @@ export const iosDownloadApi = {
     return { ok: true };
   },
 };
+
+/**
+ * Up Next for a downloaded episode: the next downloaded episode of the show,
+ * with the countdown from Settings › Playback (0 = buttons only). null when
+ * autoplay is off or nothing later is downloaded.
+ */
+function offlineUpNext(current, progressKey) {
+  if (!(storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_ENABLED) ?? true)) return null;
+  const next = nextDownloadedEpisode([...records.values()], current);
+  if (!next) return null;
+  const countdown = Number(storage.get(STORAGE_KEYS.AUTOPLAY_NEXT_DURATION) ?? DEFAULT_UP_NEXT_COUNTDOWN);
+  return {
+    downloadId: next.id,
+    progressKey,
+    title: next.episodeTitle || next.name,
+    subtitle: next.season != null && next.episode != null ? `S${next.season} · E${next.episode} · Downloaded` : "Downloaded",
+    countdown: Number.isFinite(countdown) ? countdown : DEFAULT_UP_NEXT_COUNTDOWN,
+  };
+}
+const DEFAULT_UP_NEXT_COUNTDOWN = 10;
+
+// Native player -> page: the viewer took the downloaded Up Next (the player
+// already closed); play that download the same way.
+if (typeof window !== "undefined") {
+  window.__sbDownloadUpNextPlay = ({ id } = {}) => {
+    if (!id) return;
+    iosDownloadApi.openPath(DL_SCHEME + id).catch((e) => diag("download", `up next ${id} failed:`, e?.message || e));
+  };
+}
 
 /**
  * Queue several episodes of one show at one quality (the episode picker's

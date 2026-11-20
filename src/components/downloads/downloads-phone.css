@@ -143,6 +143,31 @@
   text-transform: uppercase;
   color: var(--text3, #888);
 }
+/* Section header with a trailing text action (Pause All / Resume All). */
+.pd-section--row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.pd-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--accent, #e50914);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.pd-link:active { opacity: 0.5; }
+.pd-link svg { width: 15px; height: 15px; }
 .pd-empty { padding: 18px 4px; color: var(--text3, #888); font-size: 15px; }
 
 .pd-card {

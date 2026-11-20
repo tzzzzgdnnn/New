@@ -6,6 +6,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, FilmIcon, PauseIcon, PlayIcon, TrashIcon } from "../Icons";
 import { imgUrl } from "../../utils/api";
 import {
+  batchAction,
   downloadsSummary,
   episodeLabel,
   groupDownloads,
@@ -27,6 +28,25 @@ const Poster = memo(function Poster({ path }) {
     </div>
   );
 });
+
+// "Pause All" / "Resume All" style text button for a set of downloads;
+// nothing when every one of them is finished.
+function BatchButton({ records, noun, onPause, onResume }) {
+  const action = batchAction(records);
+  if (!action) return null;
+  const pausing = action === "pause";
+  return (
+    <button
+      type="button"
+      className="pd-link"
+      onClick={() => (pausing ? onPause() : onResume())}
+      aria-label={`${pausing ? "Pause" : "Resume"} ${noun}`}
+    >
+      {pausing ? <PauseIcon /> : <PlayIcon />}
+      {pausing ? "Pause All" : "Resume All"}
+    </button>
+  );
+}
 
 const episodeTag = (d) => (d.mediaType === "tv" && d.season != null && d.episode != null ? `S${d.season} E${d.episode}` : "");
 
@@ -135,7 +155,7 @@ const ShowCard = memo(function ShowCard({ group, stateTotals, highlighted, onOpe
 
 export default function PhoneDownloads({
   downloads,
-  actions, // { pause(id), resume(id), play(record), remove(record) }
+  actions, // { pause(id), resume(id), pauseMany(ids?), resumeMany(ids?), play(record), remove(record) }
   onSelect,
   highlightId,
   onClearHighlight,
@@ -250,7 +270,15 @@ export default function PhoneDownloads({
             {showStateLine(t) && <div className="pd-show-head__states">{showStateLine(t)}</div>}
           </div>
         </div>
-        <div className="pd-section">Episodes</div>
+        <div className="pd-section pd-section--row">
+          <span>Episodes</span>
+          <BatchButton
+            records={shown.episodes}
+            noun={`all episodes of ${shown.name}`}
+            onPause={() => actions.pauseMany(shown.episodes.map((e) => e.id))}
+            onResume={() => actions.resumeMany(shown.episodes.map((e) => e.id))}
+          />
+        </div>
         {shown.episodes.map((e) => card(e, true))}
       </div>
     );
@@ -274,7 +302,15 @@ export default function PhoneDownloads({
 
       {active.length > 0 && (
         <>
-          <div className="pd-section">Active</div>
+          <div className="pd-section pd-section--row">
+            <span>Active</span>
+            <BatchButton
+              records={downloads}
+              noun="all downloads"
+              onPause={() => actions.pauseMany()}
+              onResume={() => actions.resumeMany()}
+            />
+          </div>
           {active.map((g) => entry(g, "active"))}
         </>
       )}

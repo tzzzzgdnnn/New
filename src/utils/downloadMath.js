@@ -54,19 +54,37 @@ export const sameQuality = (options, option) => options.find((o) => o.name === o
 export const qualityLabel = (name, bytes, exact = false) =>
   bytes > 0 ? `${name} · ${exact ? "" : "~"}${formatBytes(bytes)}` : name;
 
+/** "4.2 Mbps" for a bitrate in bits/s. */
+const mbps = (bps) => `${(bps / 1e6).toFixed(1)} Mbps`;
+
+/**
+ * Name of a variant that has no quality tier: its own height ("360p"), else
+ * its bitrate, else what it is. Never a vague "Best quality".
+ */
+export function variantName(v = {}, kind = "hls") {
+  if (kind === "mp4") return "MP4 file";
+  const tier = tierOf(v);
+  if (tier) return tier[1];
+  if (v.height > 0) return `${v.height}p`;
+  const rate = v.averageBandwidth || v.bandwidth;
+  return rate > 0 ? mbps(rate) : "Stream";
+}
+
 /**
  * Download choices for a probe result: one per tier the stream really has
- * (its highest-bitrate variant), best first. A stream with no usable
- * resolutions gets a single "Best available" choice; an MP4 one "Original".
- * Sizes are not known yet (sizing: true); they come from the stream itself
- * (applyMeasurements).
- * Each: { name, label, url, audio, bandwidth, estBytes, exact, sizing }.
+ * (its highest-bitrate variant), best first. Variants without a tier are
+ * named by height or bitrate (the top one is offered); a media playlist or
+ * MP4 is one choice measured at the stream itself. Sizes are not known yet
+ * (sizing: true); they come from the stream (applyMeasurements).
+ * Each: { name, label, url, audio, bandwidth, averageBandwidth, estBytes, exact, sizing }.
  */
 export function qualityOptions(probe) {
-  const base = { estBytes: 0, exact: false, sizing: true, audio: null, bandwidth: 0 };
-  if (probe.kind === "mp4") return [{ ...base, name: "Original", label: "Original", url: null }];
+  const base = { estBytes: 0, exact: false, sizing: true, audio: null, bandwidth: 0, averageBandwidth: 0 };
   const variants = probe.variants || [];
-  if (!variants.length) return [{ ...base, name: "Best available", label: "Best available", url: null }];
+  if (probe.kind === "mp4" || !variants.length) {
+    const name = variantName({}, probe.kind);
+    return [{ ...base, name, label: name, url: null }];
+  }
   const option = (name, v) => ({
     ...base,
     name,
@@ -74,6 +92,7 @@ export function qualityOptions(probe) {
     url: v.url,
     audio: v.audio || null,
     bandwidth: v.bandwidth || 0,
+    averageBandwidth: v.averageBandwidth || 0,
   });
   const best = new Map(); // tier height -> variant
   for (const v of variants) {
@@ -82,7 +101,7 @@ export function qualityOptions(probe) {
   }
   if (!best.size) {
     const top = variants.reduce((a, b) => (b.bandwidth > a.bandwidth ? b : a));
-    return [option("Best available", top)];
+    return [option(variantName(top), top)];
   }
   return QUALITY_TIERS.filter(([h]) => best.has(h)).map(([h, name]) => option(name, best.get(h)));
 }
@@ -93,6 +112,7 @@ export const measureItems = (probe, options) =>
     url: o.url || probe.streamUrl,
     audio: o.audio || null,
     bandwidth: o.bandwidth || 0,
+    averageBandwidth: o.averageBandwidth || 0,
     kind: probe.kind === "mp4" ? "mp4" : "hls",
   }));
 
@@ -101,23 +121,27 @@ export const bandwidthBytes = (bandwidth, durationSec) =>
   bandwidth > 0 && durationSec > 0 ? Math.round((bandwidth * durationSec) / 8) : 0;
 
 /**
- * Sizes measured from the stream (exact byte ranges / Content-Length, or
- * sampled segment sizes × segment count, or BANDWIDTH × the playlist's own
- * duration) put onto the options. A tier whose playlist could not be read
- * still gets BANDWIDTH × the duration another tier's playlist gave (every
- * tier is the same video), so every tier shows MB/GB when anything is known.
+ * Sizes the downloader measured (exact byte ranges / Content-Length, else
+ * AVERAGE-BANDWIDTH or BANDWIDTH × the variant playlist's duration, else
+ * sampled segments) put onto the options. A tier whose playlist could not be
+ * read gets its bitrate × the duration another tier's playlist gave (every
+ * tier is the same video), else × `fallbackDurationSec` (TMDB runtime).
+ * Nothing known stays 0 ("Size unknown") with `sizeReason` saying why.
  */
-export function applyMeasurements(options, results = []) {
-  const duration = Math.max(0, ...results.map((r) => Number(r?.durationSec) || 0));
+export function applyMeasurements(options, results = [], { fallbackDurationSec = 0 } = {}) {
+  const measured = Math.max(0, ...results.map((r) => Number(r?.durationSec) || 0));
+  const duration = measured || Math.max(0, Number(fallbackDurationSec) || 0);
   return options.map((o, i) => {
     const r = results[i] || {};
     let bytes = Number(r.bytes) || 0;
     let exact = r.method === "exact" && bytes > 0;
+    let sizeReason = null;
     if (!(bytes > 0)) {
-      bytes = bandwidthBytes(o.bandwidth, duration);
+      bytes = bandwidthBytes(o.averageBandwidth || o.bandwidth, duration);
       exact = false;
+      if (!(bytes > 0)) sizeReason = r.reason || (duration > 0 ? "no bitrate for this quality" : "no duration for this title");
     }
-    return { ...o, estBytes: bytes, exact, sizing: false, label: qualityLabel(o.name, bytes, exact) };
+    return { ...o, estBytes: bytes, exact, sizing: false, sizeReason, label: qualityLabel(o.name, bytes, exact) };
   });
 }
 
@@ -222,6 +246,8 @@ export const STATUS_LABEL = {
 };
 
 const STATUS_TEXT = { queued: "Waiting in queue…", paused: "Paused" };
+/** Time-left text while the downloader's smoothed rate is still settling. */
+export const ESTIMATING_TEXT = "Estimating…";
 const count = (n) => (Number(n) || 0).toLocaleString("en-US");
 
 /** Downloads that belong in the Active list (anything not finished). */
@@ -270,7 +296,7 @@ export function toDownloadRecord(e, filePath = null) {
     completedFragments: fragmentsDone,
     totalFragments: fragmentsTotal,
     fragments: fragmentsTotal > 0 && !done ? `${count(fragmentsDone)}/${count(fragmentsTotal)} fragments` : "",
-    lastMessage: e.error || STATUS_TEXT[e.status] || (downloading ? formatEta(e.etaSec) : ""),
+    lastMessage: e.error || STATUS_TEXT[e.status] || (downloading ? formatEta(e.etaSec) || ESTIMATING_TEXT : ""),
     filePath: done ? filePath : null,
     subtitles,
     subtitleChip: subtitleChip(subtitles),
@@ -537,3 +563,41 @@ export function batchEstimate(selected = [], sample = null) {
 /** "Breaking Bad S01 E04", the name an episode download gets. */
 export const episodeDownloadName = (show, season, episode) =>
   `${show} S${String(season).padStart(2, "0")} E${String(episode).padStart(2, "0")}`;
+
+// ── Pause controls and offline Up Next ────────────────────────────────────
+
+/** A download that Pause can stop (queued or fetching). */
+export const isPausable = (r) => r?.status === "queued" || r?.status === "downloading";
+/** A download that Resume can restart (paused, or failed: resumes where it stopped). */
+export const isResumable = (r) => r?.status === "paused" || r?.status === "error";
+
+/**
+ * What one Pause/Resume button for a set of downloads does: "pause" while any
+ * of them is running, else "resume" when any is stopped, else null (all done).
+ */
+export function batchAction(records = []) {
+  if (records.some(isPausable)) return "pause";
+  if (records.some(isResumable)) return "resume";
+  return null;
+}
+
+/**
+ * The finished download to offer after `current` ends: the next episode of
+ * the same show by season and episode that is downloaded, skipping ones that
+ * aren't. null for a movie, the last downloaded episode, or no show key.
+ */
+export function nextDownloadedEpisode(records = [], current) {
+  const numbered = (r) => {
+    const n = episodeNumbers(r);
+    return n.season != null && n.episode != null ? n : null;
+  };
+  const key = showKeyOf(current);
+  const at = numbered(current);
+  if (!key || !at) return null;
+  const later = records
+    .filter((r) => r.id !== current.id && r.status === "completed" && showKeyOf(r) === key)
+    .map((r) => ({ r, n: numbered(r) }))
+    .filter(({ n }) => n && (n.season > at.season || (n.season === at.season && n.episode > at.episode)))
+    .sort((a, b) => a.n.season - b.n.season || a.n.episode - b.n.episode);
+  return later[0]?.r || null;
+}
