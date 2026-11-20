@@ -3,6 +3,7 @@
 // Every value is read from and written to the same storage keys the desktop
 // Settings page uses, so the rest of the app behaves exactly as before.
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import "./settings.css";
 import { Group, Row, SwitchRow, ChoiceList, Stepper } from "./cells";
 import ActionSheet from "../ActionSheet";
@@ -76,9 +77,9 @@ const SECTION_TO_PAGE = {
 };
 
 /** A sticky nav bar whose centered title fades in once the large title scrolls away. */
-const NavBar = forwardRef(function NavBar({ title, backLabel, onBack, collapsed, sticky }, ref) {
+const NavBar = forwardRef(function NavBar({ title, backLabel, onBack, collapsed, fixed }, ref) {
   return (
-    <div ref={ref} className={"sps-nav" + (collapsed ? " is-collapsed" : "") + (sticky ? " is-sticky" : "")}>
+    <div ref={ref} className={"sps-nav" + (collapsed ? " is-collapsed" : "") + (fixed ? " is-fixed" : "")}>
       {onBack ? (
         <button type="button" className="sps-back" onClick={onBack} aria-label={`Back to ${backLabel}`}>
           <span className="sps-back-chev" aria-hidden="true" />
@@ -87,7 +88,7 @@ const NavBar = forwardRef(function NavBar({ title, backLabel, onBack, collapsed,
       ) : (
         <span />
       )}
-      <div className="sps-nav-title" aria-hidden={!collapsed}>
+      <div className="sps-nav-title" aria-hidden={!collapsed} role={fixed ? "heading" : undefined} aria-level={fixed ? 1 : undefined}>
         {title}
       </div>
       <span />
@@ -116,9 +117,20 @@ function Page({ title, backLabel, onBack, children, dir, sticky }) {
   const titleRef = useRef(null);
   const navRef = useRef(null);
   const collapsed = useCollapsed(titleRef, navRef);
+  // Fixed nav (Custom Servers): one bar with "‹ Settings" and the title,
+  // pinned under the app's top bar, no large title. Rendered into <body> so
+  // a transformed page (push animation) or the padded scroller can't move it.
+  if (sticky) {
+    return (
+      <div className={"sps-page has-fixed-nav" + (dir ? ` is-${dir}` : "")}>
+        {createPortal(<NavBar title={title} backLabel={backLabel} onBack={onBack} collapsed fixed />, document.body)}
+        {children}
+      </div>
+    );
+  }
   return (
     <div className={"sps-page" + (dir ? ` is-${dir}` : "")}>
-      <NavBar ref={navRef} title={title} backLabel={backLabel} onBack={onBack} collapsed={collapsed} sticky={sticky} />
+      <NavBar ref={navRef} title={title} backLabel={backLabel} onBack={onBack} collapsed={collapsed} />
       <h1 ref={titleRef} className="sps-large-title">
         {title}
       </h1>
