@@ -134,6 +134,18 @@ export default function AdBlockSheet({ platform = "ios" }) {
               </button>
             </div>
             {copied === false && <p className="sp-ab-note">Couldn't copy. Type the hostname above instead.</p>}
+            {typeof window !== "undefined" && window.SbDns && (
+              <button
+                type="button"
+                className="sp-ab-primary"
+                onClick={() => {
+                  setCopied(true);
+                  try { window.SbDns.openSettings(ANDROID_DNS_HOST); } catch {}
+                }}
+              >
+                Copy hostname &amp; open Settings
+              </button>
+            )}
             <ol className="sp-ab-list">
               <li>
                 Open <b>Settings</b> › <b>Network &amp; internet</b> › <b>Private DNS</b>.

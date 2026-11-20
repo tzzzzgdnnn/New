@@ -28,6 +28,8 @@ import { diag } from "../../utils/diag";
 import { customCandidates, withCustom, pickedCustomId, isCustomPlaceholder } from "./customServers";
 
 const LOAD_TIMEOUT_MS = 8000;
+// Web app in a browser (not the Android app, which has native HTTP like iPhone).
+const BROWSER_ONLY = !!(import.meta.env?.VITE_WEB && !import.meta.env?.VITE_ANDROID);
 const MAX_CANDIDATES = 10;
 const SELECT_RETRY_MS = 700;
 const SELECT_RETRIES = 4;
@@ -230,8 +232,8 @@ export async function directCandidates(ctx, opts = {}) {
     movyCandidates(ctx, opts).catch(() => []),
     cinejoyCandidates(ctx, opts).catch(() => []),
     sevenMoviesCandidates(ctx, opts).catch(() => []),
-    import.meta.env?.VITE_WEB ? [] : flixerCandidates(ctx, opts).catch(() => []),
-    import.meta.env?.VITE_WEB ? [] : riveCandidates(ctx, opts).catch(() => []),
+    BROWSER_ONLY ? [] : flixerCandidates(ctx, opts).catch(() => []),
+    BROWSER_ONLY ? [] : riveCandidates(ctx, opts).catch(() => []),
   ]);
   return [...m, ...c, ...s, ...f, ...r];
 }
@@ -386,6 +388,7 @@ function upgrade(wv) {
     const dur = Number(x?.duration);
     if (!(t > 0) || !(dur > 60) || !isFinite(dur) || t > dur + 5) return;
     startWatch?.started();
+    window.__sbEmbedPlayingAt = Date.now(); // the PWA updater waits while an embed plays
     const ctx = currentCtx();
     if (!ctx.progressKey) return;
     if (!embedProg || embedProg.key !== ctx.progressKey) { embedProg?.p.flush(); embedProg = { key: ctx.progressKey, p: webProgress(ctx) }; }
@@ -397,14 +400,15 @@ function upgrade(wv) {
   // Pop-up / ad blocking: the sandbox has no allow-popups, allow-top-navigation
   // or allow-modals, so an embed can't open ad tabs, pop-ups or redirect the
   // app. (The main web path is the ad-free direct stream; embeds are backups.)
-  const SANDBOX = "allow-scripts allow-same-origin allow-forms allow-presentation";
+  const SANDBOX = "allow-scripts allow-same-origin allow-forms"; // ("allow-presentation" is not a valid flag in WebKit)
   iframe.setAttribute("sandbox", SANDBOX);
   // Servers that check for a sandbox and refuse to play inside one ("Remove
   // sandboxing to enable playback"): no sandbox for them. Left to the
   // browser's own guards there: its pop-up blocker (no pop-up without a tap)
   // and its frame-busting rule (a cross-origin frame can't redirect the app
   // without a tap). A tap on such a player can still open an ad tab.
-  const SANDBOX_REFUSERS = /(^|\.)(vidrift\.(in|to|net|cc|xyz|com)|vidrift)$/i;
+  // vidfast: "Please Disable Sandbox" in any sandbox, plays unsandboxed (checked in WebKit).
+  const SANDBOX_REFUSERS = /(^|\.)(vidrift\.(in|to|net|cc|xyz|com)|vidrift|vidfast\.(vc|pro|to|net|co|me|io|xyz)|vidfast)$/i;
   const sandboxFor = (u) => {
     let host = "";
     try { host = new URL(u).hostname; } catch {}
@@ -560,7 +564,7 @@ function upgrade(wv) {
       const s = PLAYER_SOURCES.find((x) => x.animeUrl && !/\.invalid\//.test(x.movieUrl?.("1") || ""));
       return s ? s.animeUrl(a[1], a[2], a[3] || "sub") : url;
     }
-    const m = /cinejoy\.invalid\/(movie|tv)\/([^/?#]+)(?:\/(\d+)\/(\d+))?/.exec(url);
+    const m = /[a-z0-9-]+\.invalid\/(movie|tv)\/([^/?#]+)(?:\/(\d+)\/(\d+))?/.exec(url);
     if (!m) return url;
     const next = PLAYER_SOURCES.find((s) => !/\.invalid\//.test(s.movieUrl?.("1") || "") && !s.async && (m[1] === "movie" ? s.movieUrl : s.tvUrl));
     if (!next) return url;
@@ -640,8 +644,62 @@ function upgrade(wv) {
       if (!tryWebDirect(synced)) showCard("No synced stream for this title right now. Pick something else for the party.", false);
     }, 1200);
   };
+  // Android app: the iPhone's direct servers (Movy, Cinejoy, 7Movies Orion /
+  // Evion, Flixer, Rivestream) through native HTTP, played in the app's own
+  // player one after another; the embed servers only when none plays.
+  const tryAndroidDirect = (url, ctx) => {
+    const picked = readStored("playerSource");
+    const pickedDirect = DIRECT_IDS.has(picked) || SEVENMOVIES_IDS.includes(picked);
+    if (picked && !pickedDirect && !isAutoPick() && !/\.invalid\//.test(url) && !inParty()) return false;
+    directFor = url;
+    iframe.src = "about:blank";
+    fire("dom-ready");
+    showCard("Finding the stream…", false);
+    const toEmbed = () => {
+      if (directFor !== url) return;
+      hideCard();
+      loadUrl(embedFor(url), { webOnly: true });
+    };
+    Promise.race([directCandidates(ctx), new Promise((r) => setTimeout(() => r([]), 9000))])
+      .then((found) => {
+        if (directFor !== url) return;
+        const list = withMovy([], found || []);
+        diag("player", `android direct: ${list.map((c) => c.id).join(", ") || "none"}`);
+        const next = (i) => {
+          if (directFor !== url) return;
+          const c = list[i];
+          if (!c) return toEmbed();
+          hideCard();
+          log("playing", `${c.label} (direct)`);
+          fire("did-finish-load");
+          const prog = webProgress(ctx);
+          const stop = playDirect(wv, c.url.replace(/#sb-direct$/, ""), {
+            startAt: ctx.startAt || prog.startAt,
+            onTime: prog.onTime,
+            referer: c.referer || "",
+            onFail: (why) => {
+              if (directFor !== url) return;
+              diag("player", `android direct ${c.id} failed: ${why}`);
+              stopDirect = null;
+              if (c.id === CINEJOY_ID) forgetCinejoy(ctx);
+              next(i + 1);
+            },
+          });
+          stopDirect = () => { prog.flush(); stop?.(); };
+        };
+        next(0);
+      })
+      .catch(toEmbed);
+    return true;
+  };
   const tryWebDirect = (url) => {
     const ctx = currentCtx();
+    // Android anime: ani.pm first, like the iPhone app (unless an embed was picked by hand).
+    if (import.meta.env.VITE_ANDROID && ctx?.isAnime) {
+      const picked = readStored("playerSource");
+      if ((!picked || isAutoPick() || isAnipmPinned?.() || /\.invalid\//.test(url) || inParty()) && tryWebAnipm(url, ctx)) return true;
+    }
+    if (import.meta.env.VITE_ANDROID && ctx?.tmdbId && !ctx.isAnime) return tryAndroidDirect(url, ctx);
     if (ctx?.isAnime) {
       // Anime: vidrift (embed) is Auto's first choice when watching alone;
       // in a Watch Party only a direct stream (ani.pm) can be kept in sync.

@@ -83,6 +83,33 @@ public class MainActivity extends BridgeActivity {
             @JavascriptInterface public void start() { runOnUiThread(MainActivity.this::startVoice); }
             @JavascriptInterface public void stop() { runOnUiThread(MainActivity.this::stopVoice); }
         }, "SbVoice");
+        // Ad-block DNS (AdGuard, same resolver as the iPhone profile): Android
+        // can't install a DNS profile, so the app copies the Private DNS hostname
+        // and opens the network settings where Private DNS lives (Samsung:
+        // Connections > More connection settings > Private DNS).
+        wv.addJavascriptInterface(new Object() {
+            @JavascriptInterface public String status() {
+                try {
+                    String mode = android.provider.Settings.Global.getString(getContentResolver(), "private_dns_mode");
+                    String host = android.provider.Settings.Global.getString(getContentResolver(), "private_dns_specifier");
+                    return (mode == null ? "" : mode) + "|" + (host == null ? "" : host);
+                } catch (Throwable t) { return "unknown|"; }
+            }
+            @JavascriptInterface public boolean openSettings(String host) {
+                try {
+                    android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                    if (cm != null && host != null) cm.setPrimaryClip(android.content.ClipData.newPlainText("Private DNS", host));
+                } catch (Throwable ignored) {}
+                String[] actions = { "android.settings.WIRELESS_SETTINGS", "android.settings.SETTINGS" };
+                for (String a : actions) {
+                    try {
+                        startActivity(new android.content.Intent(a).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+                        return true;
+                    } catch (Throwable ignored) {}
+                }
+                return false;
+            }
+        }, "SbDns");
         // The page was already loading before these bridges (and the TV user agent) were added: load it once more.
         wv.post(wv::reload);
         ws.setMediaPlaybackRequiresUserGesture(false);
@@ -108,6 +135,25 @@ public class MainActivity extends BridgeActivity {
                     view.post(() -> view.evaluateJavascript(js, null));
                 }
                 return super.shouldInterceptRequest(view, req);
+            }
+
+            // Ad blocking: an embed (or an ad it opened) can't take the app's
+            // own page somewhere else or bounce out to the browser / Play Store.
+            // Only the app's own origin loads in the main frame.
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
+                if (req.isForMainFrame()) {
+                    android.net.Uri u = req.getUrl();
+                    String host = u.getHost() == null ? "" : u.getHost();
+                    // The app's own links (TMDB, GitHub, YouTube trailers) still open
+                    // in the browser when tapped; anything else is an ad redirect.
+                    boolean appLink = req.hasGesture() && host.matches("(.*\\.)?(themoviedb\\.org|github\\.com|youtube\\.com|youtu\\.be)");
+                    if (!"localhost".equals(host) && !host.endsWith(".localhost") && !appLink) {
+                        android.util.Log.i("SuperPlayer", "blocked main-frame navigation to " + u);
+                        return true;
+                    }
+                }
+                return super.shouldOverrideUrlLoading(view, req);
             }
 
             // The web view's renderer died (killed for memory while the player

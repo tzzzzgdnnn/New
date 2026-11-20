@@ -49,7 +49,7 @@ export function publishPlayerContext(ctx) {
   // (Dynamic import: keeps ani.pm and the native HTTP client out of desktop.)
   if (ctx?.isAnime && ctx.anilistId) import("./anipm").then((m) => m.prefetchAnipm(ctx)).catch(() => {});
   // Movies and series: Movy's stream API, resolved now so Play is instant.
-  if (!import.meta.env.VITE_WEB && ctx && !ctx.isAnime && ctx.tmdbId) import("./movy").then((m) => m.prefetchMovy(ctx)).catch(() => {});
+  if ((!import.meta.env.VITE_WEB || import.meta.env.VITE_ANDROID) && ctx && !ctx.isAnime && ctx.tmdbId) import("./movy").then((m) => m.prefetchMovy(ctx)).catch(() => {});
   if (ctx && !ctx.isAnime && ctx.tmdbId) {
     const lookup = import("./cinejoy").then((m) => m.prefetchCinejoy(ctx)).catch(() => null);
     // Web app: load the stream into a hidden player now, so Play is instant.
@@ -61,9 +61,9 @@ export function publishPlayerContext(ctx) {
       .then((r) => r?.ok && r.lang === (ctx.dubMode === "dub" ? "dub" : "sub") && warmWeb(ctx, r.source, true))
       .catch(() => {});
   }
-  if (!import.meta.env.VITE_WEB && ctx && !ctx.isAnime && ctx.tmdbId) import("./sevenmovies").then((m) => m.prefetchSevenMovies(ctx)).catch(() => {});
-  if (!import.meta.env.VITE_WEB && ctx && !ctx.isAnime && ctx.tmdbId) import("./flixer").then((m) => m.prefetchFlixer(ctx)).catch(() => {});
-  if (!import.meta.env.VITE_WEB && ctx && !ctx.isAnime && ctx.tmdbId) import("./rivestream").then((m) => m.prefetchRive(ctx)).catch(() => {});
+  if ((!import.meta.env.VITE_WEB || import.meta.env.VITE_ANDROID) && ctx && !ctx.isAnime && ctx.tmdbId) import("./sevenmovies").then((m) => m.prefetchSevenMovies(ctx)).catch(() => {});
+  if ((!import.meta.env.VITE_WEB || import.meta.env.VITE_ANDROID) && ctx && !ctx.isAnime && ctx.tmdbId) import("./flixer").then((m) => m.prefetchFlixer(ctx)).catch(() => {});
+  if ((!import.meta.env.VITE_WEB || import.meta.env.VITE_ANDROID) && ctx && !ctx.isAnime && ctx.tmdbId) import("./rivestream").then((m) => m.prefetchRive(ctx)).catch(() => {});
   // Measure the title's servers now (player Auto ranking), not on Play.
   import("./webview").then((m) => m.prefetchTitle(ctx)).catch(() => {});
 }

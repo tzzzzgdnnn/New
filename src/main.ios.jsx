@@ -100,7 +100,7 @@ if (import.meta.env.VITE_WEB && !import.meta.env.VITE_ANDROID && "serviceWorker"
       });
       let lastCheck = 0;
       const check = () => {
-        if (Date.now() - lastCheck < 10 * 60 * 1000) return;
+        if (Date.now() - lastCheck < 2 * 60 * 1000) return;
         lastCheck = Date.now();
         reg.update().catch(() => {});
       };
@@ -112,7 +112,9 @@ if (import.meta.env.VITE_WEB && !import.meta.env.VITE_ANDROID && "serviceWorker"
       const idle = () =>
         !window.__sbWatchParty &&
         ![...document.querySelectorAll("video")].some((v) => !v.paused && !v.closest("[data-sb-warm]")) &&
-        ![...document.querySelectorAll("iframe")].some((f) => f.src && !/^about:blank/.test(f.src) && f.offsetWidth > 0);
+        // An embed counts as playing only while it reports progress (a server
+        // page stuck on an error, e.g. vidrift's "Remove sandboxing", is not).
+        !(Date.now() - (window.__sbEmbedPlayingAt || 0) < 30_000);
       const switchIfIdle = () => {
         if (pending && document.visibilityState === "visible" && idle()) {
           pending = false;
