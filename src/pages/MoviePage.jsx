@@ -760,6 +760,11 @@ export default function MoviePage({
     setInterceptedSubs([]);
     setPlaying(true);
     onHistory({ ...d, media_type: "movie" });
+    // Watch Party: this movie plays for everyone.
+    window.dispatchEvent(new CustomEvent("sb-party-play", { detail: {
+      ...(window.__sbCtx?.tmdbId === d?.id ? window.__sbCtx : {}),
+      type: "movie", tmdbId: d?.id, title: d?.title || d?.name, poster: d?.poster_path || null,
+    } }));
   }, [d, onHistory]);
 
   // Intercept fullscreen requests from embedded players (vidsrc / 2embed use
