@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { RoomCore, cleanAvatar, cleanName, AVATAR_DATA_MAX, RATE_BURST } from "../src/watch/roomCore.js";
 import { WatchClient } from "../src/watch/client.js";
-import { VoiceMesh, ICE_SERVERS } from "../src/watch/voice.js";
+import { VoiceMesh, ICE_SERVERS, tuneOpus, MIC_CONSTRAINTS, DUCK_VOLUME } from "../src/watch/voice.js";
 import { chatView } from "../src/watch/chat.js";
 import { createAndroidAdapter } from "../src/watch/adapters/android.js";
 import { VirtualTime, SimPlayer, SimNet } from "./sim.mjs";
@@ -335,4 +335,31 @@ test("voice: listeners hear a speaker without a mic of their own; late joiners a
 
   for (const d of [ios, andr, web, late]) d.mesh.stop();
   assert.ok([...pcs.values()].every((pc) => pc.connectionState === "closed" || ![...[ios, andr, web, late]].some((d) => [...d.mesh.peers.values()].some((p) => p.pc === pc))));
+});
+
+test("voice quality: Opus 64 kbps mono, FEC on, DTX off; mic asks for 48 kHz mono with echo cancellation", () => {
+  const sdp = ["v=0", "m=audio 9 UDP/TLS/RTP/SAVPF 111 0", "a=rtpmap:111 opus/48000/2", "a=fmtp:111 minptime=10;useinbandfec=0;usedtx=1", "a=rtpmap:0 PCMU/8000", ""].join("\r\n");
+  const out = tuneOpus(sdp);
+  const fmtp = out.split("\r\n").find((l) => l.startsWith("a=fmtp:111 "));
+  for (const kv of ["minptime=10", "maxaveragebitrate=64000", "stereo=0", "sprop-stereo=0", "useinbandfec=1", "usedtx=0", "maxplaybackrate=48000"]) assert.ok(fmtp.includes(kv), kv);
+  assert.ok(!fmtp.includes("usedtx=1") && !fmtp.includes("useinbandfec=0"));
+  const bare = tuneOpus(["m=audio 9 UDP/TLS/RTP/SAVPF 109", "a=rtpmap:109 opus/48000/2", ""].join("\r\n"));
+  assert.match(bare, /a=rtpmap:109 opus\/48000\/2\r\na=fmtp:109 maxaveragebitrate=64000;/);
+  assert.equal(tuneOpus("v=0\r\n"), "v=0\r\n", "no Opus, untouched");
+  const a = MIC_CONSTRAINTS.audio;
+  assert.deepEqual([a.echoCancellation, a.noiseSuppression, a.autoGainControl, a.sampleRate, a.channelCount], [true, true, true, 48000, 1]);
+});
+
+test("ducking: the movie drops while someone else talks and comes back when they stop (never for my own voice)", () => {
+  const ducks = [];
+  const mesh = new VoiceMesh({ client: { clientId: "me", sendMsg() {} }, RTCPeerConnectionImpl: FakePC, doc: fakeDoc(), onDuck: (l) => ducks.push(l) });
+  mesh.onVoice({ id: "me", speaking: true });
+  assert.deepEqual(ducks, [], "own voice");
+  mesh.onVoice({ id: "amy", speaking: true });
+  mesh.onVoice({ id: "tez", speaking: true });
+  mesh.onVoice({ id: "amy", speaking: false });
+  assert.deepEqual(ducks, [DUCK_VOLUME], "ducked once while anyone talks");
+  mesh.onVoice({ id: "tez", speaking: false });
+  assert.deepEqual(ducks, [DUCK_VOLUME, 1], "back to full");
+  assert.ok(DUCK_VOLUME >= 0.3 && DUCK_VOLUME <= 0.4);
 });

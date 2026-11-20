@@ -321,6 +321,7 @@ public class PlayerActivity extends AppCompatActivity {
             setPartyUi(true);
             setPartyChat(SbPlayerPlugin.watchChat);
             if (SbPlayerPlugin.watchParty != null) setPartyInfo(SbPlayerPlugin.watchParty);
+            if (player != null) player.setVolume(SbPlayerPlugin.watchDuck);
         }
     }
 
@@ -751,6 +752,24 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     void watchSeek(double pos) { exactSeek(pos); }
+
+    /** Party voice: the movie glides to `level` of its volume while someone talks, then back. */
+    private Runnable duckStep;
+    void setDuck(float level) {
+        if (player == null) return;
+        if (duckStep != null) handler.removeCallbacks(duckStep);
+        final float from = player.getVolume(), to = Math.max(0f, Math.min(1f, level));
+        final int[] i = {0};
+        duckStep = new Runnable() {
+            @Override public void run() {
+                if (player == null) return;
+                i[0]++;
+                player.setVolume(from + (to - from) * Math.min(1f, i[0] / 10f));
+                if (i[0] < 10) handler.postDelayed(this, 25);
+            }
+        };
+        handler.post(duckStep);
+    }
 
     // ── Party chat (the counterpart of the iPhone player's chat column) ──
     // Video on the left, chat on the right (36%, at most 360 dp): the

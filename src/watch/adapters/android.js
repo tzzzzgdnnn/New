@@ -92,7 +92,13 @@ export function createAndroidAdapter({ plugin, getKey, now = () => Date.now() } 
     setParty({ code, count, max, host } = {}) {
       post({ cmd: "party", code: String(code ?? ""), count: Number(count) || 0, max: Number(max) || 0, host: !!host });
     },
-    setVoice() {},
+    setVoice(on) {
+      post({ cmd: "voice", on: !!on });
+    },
+    /** Movie volume while someone in the party talks (1 = full); native glides to it. */
+    setDuck(level) {
+      post({ cmd: "duck", level: Math.max(0, Math.min(1, Number(level) || 1)) });
+    },
 
     // Native → JS (also called directly by the tests).
     _state(s) {

@@ -1087,6 +1087,9 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
             if let p = pos { playerVC?.watchSeek(p) }
         case "voice":
             setWatchVoice(on: (body["on"] as? Bool) == true)
+        case "duck":
+            let level = (body["level"] as? NSNumber)?.floatValue ?? 1
+            playerVC?.setWatchDuck(level)
         default:
             sbLog("sbWatch: unknown cmd \(cmd)")
         }
@@ -1163,8 +1166,10 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         let session = AVAudioSession.sharedInstance()
         do {
             if on {
-                try session.setCategory(.playAndRecord, mode: .default,
-                                        options: [.mixWithOthers, .allowBluetooth, .defaultToSpeaker])
+                // voiceChat: Apple's echo cancellation / voice processing for the mic.
+                try session.setCategory(.playAndRecord, mode: .voiceChat,
+                                        options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
+                try? session.setPreferredSampleRate(48_000)
             } else {
                 try session.setCategory(.playback, mode: .moviePlayback)
             }
@@ -2932,6 +2937,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     fileprivate var chatKeyboardObserver: NSObjectProtocol?
     fileprivate var chatKeyboardBottom: NSLayoutConstraint?
     fileprivate var chatLabels: [String: UIView] = [:]
+    /// Voice ducking ramp (setWatchDuck).
+    fileprivate var duckTimer: Timer?
     /// Original control-bar constraints swapped out while the split is on.
     fileprivate var chatOrigTopTrailing: NSLayoutConstraint?
     fileprivate var chatOrigBarTrailing: NSLayoutConstraint?
@@ -4717,5 +4724,27 @@ final class ChatAvatarView: UIView {
             Self.cache.setObject(img, forKey: url as NSString)
             DispatchQueue.main.async { self?.imageView.image = img }
         }.resume()
+    }
+}
+
+
+// MARK: - Party voice ducking
+
+extension StreambertPlayerViewController {
+    /// Someone in the party is talking: the movie drops to `level` (0...1) of
+    /// its volume, gliding there in ~250 ms, and glides back to full after.
+    func setWatchDuck(_ level: Float) {
+        guard let p = player else { return }
+        let target = max(0, min(1, level))
+        duckTimer?.invalidate()
+        let start = p.volume
+        let steps = 10
+        var i = 0
+        duckTimer = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { [weak self] t in
+            i += 1
+            let f = Float(i) / Float(steps)
+            self?.player?.volume = start + (target - start) * f
+            if i >= steps { t.invalidate() }
+        }
     }
 }

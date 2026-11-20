@@ -220,8 +220,21 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
       const v = attach();
       if (!v) return;
       if (adapter.baseVolume == null) adapter.baseVolume = v.volume;
-      v.volume = Math.max(0, Math.min(1, adapter.baseVolume * level));
-      if (level === 1) adapter.baseVolume = null;
+      const base = adapter.baseVolume;
+      const target = Math.max(0, Math.min(1, base * level));
+      // Glide over ~250 ms. (iPhone Safari ignores page volume changes; the
+      // iPhone app's native player ducks instead.)
+      clearInterval(adapter.duckTimer);
+      const from = v.volume;
+      let i = 0;
+      adapter.duckTimer = setInterval(() => {
+        i += 1;
+        v.volume = from + (target - from) * Math.min(1, i / 10);
+        if (i >= 10) {
+          clearInterval(adapter.duckTimer);
+          if (level >= 1) adapter.baseVolume = null;
+        }
+      }, 25);
     },
     end() {
       clearTimeout(startTimer);

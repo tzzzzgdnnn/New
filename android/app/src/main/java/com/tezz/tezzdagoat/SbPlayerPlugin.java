@@ -67,6 +67,8 @@ public class SbPlayerPlugin extends Plugin {
     static volatile boolean watchOn;
     static JSONArray watchChat = new JSONArray();
     static JSONObject watchParty;
+    /** Movie volume while someone in the party talks (1 = full). */
+    static float watchDuck = 1f;
     private static final Handler main = new Handler(Looper.getMainLooper());
     private static final Runnable watchTick = new Runnable() {
         @Override public void run() {
@@ -103,6 +105,8 @@ public class SbPlayerPlugin extends Plugin {
                 main.removeCallbacks(watchTick);
                 watchChat = new JSONArray();
                 watchParty = null;
+                watchDuck = 1f;
+                if (a != null) a.setDuck(1f);
                 voiceRoute(false);
                 if (a != null) a.setPartyUi(false);
                 break;
@@ -132,6 +136,10 @@ public class SbPlayerPlugin extends Plugin {
                 break;
             case "voice":
                 voiceRoute(d.optBoolean("on", false));
+                break;
+            case "duck":
+                watchDuck = (float) Math.max(0, Math.min(1, num(d, "level", 1)));
+                if (a != null) a.setDuck(watchDuck);
                 break;
             default:
                 break;
