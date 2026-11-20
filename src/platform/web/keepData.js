@@ -3,7 +3,7 @@
 //    when space runs low). 2) Mirror every app key into IndexedDB, a second
 //    store; if localStorage ever comes back empty, restore from it.
 const PREFIX = "streambert_";
-const DB = "sp-keep", STORE = "kv", KEY = "snapshot";
+const DB = "sp-keep", STORE = "kv", KEY = "snapshot", RESCUE = "rescue";
 
 function open() {
   return new Promise((res, rej) => {
@@ -35,7 +35,14 @@ async function backup() {
     const s = snapshot();
     if (!Object.keys(s).length) return; // never overwrite a good copy with nothing
     const db = await open();
-    db.transaction(STORE, "readwrite").objectStore(STORE).put(s, KEY);
+    // A much smaller copy than the saved one (storage half-emptied by the
+    // browser, or a fresh start that wrote a few keys first): keep the old one
+    // aside as "rescue" before replacing it, so it can still be restored.
+    const prev = await readSnap().catch(() => null);
+    const n = Object.keys(s).length, pn = prev ? Object.keys(prev).length : 0;
+    const tx = db.transaction(STORE, "readwrite").objectStore(STORE);
+    if (pn >= 5 && n < pn / 2) tx.put(prev, RESCUE);
+    tx.put(s, KEY);
   } catch {}
 }
 const soon = () => { clearTimeout(t); t = setTimeout(backup, 800); };
@@ -45,11 +52,17 @@ export async function keepData() {
   try { navigator.storage?.persist?.(); } catch {}
   let restored = false;
   try {
-    const hasLocal = Object.keys(snapshot()).length > 0;
-    if (!hasLocal && "indexedDB" in window) {
+    // Restore when localStorage came back empty OR lost most of its keys
+    // (a few keys written before this ran used to block the restore and then
+    // overwrite the backup). Only missing keys are filled; nothing present is
+    // overwritten.
+    const local = snapshot();
+    const ln = Object.keys(local).length;
+    if ("indexedDB" in window) {
       const s = await readSnap();
-      if (s && Object.keys(s).length) {
-        for (const [k, v] of Object.entries(s)) localStorage.setItem(k, v);
+      const sn = s ? Object.keys(s).length : 0;
+      if (sn && (ln === 0 || (sn >= 5 && ln < sn / 2) || (s.streambert_profiles && !local.streambert_profiles))) {
+        for (const [k, v] of Object.entries(s)) if (!(k in local)) localStorage.setItem(k, v);
         restored = true;
       }
     }
