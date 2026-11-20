@@ -348,6 +348,20 @@ body.no-anim .sps-page { animation: none !important; }
 .sps-nav.is-collapsed::after { opacity: 0; }
 .sps-nav.is-collapsed .sps-nav-title, .sps-nav-title { opacity: 0 !important; }
 
+/* Sticky nav (Custom Servers): stays under the profile top bar / status
+   bar while the page scrolls, so "‹ Settings" is always in reach. */
+.sps-nav.is-sticky,
+.sps-nav.is-sticky.is-collapsed {
+  position: sticky;
+  top: env(safe-area-inset-top);
+  background: var(--sp-chrome-bg, rgba(12, 12, 14, .72));
+  -webkit-backdrop-filter: var(--sp-chrome-blur, saturate(180%) blur(28px));
+  backdrop-filter: var(--sp-chrome-blur, saturate(180%) blur(28px));
+}
+.sp-profile-app .sps-nav.is-sticky { top: var(--sps-nav-top); }
+.sps-nav.is-sticky.is-collapsed::after { opacity: 1; }
+.sps-nav.is-sticky.is-collapsed .sps-nav-title { opacity: 1 !important; transform: none; }
+
 /* Diagnostics log viewer (About): newest first, selectable */
 .sps-diag-log {
   margin: 0;

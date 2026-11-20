@@ -76,11 +76,11 @@ const SECTION_TO_PAGE = {
 };
 
 /** A sticky nav bar whose centered title fades in once the large title scrolls away. */
-const NavBar = forwardRef(function NavBar({ title, backLabel, onBack, collapsed }, ref) {
+const NavBar = forwardRef(function NavBar({ title, backLabel, onBack, collapsed, sticky }, ref) {
   return (
-    <div ref={ref} className={"sps-nav" + (collapsed ? " is-collapsed" : "")}>
+    <div ref={ref} className={"sps-nav" + (collapsed ? " is-collapsed" : "") + (sticky ? " is-sticky" : "")}>
       {onBack ? (
-        <button type="button" className="sps-back" onClick={onBack}>
+        <button type="button" className="sps-back" onClick={onBack} aria-label={`Back to ${backLabel}`}>
           <span className="sps-back-chev" aria-hidden="true" />
           {backLabel}
         </button>
@@ -112,13 +112,13 @@ function useCollapsed(titleRef, navRef) {
   return collapsed;
 }
 
-function Page({ title, backLabel, onBack, children, dir }) {
+function Page({ title, backLabel, onBack, children, dir, sticky }) {
   const titleRef = useRef(null);
   const navRef = useRef(null);
   const collapsed = useCollapsed(titleRef, navRef);
   return (
     <div className={"sps-page" + (dir ? ` is-${dir}` : "")}>
-      <NavBar ref={navRef} title={title} backLabel={backLabel} onBack={onBack} collapsed={collapsed} />
+      <NavBar ref={navRef} title={title} backLabel={backLabel} onBack={onBack} collapsed={collapsed} sticky={sticky} />
       <h1 ref={titleRef} className="sps-large-title">
         {title}
       </h1>
@@ -894,7 +894,8 @@ function AboutPage({ apiKey, onChangeApiKey }) {
 
 const PAGES = {
   playback: { title: "Playback", C: PlaybackPage },
-  customServers: { title: "Custom Servers", C: CustomServersPage },
+  // Sticky nav: the site list can be long, and Back must stay in reach.
+  customServers: { title: "Custom Servers", C: CustomServersPage, stickyNav: true },
   anime: { title: "Anime Audio", C: AnimePage },
   subtitles: { title: "Subtitles", C: SubtitlesPage },
   parental: { title: "Parental Controls", C: ParentalPage },
@@ -948,7 +949,7 @@ export default function IOSSettings({ apiKey, onChangeApiKey, initialSection }) 
   return (
     <div className="sps">
       {page ? (
-        <Page key={route.id} title={page.title} backLabel="Settings" onBack={pop} dir={route.dir}>
+        <Page key={route.id} title={page.title} backLabel="Settings" onBack={pop} dir={route.dir} sticky={!!page.stickyNav}>
           <page.C apiKey={apiKey} onChangeApiKey={onChangeApiKey} />
         </Page>
       ) : (

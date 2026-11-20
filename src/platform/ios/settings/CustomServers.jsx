@@ -21,10 +21,74 @@ import {
   testServer,
 } from "../customServers";
 import { isLocalAddress, originOf, siteDomain, validateTemplate } from "../../../utils/customServers/template";
+import { registerBackHandler } from "../../../utils/navHistory";
 import "./custom-servers.css";
 
 const KIND_LABEL = { movie: "Movie", tv: "TV", anime: "Anime" };
 const ANALYZE_DELAY_MS = 500;
+/** Swipe-down: past this distance (px) or this speed (px/ms) the sheet closes. */
+const DISMISS_DISTANCE_PX = 120;
+const DISMISS_VELOCITY = 0.6;
+/** How long the sheet takes to slide back or away (matches custom-servers.css). */
+const SETTLE_MS = 240;
+
+/**
+ * Pull the sheet down to close it, like an iOS sheet: from the nav bar, or
+ * from the content while it is scrolled to the top.
+ */
+function useSwipeDown(sheetRef, bodyRef, onDismiss) {
+  useEffect(() => {
+    const sheet = sheetRef.current;
+    if (!sheet) return undefined;
+    let start = null;
+    const set = (y, cls) => {
+      sheet.classList.toggle("is-dragging", cls === "drag");
+      sheet.classList.toggle("is-settling", cls === "settle");
+      sheet.style.transform = y > 0 ? `translate3d(0, ${y}px, 0)` : "";
+    };
+    const onStart = (e) => {
+      const fromNav = !!e.target.closest?.(".cs-nav, .cs-grabber");
+      const atTop = (bodyRef.current?.scrollTop || 0) <= 0;
+      const inField = !!e.target.closest?.("input, textarea, select");
+      if (e.touches.length !== 1 || inField || (!fromNav && !atTop)) return;
+      start = { y: e.touches[0].clientY, t: Date.now(), dy: 0 };
+    };
+    const onMove = (e) => {
+      if (!start) return;
+      const dy = e.touches[0].clientY - start.y;
+      if (dy <= 0) {
+        start.dy = 0;
+        set(0, "drag");
+        return;
+      }
+      start.dy = dy;
+      if (e.cancelable) e.preventDefault(); // the sheet moves, not the content
+      set(dy, "drag");
+    };
+    const onEnd = () => {
+      if (!start) return;
+      const { dy, t } = start;
+      start = null;
+      const fast = dy / Math.max(1, Date.now() - t) > DISMISS_VELOCITY;
+      if (dy > DISMISS_DISTANCE_PX || (fast && dy > 24)) {
+        set(sheet.offsetHeight, "settle");
+        setTimeout(onDismiss, SETTLE_MS);
+      } else {
+        set(0, "settle");
+      }
+    };
+    sheet.addEventListener("touchstart", onStart, { passive: true });
+    sheet.addEventListener("touchmove", onMove, { passive: false });
+    sheet.addEventListener("touchend", onEnd);
+    sheet.addEventListener("touchcancel", onEnd);
+    return () => {
+      sheet.removeEventListener("touchstart", onStart);
+      sheet.removeEventListener("touchmove", onMove);
+      sheet.removeEventListener("touchend", onEnd);
+      sheet.removeEventListener("touchcancel", onEnd);
+    };
+  }, [sheetRef, bodyRef, onDismiss]);
+}
 
 const listsText = (lists) => LISTS.filter((l) => lists[l.key]).map((l) => l.label).join(", ") || "No lists";
 
@@ -33,6 +97,7 @@ const listsText = (lists) => LISTS.filter((l) => lists[l.key]).map((l) => l.labe
 export default function CustomServersPage({ apiKey }) {
   const [servers, setServers] = useState(listCustomServers);
   const [editing, setEditing] = useState(null); // { server|null, autoTest }
+  const closeEditor = useCallback(() => setEditing(null), []);
   useEffect(() => onCustomServersChanged(setServers), []);
   return (
     <>
@@ -57,7 +122,7 @@ export default function CustomServersPage({ apiKey }) {
           server={editing.server}
           autoTest={editing.autoTest}
           onSaved={(saved, isNew) => setEditing(isNew ? { server: saved, autoTest: true } : null)}
-          onClose={() => setEditing(null)}
+          onClose={closeEditor}
         />
       )}
     </>
@@ -76,7 +141,20 @@ function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
   const [error, setError] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const runId = useRef(0);
+  const sheetRef = useRef(null);
+  const bodyRef = useRef(null);
   const patch = (p) => setDraft((d) => ({ ...d, ...p }));
+
+  // App-level Back (left-edge swipe, tab bar Back) closes the sheet first.
+  useEffect(
+    () =>
+      registerBackHandler(() => {
+        onClose();
+        return true;
+      }),
+    [onClose],
+  );
+  useSwipeDown(sheetRef, bodyRef, onClose);
 
   // Paste -> match -> template (debounced; a newer paste wins).
   const analyze = useCallback(
@@ -128,17 +206,18 @@ function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
   };
 
   return createPortal(
-    <div className="cs-sheet" role="dialog" aria-modal="true" aria-label={isNew ? "Add Site" : draft.name}>
+    <div ref={sheetRef} className="cs-sheet" role="dialog" aria-modal="true" aria-label={isNew ? "Add Site" : draft.name}>
+      <div className="cs-grabber" aria-hidden="true" />
       <div className="cs-nav">
         <button type="button" className="cs-nav-btn" onClick={onClose}>
-          {isNew ? "Cancel" : "Close"}
+          Cancel
         </button>
         <div className="cs-nav-title">{isNew ? "Add Site" : draft.name}</div>
         <button type="button" className="cs-nav-btn is-strong" disabled={!!problem || saving} onClick={save}>
           {saving ? "Saving…" : "Save"}
         </button>
       </div>
-      <div className="cs-body sps">
+      <div ref={bodyRef} className="cs-body sps">
         <Group
           header="Link From the Site"
           footer={<LinkStatus analysis={analysis} sample={draft.sample} />}

@@ -1,10 +1,13 @@
 /* Settings → Custom Servers: the Add / Edit sheet, link fields and Test steps.
    Rows and groups reuse settings.css. */
 
+/* Above the profile top bar (z 9001) and the status-bar shield (z 9000),
+   below the search sheet (z 9500): its Cancel / Save were hidden under the
+   top bar. */
 .cs-sheet {
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  z-index: 9200;
   display: flex;
   flex-direction: column;
   background: var(--sp-bg, #000);
@@ -12,6 +15,10 @@
   animation: csUp 320ms var(--sp-ease-out, cubic-bezier(.2, .8, .2, 1)) both;
 }
 @keyframes csUp { from { transform: translate3d(0, 100%, 0); } to { transform: none; } }
+.cs-sheet.is-dragging { animation: none; transition: none; }
+.cs-sheet.is-settling { animation: none; transition: transform 240ms var(--sp-ease-out, cubic-bezier(.2, .8, .2, 1)); }
+.cs-grabber { display: flex; justify-content: center; padding: 6px 0 0; }
+.cs-grabber::before { content: ""; width: 36px; height: 5px; border-radius: 3px; background: rgba(235, 235, 245, .3); }
 
 .cs-nav {
   display: grid;
