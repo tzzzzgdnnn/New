@@ -131,10 +131,12 @@ test("candidates: prefetch on title open is reused by Play (no second lookup)", 
   assert.equal(api.calls.length, n);
 });
 
-test("candidates: Dub asked but only Sub on ani.pm -> none (other servers handle Dub)", async () => {
+test("candidates: Dub asked but the episode has no dub -> plays Sub (with a note)", async () => {
   anipm.setAnipmHttp(fakeApi({ dub: false }).http);
   anipm.clearAnipmCache();
-  assert.deepEqual(await anipm.anipmCandidates(ctx()), []);
+  const c = await anipm.anipmCandidates(ctx());
+  assert.equal(c.length, 2);
+  assert.match(c[0].label, /Sub \(no dub\)/);
   assert.equal((await anipm.anipmCandidates(ctx({ dubMode: "sub" }))).length, 2);
 });
 

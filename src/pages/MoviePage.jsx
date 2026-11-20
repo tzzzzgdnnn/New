@@ -2,6 +2,7 @@ import { IS_IOS, CAN_DOWNLOAD } from "../platform/target";
 import AnimeDubPrompt, { shouldAskAnimeDub } from "../platform/ios/AnimeDubPrompt";
 import {
   getAnimeDubMode,
+  setAnimeDubMode,
   publishPlayerContext,
   useAnimeServerGuard,
   useNativeServerSelect,
@@ -863,7 +864,7 @@ export default function MoviePage({
   useNativeServerSelect(({ sourceId, dubMode: mode }) => {
     if (mode) {
       setDubMode(mode);
-      storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, mode);
+      if (mode !== getAnimeDubMode()) setAnimeDubMode(mode); // a real pick from the server menu
     }
     if (sourceId) {
       setPlayerSource(sourceId);
@@ -1317,7 +1318,7 @@ export default function MoviePage({
                   onClick={() => {
                     const next = dubMode === "sub" ? "dub" : "sub";
                     setDubMode(next);
-                    storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, next);
+                    setAnimeDubMode(next);
                     resetPlayerResolution();
                   }}
                   title="Toggle Sub/Dub"
@@ -1380,7 +1381,7 @@ export default function MoviePage({
                 dubMode={dubMode}
                 onDubChange={(next) => {
                   setDubMode(next);
-                  storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, next);
+                  setAnimeDubMode(next);
                   resetPlayerResolution();
                 }}
                 onSelect={(choice) =>

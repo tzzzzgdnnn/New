@@ -8,11 +8,12 @@ import { PLAYER_SOURCES, sourcesForContent } from "../../utils/api";
 import { parseServerKey } from "../../utils/servers/catalog";
 import { setServerChoice, ANIPM_CHOICE } from "./autoServer";
 
-export const normalizeDubMode = (mode) => (mode === "dub" ? "dub" : "sub");
+// Anime plays the English dub by default; Sub only when the viewer chose it.
+export const normalizeDubMode = (mode) => (mode === "sub" ? "sub" : "dub");
 
-/** Saved anime audio preference ("sub" | "dub"). */
+/** Anime audio preference: "dub" unless the viewer explicitly chose Sub. */
 export const getAnimeDubMode = () =>
-  normalizeDubMode(storage.get(STORAGE_KEYS.HIANIME_DUB_MODE));
+  storage.get(STORAGE_KEYS.HIANIME_DUB_MODE) === "sub" && storage.get(STORAGE_KEYS.ANIME_DUB_CHOSEN) ? "sub" : "dub";
 
 /** True once the viewer answered the first-run "Sub or Dub?" prompt. */
 export const hasChosenAnimeDubMode = () =>

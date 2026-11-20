@@ -15,7 +15,8 @@ import { probeUrl } from "../../utils/servers/probe";
 import { isAutoPick, isAnipmPinned, recordLookup, serverStats } from "./autoServer";
 import { autoOrder, prefetchRanking } from "./autoRank";
 import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
-import { anipmCandidates, ANIPM_ID, cachedAnipm, prefetchAnipm, anipmWebReady } from "./anipm";
+import { anipmCandidates, ANIPM_ID, cachedAnipm, prefetchAnipm, anipmWebReady, anipmLangOk } from "./anipm";
+import { showNoDubNote } from "../../utils/dubNote";
 import { movyCandidates, MOVY_ID } from "./movy";
 import { cinejoyCandidates, cachedCinejoy, prefetchCinejoy, CINEJOY_ID } from "./cinejoy";
 import { sevenMoviesCandidates, SEVENMOVIES_IDS } from "./sevenmovies";
@@ -552,7 +553,7 @@ function upgrade(wv) {
   // player. Dub never silently plays Sub. Falls back to the embed server.
   const tryWebAnipm = (url, ctx) => {
     if (!anipmWebReady || !ctx.anilistId) return false;
-    const wanted = ctx.dubMode === "dub" ? "dub" : "sub";
+    const wanted = ctx.dubMode === "sub" ? "sub" : "dub";
     directFor = url;
     iframe.src = "about:blank";
     fire("dom-ready");
@@ -564,6 +565,7 @@ function upgrade(wv) {
     const start = (r) => {
       hideCard();
       log("playing", `ani.pm (${r.lang})`);
+      if (r.lang !== wanted) showNoDubNote();
       fire("did-finish-load");
       const prog = webProgress(ctx);
       const stop = playDirect(wv, r.source, {
@@ -581,7 +583,7 @@ function upgrade(wv) {
       stopDirect = () => { prog.flush(); stop?.(); };
     };
     const hit = cachedAnipm(ctx);
-    if (hit && hit.lang === wanted) {
+    if (hit && anipmLangOk(hit, wanted)) {
       start(hit);
       return true;
     }
@@ -589,7 +591,7 @@ function upgrade(wv) {
     Promise.race([prefetchAnipm(ctx), new Promise((r) => setTimeout(() => r(null), 9000))])
       .then((r) => {
         if (directFor !== url) return;
-        if (!r?.ok || r.lang !== wanted) throw new Error("no stream");
+        if (!r?.ok || !anipmLangOk(r, wanted)) throw new Error("no stream");
         start(r);
       })
       .catch(fallback);
