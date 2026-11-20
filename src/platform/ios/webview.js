@@ -44,6 +44,37 @@ function readStored(key, fallback = null) {
 }
 
 const currentCtx = () => window.__sbCtx || {};
+
+// Web app: the browser's own player reports where you are, the same way the
+// iPhone's native player does, so Continue Watching and Resume work on web
+// (before, web saved nothing and every movie restarted from the top).
+function webProgress(ctx) {
+  const key = ctx?.progressKey;
+  let last = { t: 0, d: 0 }, sentAt = 0;
+  const send = () => {
+    if (!key || !(last.d > 0) || !(last.t > 0)) return;
+    window.dispatchEvent(new CustomEvent("sb-native-progress", { detail: { key, time: last.t, duration: last.d } }));
+    sentAt = Date.now();
+  };
+  const onHide = () => send();
+  const onVis = () => document.visibilityState === "hidden" && send();
+  window.addEventListener("pagehide", onHide);
+  document.addEventListener("visibilitychange", onVis);
+  return {
+    startAt: key ? getResumeSeconds(key) : 0,
+    onTime(t, d) {
+      if (!(t >= 0) || !(d > 0) || !isFinite(d)) return;
+      last = { t, d };
+      if (Date.now() - sentAt >= 5000) send();
+    },
+    flush() {
+      send();
+      window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onVis);
+    },
+  };
+}
+
 const dubModeOf = (ctx) => (ctx.dubMode === "dub" ? "dub" : "sub");
 const isBlank = (url) => !url || url === "about:blank";
 const nativeAvailable = () => !!window.webkit?.messageHandlers?.sbResolve;
@@ -338,6 +369,23 @@ function upgrade(wv) {
   if (wv.__sbUpgraded) return;
   wv.__sbUpgraded = true;
   const iframe = document.createElement("iframe");
+  // Web app, embed servers: many embed players post their position to the
+  // page (currentTime / duration, sometimes inside a JSON string). Save it
+  // like any other progress so the movie resumes instead of restarting.
+  let embedProg = null;
+  window.addEventListener("message", (e) => {
+    if (e.source !== iframe.contentWindow) return;
+    let d = e.data;
+    if (typeof d === "string") { try { d = JSON.parse(d); } catch { return; } }
+    const x = d?.data && typeof d.data === "object" ? d.data : d;
+    const t = Number(x?.currentTime ?? x?.time ?? x?.position);
+    const dur = Number(x?.duration);
+    if (!(t > 0) || !(dur > 60) || !isFinite(dur) || t > dur + 5) return;
+    const ctx = currentCtx();
+    if (!ctx.progressKey) return;
+    if (!embedProg || embedProg.key !== ctx.progressKey) { embedProg?.p.flush(); embedProg = { key: ctx.progressKey, p: webProgress(ctx) }; }
+    embedProg.p.onTime(t, dur);
+  });
   // Ad blocking: no allow-popups / allow-top-navigation, so embeds can't open
   // pop-ups, new tabs, or redirect the app. Servers that refuse a sandbox are
   // dropped from the web build (NEEDS_UNSANDBOXED in api.js).
@@ -512,8 +560,10 @@ function upgrade(wv) {
       hideCard();
       log("playing", `ani.pm (${r.lang})`);
       fire("did-finish-load");
-      stopDirect = playDirect(wv, r.source, {
-        startAt: ctx.startAt || 0,
+      const prog = webProgress(ctx);
+      const stop = playDirect(wv, r.source, {
+        startAt: ctx.startAt || prog.startAt,
+        onTime: prog.onTime,
         nativeOnly: true,
         onFail: (why) => {
           if (directFor !== url) return;
@@ -522,6 +572,7 @@ function upgrade(wv) {
           fallback();
         },
       });
+      stopDirect = () => { prog.flush(); stop?.(); };
     };
     const hit = cachedAnipm(ctx);
     if (hit && hit.lang === wanted) {
@@ -557,8 +608,10 @@ function upgrade(wv) {
       fire("did-finish-load");
       // Called synchronously from the Play tap when the stream is already
       // known, so iPhone opens its own full-screen player right away.
-      stopDirect = playDirect(wv, src, {
-        startAt: ctx.startAt || 0,
+      const prog = webProgress(ctx);
+      const stop = playDirect(wv, src, {
+        startAt: ctx.startAt || prog.startAt,
+        onTime: prog.onTime,
         onFail: (why) => {
           if (directFor !== url) return;
           diag("player", `web direct failed: ${why}`);
@@ -566,6 +619,7 @@ function upgrade(wv) {
           loadUrl(embedFor(url), { webOnly: true });
         },
       });
+      stopDirect = () => { prog.flush(); stop?.(); };
     };
     const hit = cachedCinejoy(ctx);
     if (hit) {
