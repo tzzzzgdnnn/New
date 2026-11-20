@@ -29,13 +29,15 @@ window.webkit = {
             // must still list in a fixed order.
             jobs.push({ id: m.id, name: m.name, status: jobs.some((j) => j.status === "downloading") ? "queued" : "downloading", meta: m.meta, bytesDownloaded: 0, totalBytes: m.estBytes, subtitles: m.subtitles, createdAt: ++created });
             return { ok: true, id: m.id };
+          case "pauseMany": for (const j of jobs) if ((!m.ids || m.ids.includes(j.id)) && ["queued", "downloading"].includes(j.status)) j.status = "paused"; return true;
+          case "resumeMany": for (const j of jobs) if ((!m.ids || m.ids.includes(j.id)) && ["paused", "error"].includes(j.status)) j.status = "queued"; return true;
           case "pause": if (["queued", "downloading"].includes(job?.status)) job.status = "paused"; return true;
           case "resume": if (["paused", "error"].includes(job?.status)) job.status = "queued"; return true;
           case "remove": jobs.splice(jobs.indexOf(job), 1); return true;
           // Newest first, like DownloadManager.list().
           case "list": return [...jobs].sort((a, b) => b.createdAt - a.createdAt).map((j) => ({ ...j }));
           case "play": return job?.status === "completed";
-          case "measure": return m.items.map((it) => (it.url === "u/broken" ? { bytes: 0, method: "unknown" } : { bytes: it.url.length * GB, durationSec: 3600, method: it.kind === "mp4" ? "exact" : "sampled" }));
+          case "measure": return m.items.map((it) => (it.url === "u/broken" ? { bytes: 0, method: "unknown", reason: "the playlist could not be read" } : it.url === "u/nodur" ? { bytes: 0, method: "unknown" } : { bytes: it.url.length * GB, durationSec: 3600, method: it.kind === "mp4" ? "exact" : "bandwidth" }));
           default: throw new Error("unknown op " + m.op);
         }
       },
@@ -88,12 +90,15 @@ await t("options: only tiers the stream has, best bitrate per tier, best first, 
 
 await t("options: fallbacks for no resolutions, media playlist, and MP4", () => {
   const noRes = m.qualityOptions({ kind: "hls", variants: [{ url: "a", bandwidth: 1 }, { url: "b", bandwidth: 9_000_000 }] });
-  assert.deepEqual(noRes.map((o) => [o.name, o.url]), [["Best available", "b"]]);
-  assert.equal(m.qualityOptions({ kind: "hls" })[0].name, "Best available");
-  assert.equal(m.qualityOptions({ kind: "mp4" })[0].name, "Original");
+  // Never a vague "Best": the top variant by its bitrate (or height).
+  assert.deepEqual(noRes.map((o) => [o.name, o.url]), [["9.0 Mbps", "b"]]);
+  assert.equal(m.qualityOptions({ kind: "hls", variants: [{ url: "s", width: 640, height: 360, bandwidth: 7e5 }] })[0].name, "360p");
+  assert.equal(m.qualityOptions({ kind: "hls" })[0].name, "Stream");
+  assert.equal(m.qualityOptions({ kind: "mp4" })[0].name, "MP4 file");
+  assert.ok(![m.qualityOptions({ kind: "hls" }), noRes].flat().some((o) => /best/i.test(o.name)));
   // A media playlist / MP4 is measured at the stream URL itself.
   const items = m.measureItems({ kind: "mp4", streamUrl: "s.mp4" }, m.qualityOptions({ kind: "mp4" }));
-  assert.deepEqual(items, [{ url: "s.mp4", audio: null, bandwidth: 0, kind: "mp4" }]);
+  assert.deepEqual(items, [{ url: "s.mp4", audio: null, bandwidth: 0, averageBandwidth: 0, kind: "mp4" }]);
 });
 
 await t("size estimate: from the stream; every tier gets MB/GB (anime with no TMDB runtime too)", async () => {
@@ -107,8 +112,44 @@ await t("size estimate: from the stream; every tier gets MB/GB (anime with no TM
   // Unreadable tier: BANDWIDTH × the duration the other tier's playlist gave.
   assert.equal(sized[1].estBytes, 1_800_000_000);
   assert.ok(sized.every((o) => !o.sizing && /[MG]B$/.test(o.label)));
-  assert.equal(m.applyMeasurements([{ name: "Original", bandwidth: 0 }], [{ bytes: 5, method: "exact" }])[0].label, "Original · 5 B");
+  assert.equal(m.applyMeasurements([{ name: "MP4 file", bandwidth: 0 }], [{ bytes: 5, method: "exact" }])[0].label, "MP4 file · 5 B");
   assert.equal(m.optionSizeText({ sizing: false, estBytes: 0 }), "Size unknown");
+});
+
+await t("size math: AVERAGE-BANDWIDTH (else BANDWIDTH) × duration; runtime fallback; unknown is unknown", () => {
+  const opts = [
+    { name: "1080p", bandwidth: 8_000_000, averageBandwidth: 5_000_000 },
+    { name: "720p", bandwidth: 4_000_000, averageBandwidth: 0 },
+    { name: "480p", bandwidth: 0, averageBandwidth: 0 },
+  ];
+  // 720p's playlist failed: its bitrate × the 45 min the 1080p playlist gave.
+  const sized = m.applyMeasurements(opts, [{ bytes: 1_687_500_000, durationSec: 2700, method: "bandwidth" }, { bytes: 0, method: "unknown" }, { bytes: 0, method: "unknown", reason: "x" }]);
+  assert.deepEqual(sized.map((o) => o.estBytes), [1_687_500_000, 1_350_000_000, 0]);
+  assert.deepEqual(sized.map((o) => m.optionSizeText(o)), ["~1.6 GB", "~1.3 GB", "Size unknown"]);
+  assert.equal(sized[2].sizeReason, "x");
+  // No playlist duration at all: TMDB runtime is the fallback, never a guess beyond it.
+  const byRuntime = m.applyMeasurements([opts[1]], [{ bytes: 0 }], { fallbackDurationSec: 60 * 60 });
+  assert.equal(byRuntime[0].estBytes, 1_800_000_000);
+  const none = m.applyMeasurements([opts[1]], [{ bytes: 0 }]);
+  assert.equal(none[0].estBytes, 0);
+  assert.equal(none[0].sizeReason, "no duration for this title");
+});
+
+await t("pause controls: one button per set; offline Up Next is the next downloaded episode", async () => {
+  const S = { tmdbId: 7, mediaType: "tv", showName: "Show" };
+  const r = (id, status, season, episode) => ({ ...S, id, status, season, episode });
+  assert.equal(m.batchAction([r("a", "downloading"), r("b", "paused")]), "pause");
+  assert.equal(m.batchAction([r("a", "completed"), r("b", "error")]), "resume");
+  assert.equal(m.batchAction([r("a", "completed")]), null);
+  const list = [r("e1", "completed", 1, 1), r("e3", "completed", 1, 3), r("e2", "downloading", 1, 2), r("s2", "completed", 2, 1), { ...r("o", "completed", 1, 2), tmdbId: 8 }];
+  assert.equal(m.nextDownloadedEpisode(list, list[0])?.id, "e3"); // E2 isn't finished: skipped
+  assert.equal(m.nextDownloadedEpisode(list, list[1])?.id, "s2"); // season rollover
+  assert.equal(m.nextDownloadedEpisode(list, list[3]), null); // last one
+  assert.equal(m.nextDownloadedEpisode(list, { id: "mv", mediaType: "movie", status: "completed" }), null);
+  // Batch pause/resume reach the native side as one call each.
+  await api.pauseDownloads(["x", "y"]);
+  await api.resumeDownloads();
+  assert.deepEqual(sent.slice(-2).map((x) => [x.op, x.ids]), [["pauseMany", ["x", "y"]], ["resumeMany", undefined]]);
 });
 
 await t("progress math: the downloader's numbers, never downloaded > total", () => {
@@ -125,6 +166,8 @@ await t("progress math: the downloader's numbers, never downloaded > total", () 
   assert.equal(r.speed, "5 MB/s");
   assert.equal(m.transferLine({ ...r, activeConnections: 8 }), "8 connections · 5 MB/s");
   assert.equal(r.lastMessage, "1m 30s left");
+  // Before the smoothed rate settles the downloader sends no time left.
+  assert.equal(d.toRecord({ id: "a", status: "downloading", etaSec: -1, estimating: true }).lastMessage, "Estimating…");
   const over = d.toRecord({ id: "a", status: "downloading", bytesDownloaded: 700, totalBytes: 600, progress: 120 });
   assert.equal(over.totalBytes, 700);
   assert.ok(over.progress < 100);

@@ -90,6 +90,8 @@ const PhoneDownloads = IS_IOS ? lazy(() => import("../components/downloads/Phone
 const phoneActions = (onDeleteDownload) => ({
   pause: (id) => window.electron.pauseDownload(id),
   resume: (id) => window.electron.resumeDownload(id),
+  pauseMany: (ids) => window.electron.pauseDownloads(ids),
+  resumeMany: (ids) => window.electron.resumeDownloads(ids),
   play: (d) => window.electron.openPath(d.filePath),
   remove: async (d) => {
     if (!confirm(`Delete "${d.name}"?`)) return;
