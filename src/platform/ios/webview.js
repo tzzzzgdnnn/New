@@ -379,6 +379,8 @@ function upgrade(wv) {
     if (e.source !== iframe.contentWindow) return;
     let d = e.data;
     if (typeof d === "string") { try { d = JSON.parse(d); } catch { return; } }
+    // vidrift says outright when it can't play: next server.
+    if (d?.type === "vidrift:wont-play") { startWatch?.cancel(); diag("player", `vidrift won't play: ${d.reason || ""}`); fire("did-fail-load"); return; }
     const x = d?.data && typeof d.data === "object" ? d.data : d;
     const t = Number(x?.currentTime ?? x?.time ?? x?.position);
     const dur = Number(x?.duration);
@@ -845,6 +847,7 @@ function upgrade(wv) {
   // so a player that simply waits for a tap is not skipped forever.
   const START_WATCH_MS = 8000;
   const MAX_SILENT_SKIPS = 2;
+  const TAPPED_WAIT_MS = 15000; // vidrift: from a tap to its first progress report (sent from 5 s in)
   let silentSkips = 0;
   let skipsFor = "";
   const armStartWatch = () => {
@@ -862,11 +865,20 @@ function upgrade(wv) {
       wv.removeEventListener("pointerdown", onTap, true);
     };
     // A tap inside a cross-origin frame shows up as this window losing focus.
-    const onBlur = () => setTimeout(() => document.activeElement === iframe && (cancel(), (silentSkips = 0)), 0);
-    const onTap = () => { cancel(); silentSkips = 0; };
+    const onBlur = () => setTimeout(() => !done && document.activeElement === iframe && onTap(), 0);
+    // vidrift reports its position (vidrift:progress) once playing; it can
+    // also refuse on the first tap (its pop-up check). So for vidrift a tap
+    // gives it TAPPED_WAIT_MS to start rather than ending the watch.
+    const reportsProgress = /(^|\.)vidrift\./i.test((() => { try { return new URL(src).hostname; } catch { return ""; } })());
+    const onTap = () => {
+      silentSkips = 0;
+      if (!reportsProgress) return cancel();
+      clearTimeout(t);
+      t = setTimeout(expire, TAPPED_WAIT_MS);
+    };
     window.addEventListener("blur", onBlur);
     wv.addEventListener("pointerdown", onTap, true);
-    const t = setTimeout(() => {
+    const expire = () => {
       if (done || iframe.src !== src || isBlank(src)) return cancel();
       cancel();
       silentSkips += 1;
@@ -874,7 +886,8 @@ function upgrade(wv) {
       showCard("This server didn't start. Trying the next one…", false);
       setTimeout(hideCard, 2500);
       fire("did-fail-load");
-    }, START_WATCH_MS);
+    };
+    let t = setTimeout(expire, START_WATCH_MS);
     startWatch = { cancel, started: () => { cancel(); silentSkips = 0; } };
   };
 
