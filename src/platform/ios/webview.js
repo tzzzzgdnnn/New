@@ -382,7 +382,7 @@ function upgrade(wv) {
     let d = e.data;
     if (typeof d === "string") { try { d = JSON.parse(d); } catch { return; } }
     // vidrift says outright when it can't play: next server.
-    if (d?.type === "vidrift:wont-play") { startWatch?.cancel(); diag("player", `vidrift won't play: ${d.reason || ""}`); fire("did-fail-load"); return; }
+    if (d?.type === "vidrift:wont-play") { startWatch?.cancel(); diag("player", `vidrift won't play: ${d.reason || ""}`); fire("did-fail-load"); webAutoNext("it refused to play here"); return; }
     const x = d?.data && typeof d.data === "object" ? d.data : d;
     const t = Number(x?.currentTime ?? x?.time ?? x?.position);
     const dur = Number(x?.duration);
@@ -752,6 +752,38 @@ function upgrade(wv) {
     return true;
   };
 
+  // The page's server failed: say why and move to the next server.
+  const failedServers = new Map(); // title key -> Set of servers that failed
+  const nextServer = (why) => {
+    const ctx = currentCtx();
+    const key = `${ctx.type}:${ctx.tmdbId}:${ctx.season ?? ""}:${ctx.episode ?? ""}`;
+    const current = menuId(readStored("playerSource"), ctx);
+    const failed = failedServers.get(key) || new Set();
+    failed.add(current);
+    // The embed actually on screen (e.g. Cinejoy's fallback page) failed too.
+    try {
+      const host = new URL(iframe.src).host;
+      const shown = PLAYER_SOURCES.find((p) => { try { return new URL(p.movieUrl?.("1") || "").host === host; } catch { return false; } });
+      if (shown) failed.add(menuId(shown.id, ctx));
+    } catch {}
+    failedServers.set(key, failed);
+    const list = serverListFor(ctx).filter((s) => PLAYER_SOURCES.some((p) => p.id === parseServerKey(s.id).sourceId));
+    const next = list.find((s) => !failed.has(s.id));
+    const label = list.find((s) => s.id === current)?.label || "This server";
+    diag("player", `auto: ${label} failed (${why}); next: ${next ? next.label : "none"}`);
+    if (!next) {
+      showCard(`${label} couldn't play this (${why}). No other server worked — pick one in Server or try again later.`, false);
+      return;
+    }
+    showCard(`${label} couldn't play this (${why}). Trying ${next.label}…`, false);
+    setTimeout(hideCard, 4000);
+    const ev = new CustomEvent("sb-select-server", { detail: next.id });
+    ev.sbAuto = true; // an automatic switch: the viewer's own choice stays as it was
+    window.dispatchEvent(ev);
+  };
+  // Web app, Auto: a server that refused or never started hands over to the next one.
+  const webAutoNext = (why) => { if (BROWSER_ONLY && isAutoPick() && !inParty()) nextServer(why); };
+
   // Android app: auto-open the player like the iPhone app. MainActivity sees
   // every request an embed server makes; the moment one asks for a video
   // stream (.m3u8 / .mp4) it tells us, and we play that stream in our own
@@ -808,29 +840,6 @@ function upgrade(wv) {
         },
       });
       stopDirect = () => { prog.flush(); stop?.(); };
-    };
-    // The page's server failed: say why and move to the next server.
-    const failedServers = new Map(); // title key -> Set of servers that failed
-    const nextServer = (why) => {
-      const ctx = currentCtx();
-      const key = `${ctx.type}:${ctx.tmdbId}:${ctx.season ?? ""}:${ctx.episode ?? ""}`;
-      const current = menuId(readStored("playerSource"), ctx);
-      const failed = failedServers.get(key) || new Set();
-      failed.add(current);
-      failedServers.set(key, failed);
-      const list = serverListFor(ctx).filter((s) => PLAYER_SOURCES.some((p) => p.id === parseServerKey(s.id).sourceId));
-      const next = list.find((s) => !failed.has(s.id));
-      const label = list.find((s) => s.id === current)?.label || "This server";
-      diag("player", `android: ${label} failed (${why}); next: ${next ? next.label : "none"}`);
-      if (!next) {
-        showCard(`${label} couldn't play this (${why}). No other server worked — pick one in Server or try again later.`, false);
-        return;
-      }
-      showCard(`${label} couldn't play this (${why}). Trying ${next.label}…`, false);
-      setTimeout(hideCard, 4000);
-      const ev = new CustomEvent("sb-select-server", { detail: next.id });
-      ev.sbAuto = true; // an automatic switch: the viewer's own choice stays as it was
-      window.dispatchEvent(ev);
     };
     window.addEventListener("sb-android-stream", (e) => {
       const u = String(e?.detail?.url || "");
@@ -892,7 +901,7 @@ function upgrade(wv) {
         iframe.src = u;
         postContext(u);
       },
-      onExhausted: () => fire("did-fail-load"),
+      onExhausted: () => { fire("did-fail-load"); webAutoNext("it didn't load"); },
     });
     webFallback.start();
   };
@@ -904,7 +913,7 @@ function upgrade(wv) {
   // MAX_SILENT_SKIPS servers in a row without the viewer touching anything,
   // so a player that simply waits for a tap is not skipped forever.
   const START_WATCH_MS = 8000;
-  const MAX_SILENT_SKIPS = 2;
+  const MAX_SILENT_SKIPS = BROWSER_ONLY ? 5 : 2;
   const TAPPED_WAIT_MS = 15000; // vidrift: from a tap to its first progress report (sent from 5 s in)
   let silentSkips = 0;
   let skipsFor = "";
@@ -941,9 +950,12 @@ function upgrade(wv) {
       cancel();
       silentSkips += 1;
       diag("player", `embed did not start in ${START_WATCH_MS} ms: next server (${String(src).slice(0, 60)})`);
-      showCard("This server didn't start. Trying the next one…", false);
-      setTimeout(hideCard, 2500);
       fire("did-fail-load");
+      if (BROWSER_ONLY && isAutoPick() && !inParty()) webAutoNext("it didn't start");
+      else {
+        showCard("This server didn't start. Pick another server.", false);
+        setTimeout(hideCard, 2500);
+      }
     };
     let t = setTimeout(expire, START_WATCH_MS);
     startWatch = { cancel, started: () => { cancel(); silentSkips = 0; } };
