@@ -136,8 +136,15 @@ export default function App() {
   const [episodeCheckStatus, setEpisodeCheckStatus] = useState(null);
   const episodeDismissTimerRef = useRef(null);
 
-  const [trending, setTrending] = useState([]);
-  const [trendingTV, setTrendingTV] = useState([]);
+  // Web app: Home opens on the last trending rows saved on the phone (even
+  // old ones), refreshed quietly, instead of a blank Home on every launch.
+  const [launchTrending] = useState(() =>
+    import.meta.env.VITE_WEB
+      ? readTrendingCache(storage.get(STORAGE_KEYS.TMDB_LANG) || "en-US", { allowStale: true })
+      : null,
+  );
+  const [trending, setTrending] = useState(() => launchTrending?.movies || []);
+  const [trendingTV, setTrendingTV] = useState(() => launchTrending?.tv || []);
   const [loadingHome, setLoadingHome] = useState(false);
   const [offline, setOffline] = useState(() => !navigator.onLine);
 
@@ -587,13 +594,14 @@ export default function App() {
   const fetchTrending = useCallback(() => {
     if (!apiKey) return;
     const lang = storage.get(STORAGE_KEYS.TMDB_LANG) || "en-US";
-    const cached = readTrendingCache(lang);
+    const cached = readTrendingCache(lang, { allowStale: !!import.meta.env.VITE_WEB });
     if (cached) {
       setTrending(cached.movies);
       setTrendingTV(cached.tv);
-      return;
+      if (!cached.stale) return;
     }
-    setLoadingHome(true);
+    // A stale copy stays on screen while the fresh one loads (no skeleton).
+    if (!cached) setLoadingHome(true);
     Promise.all([
       tmdbFetch("/trending/movie/week", apiKey),
       tmdbFetch("/trending/tv/week", apiKey),

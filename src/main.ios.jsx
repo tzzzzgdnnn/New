@@ -47,22 +47,28 @@ const webReady = import.meta.env.VITE_WEB
   ? webLaunch.then(() => import("./platform/web/offlineDownloads")).then((m) => m.installWebDownloads()).catch(() => {})
   : Promise.resolve();
 if (import.meta.env.VITE_WEB && "serviceWorker" in navigator) {
-  // A new version installs in the background, then the app reloads once onto
-  // it, so fixes show up on the next open instead of two opens later.
-  const hadController = !!navigator.serviceWorker.controller;
-  let reloaded = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (!hadController || reloaded) return;
-    reloaded = true;
-    // Never pull the page out from under someone watching.
-    if (document.querySelector("video.sb-direct-video")?.paused === false) return;
-    location.reload();
-  });
+  // Updates never reload the open app (that used to happen every time it
+  // came back to the foreground after a deploy). A new version installs in
+  // the background and takes over quietly; the app on screen keeps running
+  // (the worker keeps the older version's files) and the new version shows
+  // on the next launch.
+  const takeOver = (reg) => reg.waiting?.postMessage({ type: "SKIP_WAITING" });
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then((reg) => {
-      const check = () => reg.update().catch(() => {});
+      takeOver(reg);
+      reg.addEventListener("updatefound", () => {
+        const w = reg.installing;
+        w?.addEventListener("statechange", () => w.state === "installed" && takeOver(reg));
+      });
+      let lastCheck = 0;
+      const check = () => {
+        if (Date.now() - lastCheck < 10 * 60 * 1000) return;
+        lastCheck = Date.now();
+        reg.update().catch(() => {});
+      };
       document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && check());
       setInterval(check, 30 * 60 * 1000);
+      check();
     }).catch(() => {});
   });
 }

@@ -310,17 +310,22 @@ const TRENDING_CACHE_TTL = 30 * 60 * 1000;
 
 /**
  * Trending lists saved for this language and kind of profile, or null.
+ * With `allowStale` (web app) an older copy is returned too, marked `stale`,
+ * so Home shows at once and the caller refreshes it quietly.
  * @param {string} lang TMDB metadata language the lists were fetched in
- * @returns {{movies: object[], tv: object[]} | null}
+ * @param {{allowStale?: boolean}} [opts]
+ * @returns {{movies: object[], tv: object[], stale: boolean} | null}
  */
-export function readTrendingCache(lang) {
+export function readTrendingCache(lang, { allowStale = false } = {}) {
   const c = storage.get(TRENDING_CACHE_KEY);
-  const usable =
+  const matches =
     c?.lang === lang &&
     c.kids === isKidsProfileActive() &&
-    (!c.kids || c.kv === KIDS_FILTER_VERSION) &&
-    Date.now() - c.ts < TRENDING_CACHE_TTL;
-  return usable ? { movies: c.movies || [], tv: c.tv || [] } : null;
+    (!c.kids || c.kv === KIDS_FILTER_VERSION);
+  if (!matches) return null;
+  const stale = !(Date.now() - c.ts < TRENDING_CACHE_TTL);
+  if (stale && !allowStale) return null;
+  return { movies: c.movies || [], tv: c.tv || [], stale };
 }
 
 /** Save trending lists fetched in `lang` for the active profile. */
