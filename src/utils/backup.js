@@ -53,6 +53,8 @@ export const BACKUP_KEYS = [
   "notifyNewEpisode",
   // Episode-release cache
   "episodeReleaseCache",
+  // iOS: the viewer's own servers (Settings → Custom Servers)
+  "customServers",
 ];
 
 /**

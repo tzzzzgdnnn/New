@@ -3,6 +3,7 @@
 // rebuilding the app.
 import bundled from "../../../servers.json";
 import { PLAYER_SOURCES } from "../../utils/api";
+import { customPlayerSources, listCustomServers, serverFits, setCustomServersApplyHook } from "./customServers";
 
 export const SERVERS_BRANCH =
   (typeof localStorage !== "undefined" &&
@@ -42,8 +43,31 @@ function valid(cfg) {
   return cfg && Array.isArray(cfg.servers);
 }
 
+let _lastCfg = bundled; // re-applied when the viewer's custom servers change
+setCustomServersApplyHook(() => applyServers(_lastCfg));
+
+/** The viewer's custom servers as sources, with the lists each one joins. */
+function customSources() {
+  // Custom servers play through the native stream finder (iPhone app only).
+  if (import.meta.env?.VITE_WEB) return [];
+  const fits = new Map(
+    listCustomServers().map((s) => [
+      s.id,
+      {
+        anime: serverFits(s, { isAnime: true, type: "tv" }) || serverFits(s, { isAnime: true, type: "movie" }),
+        movie: serverFits(s, { isAnime: false, type: "movie" }),
+        tv: serverFits(s, { isAnime: false, type: "tv" }),
+      },
+    ]),
+  );
+  return customPlayerSources().map((src) => ({ ...src, customFits: fits.get(src.id) }));
+}
+
 export function applyServers(cfg) {
   if (!valid(cfg)) return false;
+  _lastCfg = cfg;
+  // The viewer's own servers go last: built-in routes (anime guard, Auto) keep their order.
+  const custom = customSources();
   const overrides = cfg.builtin || {};
   const builtins = BUILTIN.filter((s) => overrides[s.id]?.enabled !== false).map((s) => {
     const o = overrides[s.id];
@@ -82,11 +106,11 @@ export function applyServers(cfg) {
     const rest = builtins
       .filter((s) => !direct.includes(s) && !WEB_BLOCKED.has(s.id))
       .sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"));
-    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct, ...rest, ...ok);
+    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct, ...rest, ...ok, ...custom);
   } else {
     // iPhone app: Cinejoy (direct stream) stays listed first.
     const direct = builtins.filter((s) => /\.invalid\//.test(s.movieUrl?.("1") || ""));
-    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct, ...added, ...builtins.filter((s) => !direct.includes(s)));
+    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct, ...added, ...builtins.filter((s) => !direct.includes(s)), ...custom);
   }
   return true;
 }

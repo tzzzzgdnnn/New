@@ -1057,8 +1057,8 @@ export const fetchEpisodeGroup = async (groupId, apiKey) => {
 // Native player server list: every server for this kind of content. Anime
 // lists all of them under Sub and every anime-route server under Dub, each
 // labelled with its group ("Vidnest · Dub").
-export const nativeServerList = (isAnime) =>
-  serverCatalog(sourcesForContent(isAnime).filter((s) => !s.async), isAnime).map((e) => ({
+export const nativeServerList = (isAnime, type = null) =>
+  serverCatalog(sourcesForTitle(isAnime, type).filter((s) => !s.async), isAnime).map((e) => ({
     id: e.key,
     label: groupedLabel(e),
   }));
@@ -1066,8 +1066,21 @@ export const nativeServerList = (isAnime) =>
 // Server list split by content type: anime titles get anime servers only,
 // movies/series get the regular servers only (anime-only ones hidden).
 // Falls back to everything if a type would end up with no servers.
+// Custom servers (iOS Settings) carry `customFits` ({ anime, movie, tv }):
+// they show only in the lists the viewer picked for them.
 export const sourcesForContent = (isAnime, list = PLAYER_SOURCES) => {
-  const animeOk = (s) => !!(s.tag || s.supportsAnime || s.animeTmdb);
-  const out = isAnime ? list.filter(animeOk) : list.filter((s) => !s.tag);
-  return out.length ? out : list;
+  const animeOk = (s) => (s.custom ? !!s.customFits?.anime : !!(s.tag || s.supportsAnime || s.animeTmdb));
+  const regularOk = (s) => (s.custom ? !!(s.customFits?.movie || s.customFits?.tv) : !s.tag);
+  const out = list.filter(isAnime ? animeOk : regularOk);
+  return out.length ? out : list.filter((s) => !s.custom);
 };
+
+/**
+ * Servers for one title: sourcesForContent, minus custom servers that
+ * didn't join this kind's list (a TV-only site on a movie). `type` null
+ * keeps every kind.
+ */
+export const sourcesForTitle = (isAnime, type = null, list = PLAYER_SOURCES) =>
+  sourcesForContent(isAnime, list).filter(
+    (s) => !s.custom || isAnime || !type || !!s.customFits?.[type === "tv" ? "tv" : "movie"],
+  );
