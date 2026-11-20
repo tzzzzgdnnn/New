@@ -455,6 +455,13 @@ const IOS_DIRECT_SOURCES = [
   { id: "flixer-direct", label: "Flixer", tag: null, note: "Direct, no ads", supportsAnime: false,
     movieUrl: (id) => `https://flixer.invalid/movie/${id}`,
     tvUrl: (id, season, ep) => `https://flixer.invalid/tv/${id}/${season}/${ep}` },
+  // Rivestream (rivestream.js): each verified server is a direct stream through native HTTP.
+  { id: "rive-citadel", label: "Rive Citadel", tag: null, note: "Direct, no ads", supportsAnime: false,
+    movieUrl: (id) => `https://rive-citadel.invalid/movie/${id}`,
+    tvUrl: (id, season, ep) => `https://rive-citadel.invalid/tv/${id}/${season}/${ep}` },
+  { id: "rive-primevids", label: "Rive PrimeVids", tag: null, note: "Direct, no ads", supportsAnime: false,
+    movieUrl: (id) => `https://rive-primevids.invalid/movie/${id}`,
+    tvUrl: (id, season, ep) => `https://rive-primevids.invalid/tv/${id}/${season}/${ep}` },
 ];
 export const PLAYER_SOURCES = import.meta.env?.VITE_WEB
   ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id) && !["vidnest", "hexa"].includes(s.id)).sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"))]

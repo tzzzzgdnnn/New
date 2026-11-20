@@ -61,7 +61,7 @@ enum SiteGuard {
 /// tracker networks, plus every pop-up. Compiled once per launch.
 final class AdFilter {
     static let shared = AdFilter()
-    static let identifier = "sb-custom-ad-filter-v2"
+    static let identifier = "sb-custom-ad-filter-v3"
     static let blockedDomains = [
         "doubleclick.net", "googlesyndication.com", "googleadservices.com", "adservice.google.com",
         "google-analytics.com", "googletagmanager.com", "popads.net", "popcash.net", "propellerads.com",
@@ -74,6 +74,8 @@ final class AdFilter {
         "felledpasillo.com", "ingangupbelt.com",
         // Flixer's ad tag.
         "llvpn.com",
+        // Rivestream's ad / tracking tags.
+        "log-api.newrelic.com", "wtfismyip.com",  // (its ad tag, llvpn.com, is above)
     ]
 
     private(set) var rules: WKContentRuleList?

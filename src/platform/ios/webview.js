@@ -20,6 +20,7 @@ import { movyCandidates, MOVY_ID } from "./movy";
 import { cinejoyCandidates, cachedCinejoy, prefetchCinejoy, CINEJOY_ID } from "./cinejoy";
 import { sevenMoviesCandidates, SEVENMOVIES_IDS } from "./sevenmovies";
 import { flixerCandidates, FLIXER_ID } from "./flixer";
+import { riveCandidates, RIVE_IDS } from "./rivestream";
 import { playDirect } from "../web/directPlayer";
 import { parseServerKey } from "../../utils/servers/catalog";
 import { diag } from "../../utils/diag";
@@ -191,17 +192,18 @@ export function withAnipm(ranked, anipm) {
  * Movy's direct stream leads for movies and series (it is the stream itself,
  * no page to load), unless the viewer picked another server by hand.
  */
-/** Direct-stream servers (Movy, Cinejoy, Flixer) for a movie or episode, all looked up at once. */
+/** Direct-stream servers (Movy, Cinejoy, 7Movies, Flixer, Rivestream) for a movie or episode, all looked up at once. */
 export async function directCandidates(ctx, opts = {}) {
-  const [m, c, s, f] = await Promise.all([
+  const [m, c, s, f, r] = await Promise.all([
     movyCandidates(ctx, opts).catch(() => []),
     cinejoyCandidates(ctx, opts).catch(() => []),
     sevenMoviesCandidates(ctx, opts).catch(() => []),
     import.meta.env?.VITE_WEB ? [] : flixerCandidates(ctx, opts).catch(() => []),
+    import.meta.env?.VITE_WEB ? [] : riveCandidates(ctx, opts).catch(() => []),
   ]);
-  return [...m, ...c, ...s, ...f];
+  return [...m, ...c, ...s, ...f, ...r];
 }
-const DIRECT_IDS = new Set([MOVY_ID, CINEJOY_ID, FLIXER_ID]);
+const DIRECT_IDS = new Set([MOVY_ID, CINEJOY_ID, FLIXER_ID, ...RIVE_IDS]);
 
 export function withMovy(ranked, movy) {
   if (!movy?.length) return ranked;
