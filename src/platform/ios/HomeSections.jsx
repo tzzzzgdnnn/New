@@ -155,6 +155,13 @@ export const HOME_SECTIONS = [
 // up on" lists) in nostalgia.json, plus each network's own catalogue from
 // TMDB discover so the rows run long.
 
+/** Most titles a Nostalgia channel row keeps (hand-picked first, then TMDB). */
+const NOSTALGIA_ROW_CAP = 120;
+/** Most titles in each era row (Y2K Kid, Born in the 90s, ...). */
+const ERA_ROW_CAP = 60;
+/** Parallel TMDB lookups while resolving the hand-picked list. */
+const CURATED_WORKERS = 6;
+
 const NET_IDS = { "Cartoon Network": [56, 217], Nickelodeon: [13], Boomerang: [523, 5459], Disney: [54, 44] };
 
 const NOSTALGIA_ROWS = [
@@ -164,6 +171,7 @@ const NOSTALGIA_ROWS = [
   { id: "n-anime", title: "Toonami Anime", sub: "Naruto, DBZ, Bleach, One Piece and more", pick: () => (NOSTALGIA.anime || []).map((m) => ({ ...m, type: m.type || "tv" })) },
   { id: "n-disney", title: "Disney Channel Throwbacks", sub: "Raven, Hannah, Zack & Cody", network: "Disney", until: "2016-12-31" },
   { id: "n-boom", title: "Boomerang", sub: "Saturday-morning classics", network: "Boomerang", until: "2016-12-31" },
+  { id: "n-teen", title: "Teen Sitcoms", sub: "Drake & Josh, Zoey 101, Hannah Montana and more", pick: () => (NOSTALGIA.tv || []).filter((t) => t.teen).map((t) => ({ ...t, type: "tv" })) },
 ];
 
 // Shows tagged "Other" (Boy Meets World, Degrassi, Arthur) join the closest row.
@@ -224,10 +232,13 @@ async function loadCurated(entries, apiKey) {
         };
         c[key] = item;
         out[i] = item;
-      } catch {}
+      } catch (err) {
+        // Left out this time and retried on the next load (nothing cached).
+        console.warn(`[nostalgia] ${type} ${e.tmdb_id} (${e.title}) failed`, err);
+      }
     }
   };
-  await Promise.all(Array.from({ length: 6 }, worker));
+  await Promise.all(Array.from({ length: CURATED_WORKERS }, worker));
   saveCache();
   return out.filter(Boolean);
 }
@@ -243,7 +254,11 @@ async function loadNetwork(network, until, apiKey) {
           apiKey,
         )
           .then(tag("tv"))
-          .catch(() => []),
+          .catch((err) => {
+            // The hand-picked shows still fill the row without this page.
+            console.warn(`[nostalgia] ${network} catalogue page ${p} failed`, err);
+            return [];
+          }),
       ),
     ),
   );
@@ -262,13 +277,18 @@ function useNostalgia(apiKey, offline) {
           : (NOSTALGIA.tv || []).filter((t) => netOf(t) === r.network).map((t) => ({ ...t, type: "tv" }));
         const first = await loadCurated(curated, apiKey);
         if (!alive) return;
-        setRows((d) => ({ ...d, [r.id]: mix([first], 80) }));
+        setRows((d) => ({ ...d, [r.id]: mix([first], NOSTALGIA_ROW_CAP) }));
         if (r.network && r.until) {
           const extra = await loadNetwork(r.network, r.until, apiKey);
           if (!alive) return;
-          setRows((d) => ({ ...d, [r.id]: mix([first, extra], 80) }));
+          // Hand-picked shows lead the row; TMDB's network catalogue fills
+          // in after them (interleaving pushed picks like Flapjack and
+          // Robot and Monster deep into "More from").
+          setRows((d) => ({ ...d, [r.id]: mix([[...first, ...extra]], NOSTALGIA_ROW_CAP) }));
         }
-      } catch {}
+      } catch (err) {
+        console.warn(`[nostalgia] row ${r.id} failed`, err);
+      }
     });
     return () => {
       alive = false;
@@ -418,6 +438,7 @@ const CHANNELS = [
   { id: "n-disney", name: "Disney Channel", short: "Disney", color: "#1f6fe0", accent: "#fff" },
   { id: "n-anime", name: "Toonami", short: "Toonami", color: "#0a0a2e", accent: "#39d0ff" },
   { id: "n-boom", name: "Boomerang", short: "Boomerang", color: "#e6007e", accent: "#fff" },
+  { id: "n-teen", name: "Teen Sitcoms", short: "Teen", color: "#7b2ff7", accent: "#fff" },
   { id: "n-movies", name: "Movie Night", short: "Movies", color: "#b8860b", accent: "#fff" },
 ];
 
@@ -448,7 +469,7 @@ function Nostalgia({ rows, onSelect, common }) {
   const feat = pool.length ? pool[Math.floor(Date.now() / 864e5) % pool.length] : null;
   const chan = CHANNELS.find((c) => c.id === ch);
   const era = (a, b) =>
-    mix([all.filter((i) => { const y = +yearOf(i); return y >= a && y <= b; })], 40);
+    mix([all.filter((i) => { const y = +yearOf(i); return y >= a && y <= b; })], ERA_ROW_CAP);
   return (
     <div className="sb-nos">
       <div className="sb-nos-hero">
