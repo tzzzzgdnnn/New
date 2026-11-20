@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>DNSSettings</key>
+			<dict>
+				<key>DNSProtocol</key>
+				<string>HTTPS</string>
+				<key>ServerURL</key>
+				<string>https://dns.adguard-dns.com/dns-query</string>
+			</dict>
+			<key>PayloadDescription</key>
+			<string>Blocks ads and trackers with AdGuard DNS (encrypted DNS-over-HTTPS).</string>
+			<key>PayloadDisplayName</key>
+			<string>Super Player Ad Block DNS</string>
+			<key>PayloadIdentifier</key>
+			<string>com.superplayer.dnsadblock.dns</string>
+			<key>PayloadType</key>
+			<string>com.apple.dnsSettings.managed</string>
+			<key>PayloadUUID</key>
+			<string>FAEB2827-8BCE-508F-A6F5-60E9F95D5843</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Blocks ads, pop-up ad networks and trackers across Safari and the Super Player web app.</string>
+	<key>PayloadDisplayName</key>
+	<string>Super Player Ad Block</string>
+	<key>PayloadIdentifier</key>
+	<string>com.superplayer.dnsadblock</string>
+	<key>PayloadRemovalDisallowed</key>
+	<false/>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>13078AB6-0988-5AD4-89E8-75D06AC1DB26</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

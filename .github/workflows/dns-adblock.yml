@@ -1,0 +1,121 @@
+name: DNS ad-block (worker + iOS profile)
+# Optional upgrade. The profile that ships (dns-adblock/SuperPlayer-AdBlock.mobileconfig,
+# published at gh-pages /dns/) points at AdGuard's public ad-blocking DoH. This
+# workflow builds/tests the self-hosted worker (the app's own blocklist), deploys
+# it when the Cloudflare secrets exist, and replaces the published profile only
+# when run by hand with publish_profile = true.
+on:
+  workflow_dispatch:
+    inputs:
+      publish_profile:
+        description: "Replace the published gh-pages profile with one pointing at the worker"
+        type: boolean
+        default: false
+  push:
+    branches: [dns-adblock-profile]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dns-adblock
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: superplayer-dns
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Embed blocklist and test the worker
+        working-directory: dns-adblock
+        run: |
+          node build-blocklist.mjs
+          node --test test.mjs
+
+      - name: Check Cloudflare secrets
+        id: secrets
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            msg="CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID are not set (Settings > Secrets and variables > Actions). Skipping the worker deploy and the profile publish; the worker was still built and tested."
+            echo "::warning title=Deploy skipped::$msg"
+            echo "### Deploy skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy worker (wrangler)
+        if: steps.secrets.outputs.have == 'true'
+        working-directory: dns-adblock
+        run: npx --yes wrangler@4 deploy --name "$WORKER_NAME" 2>&1 | tee ../wrangler-deploy.log
+
+      - name: Find workers.dev URL
+        if: steps.secrets.outputs.have == 'true'
+        id: url
+        run: |
+          sub=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
+            | jq -r '.result.subdomain // empty' || true)
+          if [ -n "$sub" ]; then
+            base="https://$WORKER_NAME.$sub.workers.dev"
+          else
+            base=$(grep -oE "https://$WORKER_NAME\.[a-z0-9-]+\.workers\.dev" wrangler-deploy.log | head -1)
+          fi
+          if [ -z "$base" ]; then
+            echo "::error::Could not find the workers.dev subdomain (CF API and wrangler output). Enable workers.dev in the Cloudflare dashboard (Workers & Pages > your subdomain)."
+            exit 1
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "Worker: $base/dns-query" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke-test the deployed worker
+        if: steps.secrets.outputs.have == 'true'
+        run: |
+          base='${{ steps.url.outputs.base }}'
+          # example.com A query, base64url
+          q=AAABAAABAAAAAAAAB2V4YW1wbGUDY29tAAABAAE
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /tmp/r.bin -w '%{http_code}' -H 'accept: application/dns-message' "$base/dns-query?dns=$q") || true
+            [ "$code" = 200 ] && break
+            sleep 10
+          done
+          echo "dns-query HTTP $code, $(wc -c < /tmp/r.bin) bytes"
+          [ "$code" = 200 ] || echo "::warning::Worker not answering yet (HTTP $code); new workers.dev routes can take a minute."
+
+      - name: Generate SuperPlayer-AdBlock.mobileconfig
+        if: steps.secrets.outputs.have == 'true'
+        run: mkdir -p dns-adblock/build && node dns-adblock/make-profile.mjs '${{ steps.url.outputs.base }}/dns-query' dns-adblock/build/SuperPlayer-AdBlock.mobileconfig
+
+      - name: Publish profile to gh-pages /dns/
+        if: steps.secrets.outputs.have == 'true' && github.event_name == 'workflow_dispatch' && inputs.publish_profile
+        run: |
+          git fetch --depth=1 origin gh-pages
+          git worktree add ../pages FETCH_HEAD
+          mkdir -p ../pages/dns
+          cp dns-adblock/build/SuperPlayer-AdBlock.mobileconfig ../pages/dns/SuperPlayer-AdBlock.mobileconfig
+          cd ../pages
+          git add dns/SuperPlayer-AdBlock.mobileconfig
+          if git diff --cached --quiet; then
+            echo "Profile unchanged on gh-pages."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "DNS ad-block profile for ${{ steps.url.outputs.base }}"
+          git push origin HEAD:gh-pages
+          echo "Published /dns/SuperPlayer-AdBlock.mobileconfig to gh-pages" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.secrets.outputs.have == 'true'
+        with:
+          name: SuperPlayer-AdBlock-mobileconfig
+          path: dns-adblock/build/SuperPlayer-AdBlock.mobileconfig
