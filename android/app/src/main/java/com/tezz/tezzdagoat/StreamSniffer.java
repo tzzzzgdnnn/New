@@ -213,7 +213,7 @@ public class StreamSniffer {
         if (finished) return;
         finished = true;
         dropAll();
-        done.done(r, r == null ? (reasons.isEmpty() ? "no server returned a stream" : String.join("; ", reasons)) : null);
+        done.done(r, r == null ? (reasons.isEmpty() ? "no server returned a stream" : android.text.TextUtils.join("; ", reasons)) : null);
     }
 
     private void drop(int i) {

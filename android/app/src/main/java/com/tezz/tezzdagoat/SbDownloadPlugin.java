@@ -367,7 +367,7 @@ public class SbDownloadPlugin extends Plugin {
                 }
             }
             if (embeds.isEmpty()) {
-                call.resolve(err("No server gave a downloadable stream (" + String.join("; ", why) + ")"));
+                call.resolve(err("No server gave a downloadable stream (" + android.text.TextUtils.join("; ", why) + ")"));
                 return;
             }
             getActivity().runOnUiThread(() -> {
@@ -375,7 +375,7 @@ public class SbDownloadPlugin extends Plugin {
                 sniffer = new StreamSniffer(getActivity(), embeds, (r, reason) -> runners.execute(() -> {
                     if (r == null) {
                         why.add(reason);
-                        call.resolve(err("No server returned a downloadable stream (" + String.join("; ", why) + ")"));
+                        call.resolve(err("No server returned a downloadable stream (" + android.text.TextUtils.join("; ", why) + ")"));
                         return;
                     }
                     try {

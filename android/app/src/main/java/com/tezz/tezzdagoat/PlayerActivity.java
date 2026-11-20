@@ -46,7 +46,6 @@ import androidx.media3.ui.PlayerView;
 import android.util.Log;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.HttpDataSource;
-import com.google.common.collect.ImmutableList;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.Serializable;
@@ -421,7 +420,7 @@ public class PlayerActivity extends AppCompatActivity {
                         .setLabel(s.optString("lang", "Subtitles")).build());
             }
         } catch (Exception ignored) {}
-        if (!subs.isEmpty()) mi.setSubtitleConfigurations(ImmutableList.copyOf(subs));
+        if (!subs.isEmpty()) mi.setSubtitleConfigurations(subs);
         player.setMediaItem(mi.build(), startAt > 0 ? (long) (startAt * 1000) : 0);
         player.addListener(new Player.Listener() {
             @Override public void onPlaybackStateChanged(int s) {
