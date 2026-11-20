@@ -553,7 +553,7 @@ function PartyBar({ party, onOpenTitle, markOpened }) {
           {st?.count ?? 1}/{st?.max ?? MAX_MEMBERS}
         </span>
         {party.status === "reconnecting" && <span className="wp-dim">Reconnecting…</span>}
-        {st?.holdReason === "buffering" && <span className="wp-dim">Buffering{waitingNames.length ? `: ${waitingNames.join(", ")}` : ""}…</span>}
+        {st?.holdReason === "buffering" && <span className="wp-dim wp-waiting">{waitingNames.length ? `Waiting for ${waitingNames.join(", ")}…` : "Buffering…"}</span>}
         <span className="wp-spacer" />
         <button className="wp-btn" onClick={() => setPicking(true)}>
           Pick

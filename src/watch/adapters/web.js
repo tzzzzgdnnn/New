@@ -39,49 +39,61 @@ export function playSafe(v, onMuted) {
   });
 }
 
+const GAP_S = 0.5;
+
 export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
   let video = null;
-  let applying = 0; // > 0 while the engine drives the player (its events aren't the viewer's taps)
+  // While the engine drives the player, the events it causes aren't the
+  // viewer's taps. Counted per kind: an engine speed nudge (drift
+  // correction, many times a minute) must never swallow the viewer's Pause.
+  const applying = { play: 0, pause: 0, seek: 0, rate: 0 };
   let startTimer = null;
   let seeking = false;
   let userTapAt = 0;
+  let lastPos = 0; // where the party player was on its last read (for "stop")
 
-  const drive = (fn) => {
-    applying++;
+  const drive = (fn, kinds = ["play", "pause", "seek", "rate"]) => {
+    for (const k of kinds) applying[k]++;
     try {
       fn();
     } finally {
-      setTimeout(() => applying--, 250);
+      setTimeout(() => kinds.forEach((k) => applying[k]--), 250);
     }
   };
 
   // A real pointer / key press just before a play/pause/seek event is the viewer;
   // anything else (stalls, visibility, the engine) is not.
   const markTap = () => (userTapAt = Date.now());
-  const isViewer = () => applying === 0 && Date.now() - userTapAt < 1500;
+  const isViewer = (kind) => applying[kind] === 0 && Date.now() - userTapAt < 1500;
 
   const onPlay = () => {
-    if (!isViewer()) return;
+    if (!isViewer("play")) return;
     // Hold locally until the room's synchronized start arrives.
-    drive(() => video.pause());
+    drive(() => video.pause(), ["pause"]);
     adapter.onIntent?.({ action: "play", pos: video.currentTime });
   };
   const onPause = () => {
-    if (!isViewer() || video.ended) return;
+    if (!isViewer("pause") || video.ended) return;
     adapter.onIntent?.({ action: "pause", pos: video.currentTime });
   };
   const onSeeking = () => {
     seeking = true;
-    if (isViewer()) adapter.onIntent?.({ action: "seek", pos: video.currentTime });
+    if (isViewer("seek")) adapter.onIntent?.({ action: "seek", pos: video.currentTime });
   };
   const onSeeked = () => (seeking = false);
   const onRate = () => {
-    if (isViewer()) adapter.onIntent?.({ action: "rate", rate: video.playbackRate });
+    if (isViewer("rate")) adapter.onIntent?.({ action: "rate", rate: video.playbackRate });
   };
 
   const attach = () => {
     const v = getVideo();
     if (v === video) return video;
+    // The viewer closed the party player (left the title page) while the
+    // party was playing: that is "stop", the party pauses on that frame,
+    // like closing the iPhone / Android player.
+    if (video && !video.isConnected && !v && document.visibilityState === "visible" && adapter.roomPlaying?.()) {
+      adapter.onIntent?.({ action: "pause", stop: true, pos: lastPos });
+    }
     detach();
     video = v;
     if (!video) return null;
@@ -150,7 +162,10 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
   const bufferedAhead = (v) => {
     const t = v.currentTime;
     for (let i = 0; i < v.buffered.length; i++) {
-      if (v.buffered.start(i) <= t + 0.1 && v.buffered.end(i) > t) return v.buffered.end(i) - t;
+      // A range starting just after the frame (Safari's MSE often leaves a few
+      // hundred ms between a seek target and the first appended sample) is
+      // ready too: playback steps over the gap (hls.js gap controller).
+      if (v.buffered.start(i) <= t + GAP_S && v.buffered.end(i) > t) return v.buffered.end(i) - t;
     }
     return 0;
   };
@@ -161,6 +176,7 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
       const v = attach();
       if (!v) return { key: null, ready: false, seeking: false, status: "paused", pos: 0, sampledAt: Date.now(), rate: 1 };
       const waiting = !v.paused && v.readyState < 3;
+      lastPos = v.currentTime;
       return {
         key: getKey?.() ?? null,
         ready: v.readyState >= 3 || bufferedAhead(v) >= 2,
@@ -199,11 +215,11 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
     },
     setRate(r) {
       const v = attach();
-      if (v) drive(() => (v.playbackRate = r));
+      if (v) drive(() => (v.playbackRate = r), ["rate"]);
     },
     seekTo(pos) {
       const v = attach();
-      if (v) drive(() => (v.currentTime = pos));
+      if (v) drive(() => (v.currentTime = pos), ["seek"]);
     },
     /** Full screen on / off for the party player (never pauses). */
     toggleFullscreen() {

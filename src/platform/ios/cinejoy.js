@@ -58,8 +58,24 @@ export const cinejoyKey = (ctx) => {
 };
 
 /** Start (or reuse) the lookup for `ctx`; resolves to the result or null. */
+/**
+ * Automated party test (scripts/party-e2e.mjs): a fixed https test stream set
+ * in this origin's localStorage ("sbTestStream") stands in for Cinejoy, so
+ * the test never touches real streaming hosts. Unset for everyone else.
+ */
+const testStream = () => {
+  try {
+    const u = localStorage.getItem("sbTestStream");
+    return u && /^https:\/\/[^\s]+$/.test(u) ? u : null;
+  } catch {
+    return null;
+  }
+};
+
 export function prefetchCinejoy(ctx, { now = Date.now } = {}) {
   const key = cinejoyKey(ctx);
+  const test = key && testStream();
+  if (test) return Promise.resolve({ ok: true, server: "test", source: test, subtitles: [] });
   if (!key || !nativeHttpAvailable()) return Promise.resolve(null);
   const hit = cache.get(key);
   if (hit && now() - hit.at < MAX_AGE_MS && !hit.error) return hit.promise;

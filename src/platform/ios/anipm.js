@@ -64,8 +64,20 @@ const fresh = (e, now) =>
  * Start (or reuse) the lookup for `ctx`. Resolves to the result or null
  * (not anime, no AniList id, no native HTTP, or ani.pm has no stream).
  */
+const testStream = () => {
+  try {
+    const u = localStorage.getItem("sbTestStream");
+    return u && /^https:\/\/[^\s]+$/.test(u) ? u : null;
+  } catch {
+    return null;
+  }
+};
+
 export function prefetchAnipm(ctx, { now = Date.now } = {}) {
   const key = anipmKey(ctx);
+  // Automated party test (scripts/party-e2e.mjs): its fixed test stream, never a real host.
+  const test = key && testStream();
+  if (test) return Promise.resolve({ ok: true, lang: ctx.dubMode === "dub" ? "dub" : "sub", source: test, embedUrl: test, ms: {} });
   if (!key || !nativeHttpAvailable()) return Promise.resolve(null);
   const hit = cache.get(key);
   if (fresh(hit, now()) && !hit.error) return hit.promise;
