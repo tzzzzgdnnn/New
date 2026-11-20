@@ -314,14 +314,17 @@ struct SniffCandidate {
     var timeout: TimeInterval? = nil
     /// Reuse a stream found for this exact link earlier in the session.
     var cacheable = false
+    /// Direct streams: the page the stream must be fetched for (sent as Referer/Origin).
+    var referer: URL? = nil
 
-    /// A candidate from the JS bridge ({ id, label, url, lockHost?, timeoutMs?, cache? }).
+    /// A candidate from the JS bridge ({ id, label, url, lockHost?, timeoutMs?, cache?, referer? }).
     static func from(_ d: [String: Any]) -> SniffCandidate? {
         guard let id = d["id"] as? String, let u = (d["url"] as? String).flatMap({ URL(string: $0) }) else { return nil }
         let host = (d["lockHost"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() }
         let ms = (d["timeoutMs"] as? NSNumber)?.doubleValue
         return SniffCandidate(id: id, label: (d["label"] as? String) ?? id, url: u, lockHost: host,
-                              timeout: ms.map { $0 / 1000 }, cacheable: (d["cache"] as? Bool) ?? false)
+                              timeout: ms.map { $0 / 1000 }, cacheable: (d["cache"] as? Bool) ?? false,
+                              referer: (d["referer"] as? String).flatMap { URL(string: $0) })
     }
 
     /// Whether `host` is the locked site or one of its subdomains.
@@ -491,7 +494,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             let slot = Slot(index: i, webView: WKWebView(frame: .zero))
             slots[i] = slot
             // Hosts whose playlists answer only with their own Referer (7Movies' Orion).
-            let page: URL? = direct.host == "embed.vidrift.net" ? URL(string: "https://embed.vidrift.net/") : nil
+            let page: URL? = c.referer ?? (direct.host == "embed.vidrift.net" ? URL(string: "https://embed.vidrift.net/") : nil)
             slot.streams.append((direct, page))
             DispatchQueue.main.async { [weak self, weak slot] in
                 guard let self = self, let slot = slot else { return }

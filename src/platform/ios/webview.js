@@ -19,6 +19,7 @@ import { anipmCandidates, ANIPM_ID, cachedAnipm, prefetchAnipm, anipmWebReady } 
 import { movyCandidates, MOVY_ID } from "./movy";
 import { cinejoyCandidates, cachedCinejoy, prefetchCinejoy, CINEJOY_ID } from "./cinejoy";
 import { sevenMoviesCandidates, SEVENMOVIES_IDS } from "./sevenmovies";
+import { flixerCandidates, FLIXER_ID } from "./flixer";
 import { playDirect } from "../web/directPlayer";
 import { parseServerKey } from "../../utils/servers/catalog";
 import { diag } from "../../utils/diag";
@@ -190,23 +191,25 @@ export function withAnipm(ranked, anipm) {
  * Movy's direct stream leads for movies and series (it is the stream itself,
  * no page to load), unless the viewer picked another server by hand.
  */
-/** Direct-stream servers (Movy, Cinejoy) for a movie or episode, both looked up at once. */
+/** Direct-stream servers (Movy, Cinejoy, Flixer) for a movie or episode, all looked up at once. */
 export async function directCandidates(ctx, opts = {}) {
-  const [m, c, s] = await Promise.all([
+  const [m, c, s, f] = await Promise.all([
     movyCandidates(ctx, opts).catch(() => []),
     cinejoyCandidates(ctx, opts).catch(() => []),
     sevenMoviesCandidates(ctx, opts).catch(() => []),
+    import.meta.env?.VITE_WEB ? [] : flixerCandidates(ctx, opts).catch(() => []),
   ]);
-  return [...m, ...c, ...s];
+  return [...m, ...c, ...s, ...f];
 }
+const DIRECT_IDS = new Set([MOVY_ID, CINEJOY_ID, FLIXER_ID]);
 
 export function withMovy(ranked, movy) {
   if (!movy?.length) return ranked;
   const ids = new Set(movy.map((c) => c.id));
-  const rest = ranked.filter((c) => !ids.has(c.id) && c.id !== MOVY_ID && c.id !== CINEJOY_ID && !SEVENMOVIES_IDS.includes(c.id));
-  // A direct server picked by hand (Cinejoy, 7Movies Orion / Evion): its stream plays first.
+  const rest = ranked.filter((c) => !ids.has(c.id) && !DIRECT_IDS.has(c.id) && !SEVENMOVIES_IDS.includes(c.id));
+  // A direct server picked by hand (Cinejoy, 7Movies Orion / Evion, Flixer): its stream plays first.
   const pickedDirect = readStored("playerSource");
-  if (!isAutoPick() && (pickedDirect === CINEJOY_ID || SEVENMOVIES_IDS.includes(pickedDirect))) {
+  if (!isAutoPick() && (DIRECT_IDS.has(pickedDirect) || SEVENMOVIES_IDS.includes(pickedDirect))) {
     const cj = movy.filter((c) => c.id === pickedDirect);
     if (cj.length) return [...cj, ...movy.filter((c) => c.id !== pickedDirect), ...rest].slice(0, MAX_CANDIDATES + movy.length);
   }

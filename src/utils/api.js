@@ -451,6 +451,10 @@ const IOS_DIRECT_SOURCES = [
   { id: "7movies-evion", label: "7Movies Evion", tag: null, note: "Direct, no ads", supportsAnime: false,
     movieUrl: (id) => `https://7movies-evion.invalid/movie/${id}`,
     tvUrl: (id, season, ep) => `https://7movies-evion.invalid/tv/${id}/${season}/${ep}` },
+  // Flixer (flixer.js): direct stream through native HTTP.
+  { id: "flixer-direct", label: "Flixer", tag: null, note: "Direct, no ads", supportsAnime: false,
+    movieUrl: (id) => `https://flixer.invalid/movie/${id}`,
+    tvUrl: (id, season, ep) => `https://flixer.invalid/tv/${id}/${season}/${ep}` },
 ];
 export const PLAYER_SOURCES = import.meta.env?.VITE_WEB
   ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id) && !["vidnest", "hexa"].includes(s.id)).sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"))]
