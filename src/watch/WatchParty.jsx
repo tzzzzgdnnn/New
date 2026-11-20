@@ -5,7 +5,7 @@
 // Rules (from the room, see roomCore.js): Pause from anyone pauses everyone;
 // a phone that buffers pauses everyone on the same frame and they all start
 // back together; opening chat, typing or the keyboard never pause anything.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { WatchClient } from "./client.js";
 import { VoiceMesh } from "./voice.js";
@@ -62,7 +62,8 @@ export async function roomServer() {
   return serverBase;
 }
 
-function clientId() {
+/** This device's stable id (kept across reopens and app updates). */
+function deviceId() {
   try {
     let id = localStorage.getItem(CLIENT_ID_KEY);
     if (!id) {
@@ -74,6 +75,12 @@ function clientId() {
     return `anon-${Math.random().toString(36).slice(2)}`;
   }
 }
+
+/** Party identity: one per profile on this device (reconnects keep the seat and the chat's "mine"). */
+const clientId = (profileId) => {
+  const p = String(profileId || "").replace(/[^a-zA-Z0-9]/g, "").slice(0, 16);
+  return p ? `${deviceId()}-p${p}` : deviceId();
+};
 
 /** What is open on this device right now (published by MoviePage / TVPage). */
 const currentMedia = () => {
@@ -100,287 +107,296 @@ function usePartyIdentity() {
       live = false;
     };
   }, [raw]);
-  return useMemo(() => ({ name, avatar: avatar || fallbackAvatar(name) }), [name, avatar]);
+  const profileId = profile?.id || null;
+  return useMemo(() => ({ name, avatar: avatar || fallbackAvatar(name), profileId }), [name, avatar, profileId]);
 }
 
-export function useWatchParty(identity = { name: "Guest", avatar: null }) {
-  const identityRef = useRef(identity);
-  identityRef.current = identity;
-  const [state, setState] = useState(null);
-  const [status, setStatus] = useState("idle"); // idle | connecting | connected | reconnecting | ended | no-room | room-full | error
-  const [notice, setNotice] = useState(null);
-  const [rawChat, setRawChat] = useState([]);
-  const [unread, setUnread] = useState(0);
-  const [speaking, setSpeaking] = useState(new Set());
-  const [micOn, setMicOn] = useState(false);
-  const clientRef = useRef(null);
-  const adapterRef = useRef(null);
-  const voiceRef = useRef(null);
-  const chatOpenRef = useRef(false);
-  const hostRef = useRef(null); // P2PHost when this device hosts a peer-to-peer party
-  const settleRef = useRef(null); // resolves connect()'s outcome: "connected" | "no-room" | ...
+// The party lives outside React: switching profile remounts the whole app
+// (ProfileGate), and the party, its chat, voice and player must carry on
+// through that with the new profile's name and picture.
+const S = {
+  state: null,
+  status: "idle", // idle | connecting | connected | reconnecting | ended | no-room | room-full | error
+  notice: null,
+  rawChat: [],
+  unread: 0,
+  speaking: new Set(),
+  micOn: false,
+  client: null,
+  adapter: null,
+  voice: null,
+  host: null, // P2PHost when this device hosts a peer-to-peer party
+  settle: null, // resolves connect()'s outcome: "connected" | "no-room" | ...
+  chatOpen: false,
+  identity: { name: "Guest", avatar: null, profileId: null },
+  myId: null,
+};
+let version = 0;
+const subs = new Set();
+const update = (patch) => {
+  Object.assign(S, patch);
+  version += 1;
+  subs.forEach((f) => f());
+};
+const subscribe = (f) => {
+  subs.add(f);
+  return () => subs.delete(f);
+};
 
-  const leaveCleanup = useCallback(() => {
-    voiceRef.current?.stop();
-    voiceRef.current = null;
-    setMicOn(false);
-    adapterRef.current?.end?.();
-    adapterRef.current = null;
-    hostRef.current?.endParty(); // peer-to-peer host: the room lived here, so it ends for everyone
-    hostRef.current = null;
-    clientRef.current = null;
-    setState(null);
-    setRawChat([]);
-    setUnread(0);
-  }, []);
+function leaveCleanup() {
+  S.voice?.stop();
+  S.adapter?.end?.();
+  S.host?.endParty(); // peer-to-peer host: the room lived here, so it ends for everyone
+  update({ voice: null, micOn: false, adapter: null, host: null, client: null, state: null, rawChat: [], unread: 0, speaking: new Set() });
+}
 
-  // Peer-to-peer host closing the app / tab: tell the guests the party is over.
-  useEffect(() => {
-    const bye = () => hostRef.current?.endParty();
-    window.addEventListener("pagehide", bye);
-    window.addEventListener("beforeunload", bye);
-    return () => {
-      window.removeEventListener("pagehide", bye);
-      window.removeEventListener("beforeunload", bye);
-    };
-  }, []);
+// Peer-to-peer host closing the app / tab: tell the guests the party is over.
+if (typeof window !== "undefined") {
+  const bye = () => S.host?.endParty();
+  window.addEventListener("pagehide", bye);
+  window.addEventListener("beforeunload", bye);
+}
 
-  /** Opens the party; resolves with the first outcome ("connected", "no-room", "room-full", "ended", "timeout"). */
-  const connect = useCallback(
-    async (code, transport) => {
-      setStatus("connecting");
-      setNotice(null);
-      const outcome = new Promise((resolve) => {
-        settleRef.current = resolve;
-        setTimeout(() => resolve("timeout"), 25_000);
-      });
-      const ios = isIosNative();
-      const getKey = () => {
-        const m = currentMedia();
-        return m ? mediaKey(m) : null;
-      };
-      const adapter = ios
-        ? createIosAdapter({ getKey })
-        : isAndroidNative()
-          ? createAndroidAdapter({ plugin: SbPlayer, getKey })
-          : createWebAdapter({ getKey });
-      adapterRef.current = adapter;
-      const myId = clientId();
-      const { name, avatar } = identityRef.current;
-      const client = new WatchClient({
-        url: transport.url,
-        WebSocketImpl: transport.WebSocketImpl,
-        clientId: myId,
-        platform: platform(),
-        name,
-        avatar,
-        adapter,
-        onState: (st) => {
-          setState(st);
-          adapter.setParty?.({ code: st.code, count: st.count, max: st.max || MAX_MEMBERS, host: st.host === myId });
-          voiceRef.current?.sync(st);
-        },
-        onStatus: (s, info) => {
-          if (s !== "reconnecting") {
-            settleRef.current?.(s);
-            settleRef.current = null;
-          }
-          setStatus(s);
-          if (s === "connected") voiceRef.current?.reconnected();
-          if (info?.message) setNotice(info.message);
-          if (s === "ended" || s === "no-room" || s === "room-full") leaveCleanup();
-        },
-        onChat: (list, msg) => {
-          setRawChat(list);
-          if (msg && msg.from !== myId && !chatOpenRef.current) setUnread((n) => n + 1);
-        },
-        onRtc: (m) => voiceRef.current?.onSignal(m).catch((e) => console.warn("[voice] signal failed", e)),
-        onVoice: (m) => voiceRef.current?.onVoice(m),
-      });
-      // Voice: every device listens from the start; its own mic is opt-in (toggleMic).
-      voiceRef.current?.stop();
-      voiceRef.current = typeof RTCPeerConnection === "undefined" ? null : new VoiceMesh({
-        client,
-        onSpeaking: setSpeaking,
-        onDuck: (level) => adapterRef.current?.setDuck?.(level),
-      });
-      if (voiceRef.current && !transport.url.startsWith("p2p:")) {
-        roomServer()
-          .then((base) => base && fetchT(`${base}/turn`, { method: "POST" }).then((r) => r.json()))
-          .then((d) => voiceRef.current?.setIceServers(d?.iceServers))
-          .catch(() => {});
-      }
-      adapter.onChatSend = (text) => client.sendChat(text);
-      adapter.roomPlaying = () => !!client.state && !client.state.playback?.paused;
-      adapter.begin?.();
-      clientRef.current = client;
-      client.connect();
-      return outcome;
+/** Opens the party; resolves with the first outcome ("connected", "no-room", "room-full", "ended", "timeout"). */
+async function connect(code, transport) {
+  update({ status: "connecting", notice: null });
+  const outcome = new Promise((resolve) => {
+    S.settle = resolve;
+    setTimeout(() => resolve("timeout"), 25_000);
+  });
+  const getKey = () => {
+    const m = currentMedia();
+    return m ? mediaKey(m) : null;
+  };
+  const adapter = isIosNative()
+    ? createIosAdapter({ getKey })
+    : isAndroidNative()
+      ? createAndroidAdapter({ plugin: SbPlayer, getKey })
+      : createWebAdapter({ getKey });
+  const myId = clientId(S.identity.profileId);
+  const { name, avatar } = S.identity;
+  const client = new WatchClient({
+    url: transport.url,
+    WebSocketImpl: transport.WebSocketImpl,
+    clientId: myId,
+    platform: platform(),
+    name,
+    avatar,
+    adapter,
+    onState: (st) => {
+      update({ state: st });
+      adapter.setParty?.({ code: st.code, count: st.count, max: st.max || MAX_MEMBERS, host: st.host === myId });
+      S.voice?.sync(st);
     },
-    [leaveCleanup],
-  );
+    onStatus: (st, info) => {
+      if (st !== "reconnecting") {
+        S.settle?.(st);
+        S.settle = null;
+      }
+      update({ status: st, ...(info?.message ? { notice: info.message } : {}) });
+      if (st === "connected") S.voice?.reconnected();
+      if (st === "ended" || st === "no-room" || st === "room-full") leaveCleanup();
+    },
+    onChat: (list, msg) => {
+      update({ rawChat: list, unread: msg && msg.from !== myId && !S.chatOpen ? S.unread + 1 : S.unread });
+    },
+    onRtc: (m) => S.voice?.onSignal(m).catch((e) => console.warn("[voice] signal failed", e)),
+    onVoice: (m) => S.voice?.onVoice(m),
+  });
+  // Voice: every device listens from the start; its own mic is opt-in (toggleMic).
+  S.voice?.stop();
+  const voice =
+    typeof RTCPeerConnection === "undefined"
+      ? null
+      : new VoiceMesh({
+          client,
+          onSpeaking: (set) => update({ speaking: set }),
+          onDuck: (level) => S.adapter?.setDuck?.(level),
+        });
+  if (voice && !transport.url.startsWith("p2p:")) {
+    roomServer()
+      .then((base) => base && fetchT(`${base}/turn`, { method: "POST" }).then((r) => r.json()))
+      .then((d) => S.voice?.setIceServers(d?.iceServers))
+      .catch(() => {});
+  }
+  adapter.onChatSend = (text) => client.sendChat(text);
+  adapter.roomPlaying = () => !!client.state && !client.state.playback?.paused;
+  adapter.begin?.();
+  update({ adapter, voice, client, myId });
+  client.connect();
+  return outcome;
+}
 
-  /** How to reach party `code`: the room server when it has it, otherwise the host peer-to-peer. */
-  const serverTransport = (base, code) => ({ url: `${base.replace(/^http/, "ws")}/rooms/${code}/ws` });
-  const guestTransport = (code) => ({ url: P2P_URL(code), WebSocketImpl: guestSocketClass(code) });
+/** How to reach party `code`: the room server when it has it, otherwise the host peer-to-peer. */
+const serverTransport = (base, code) => ({ url: `${base.replace(/^http/, "ws")}/rooms/${code}/ws` });
+const guestTransport = (code) => ({ url: P2P_URL(code), WebSocketImpl: guestSocketClass(code) });
 
-  const create = useCallback(
-    async () => {
+async function create() {
+  try {
+    const base = await roomServer();
+    let code = null;
+    let transport = null;
+    if (base) {
       try {
-        const base = await roomServer();
-        let code = null;
-        let transport = null;
-        if (base) {
-          try {
-            const r = await fetchT(`${base}/rooms`, { method: "POST" }, 6000);
-            code = r.ok ? (await r.json()).code : null;
-            if (code) transport = serverTransport(base, code);
-          } catch {
-            code = null; // server down: fall back to peer-to-peer
-          }
-        }
-        if (!code) {
-          // No room server: this device runs the room; guests connect to it directly.
-          const host = await P2PHost.create();
-          hostRef.current = host;
-          code = host.code;
-          transport = { url: P2P_URL(code), WebSocketImpl: host.socketClass() };
-        }
-        const res = await connect(code, transport);
-        if (res !== "connected") throw new Error("Couldn't start a party");
-        // The title open on this phone is what the party watches.
-        const media = currentMedia();
-        if (media) setTimeout(() => clientRef.current?.pickMedia(media), 400);
-        return code;
-      } catch (e) {
-        clientRef.current?.close();
-        leaveCleanup();
-        setStatus("error");
-        setNotice(e.message || "Couldn't start a party");
-        return null;
+        const r = await fetchT(`${base}/rooms`, { method: "POST" }, 6000);
+        code = r.ok ? (await r.json()).code : null;
+        if (code) transport = serverTransport(base, code);
+      } catch {
+        code = null; // server down: fall back to peer-to-peer
       }
-    },
-    [connect, leaveCleanup],
-  );
+    }
+    if (!code) {
+      // No room server: this device runs the room; guests connect to it directly.
+      const host = await P2PHost.create();
+      update({ host });
+      code = host.code;
+      transport = { url: P2P_URL(code), WebSocketImpl: host.socketClass() };
+    }
+    const res = await connect(code, transport);
+    if (res !== "connected") throw new Error("Couldn't start a party");
+    // The title open on this phone is what the party watches.
+    const media = currentMedia();
+    if (media) setTimeout(() => S.client?.pickMedia(media), 400);
+    return code;
+  } catch (e) {
+    S.client?.close();
+    leaveCleanup();
+    update({ status: "error", notice: e.message || "Couldn't start a party" });
+    return null;
+  }
+}
 
-  const join = useCallback(
-    async (input) => {
-      const code = normalizeCode(input);
-      if (!isValidCode(code)) {
-        setNotice("Party codes are 6 letters and numbers");
-        return false;
-      }
+async function join(input) {
+  const code = normalizeCode(input);
+  if (!isValidCode(code)) {
+    update({ notice: "Party codes are 6 letters and numbers" });
+    return false;
+  }
+  try {
+    const base = await roomServer();
+    let transport = guestTransport(code);
+    if (base) {
       try {
-        const base = await roomServer();
-        let transport = guestTransport(code);
-        if (base) {
-          try {
-            const r = await fetchT(`${base}/rooms/${code}`, {}, 5000);
-            if (r.ok && (await r.json()).exists) transport = serverTransport(base, code);
-          } catch {
-            // server unreachable: the party (if any) is peer-to-peer
-          }
-        }
-        const res = await connect(code, transport);
-        if (res === "connected") return true;
-        if (res === "timeout") {
-          clientRef.current?.close();
-          leaveCleanup();
-          setStatus("no-room");
-          setNotice(NO_PARTY_MESSAGE);
-        }
-        return false;
-      } catch (e) {
-        setStatus("error");
-        setNotice(e.message || "Couldn't join");
-        return false;
+        const r = await fetchT(`${base}/rooms/${code}`, {}, 5000);
+        if (r.ok && (await r.json()).exists) transport = serverTransport(base, code);
+      } catch {
+        // server unreachable: the party (if any) is peer-to-peer
       }
-    },
-    [connect, leaveCleanup],
-  );
+    }
+    const res = await connect(code, transport);
+    if (res === "connected") return true;
+    if (res === "timeout") {
+      S.client?.close();
+      leaveCleanup();
+      update({ status: "no-room", notice: NO_PARTY_MESSAGE });
+    }
+    return false;
+  } catch (e) {
+    update({ status: "error", notice: e.message || "Couldn't join" });
+    return false;
+  }
+}
 
-  const c = () => clientRef.current;
-  const api = useMemo(
-    () => ({
-      create,
-      join,
-      /** Anyone in the party can put on a movie, show, or anime from the app. */
-      pick: (media) => {
-        const m = cleanMedia(media);
-        if (m) c()?.pickMedia(m);
-        return m;
-      },
-      togglePause: () => {
-        const cl = c();
-        if (!cl?.state) return;
-        const paused = cl.state.intent !== "play";
-        cl.intent({ action: paused ? "play" : "pause", pos: cl.engine.target() });
-      },
-      leave: () => {
-        if (hostRef.current) hostRef.current.endParty(); // the host's device is the room: leaving ends it
-        c()?.leave();
-        setStatus("idle");
-        leaveCleanup();
-      },
-      end: () => c()?.endParty(),
-      sendChat: (t) => c()?.sendChat(t),
-      shareCurrent: () => {
-        const m = currentMedia();
-        if (m) c()?.pickMedia(m);
-      },
-      setChatOpen: (open) => {
-        chatOpenRef.current = open;
-        if (open) setUnread(0);
-      },
-      toggleMic: async () => {
-        const v = voiceRef.current;
-        if (!c() || !v) {
-          if (c()) setNotice("Voice isn't available here");
-          return;
-        }
-        try {
-          if (!v.track) {
-            // Phones: route the call audio for talking while the movie plays (iOS
-            // play-and-record session, Android speaker / headset) before the mic opens.
-            adapterRef.current?.setVoice?.(true);
-            await v.start();
-            setMicOn(true);
-          } else {
-            const mute = !v.muted;
-            v.setMuted(mute);
-            setMicOn(!mute);
-          }
-        } catch (e) {
-          if (!v.track) adapterRef.current?.setVoice?.(false);
-          setNotice(e?.name === "NotAllowedError" ? "Allow the microphone to talk in the party" : "Voice couldn't start");
-        }
-      },
-      clearNotice: () => setNotice(null),
-      /** True when this device's player already has `key` open. */
-      playerHas: (key) => {
-        try {
-          return !!key && adapterRef.current?.read()?.key === key;
-        } catch {
-          return false;
-        }
-      },
-      toggleFullscreen: () => adapterRef.current?.toggleFullscreen?.(),
-    }),
-    [create, join, leaveCleanup],
-  );
+const c = () => S.client;
+const api = {
+  create,
+  join,
+  /** Anyone in the party can put on a movie, show, or anime from the app. */
+  pick: (media) => {
+    const m = cleanMedia(media);
+    if (m) c()?.pickMedia(m);
+    return m;
+  },
+  togglePause: () => {
+    const cl = c();
+    if (!cl?.state) return;
+    const paused = cl.state.intent !== "play";
+    cl.intent({ action: paused ? "play" : "pause", pos: cl.engine.target() });
+  },
+  leave: () => {
+    if (S.host) S.host.endParty(); // the host's device is the room: leaving ends it
+    c()?.leave();
+    update({ status: "idle" });
+    leaveCleanup();
+  },
+  end: () => c()?.endParty(),
+  sendChat: (t) => c()?.sendChat(t),
+  shareCurrent: () => {
+    const m = currentMedia();
+    if (m) c()?.pickMedia(m);
+  },
+  setChatOpen: (open) => {
+    S.chatOpen = open;
+    if (open && S.unread) update({ unread: 0 });
+  },
+  toggleMic: async () => {
+    const v = S.voice;
+    if (!c() || !v) {
+      if (c()) update({ notice: "Voice isn't available here" });
+      return;
+    }
+    try {
+      if (!v.track) {
+        // Phones: route the call audio for talking while the movie plays (iOS
+        // play-and-record session, Android speaker / headset) before the mic opens.
+        S.adapter?.setVoice?.(true);
+        await v.start();
+        update({ micOn: true });
+      } else {
+        const mute = !v.muted;
+        v.setMuted(mute);
+        update({ micOn: !mute });
+      }
+    } catch (e) {
+      if (!v.track) S.adapter?.setVoice?.(false);
+      update({ notice: e?.name === "NotAllowedError" ? "Allow the microphone to talk in the party" : "Voice couldn't start" });
+    }
+  },
+  clearNotice: () => update({ notice: null }),
+  /** True when this device's player already has `key` open. */
+  playerHas: (key) => {
+    try {
+      return !!key && S.adapter?.read()?.key === key;
+    } catch {
+      return false;
+    }
+  },
+  toggleFullscreen: () => S.adapter?.toggleFullscreen?.(),
+};
 
-  const myId = clientId();
-  // Profile renamed / new picture while in a party: everyone sees the change.
-  useEffect(() => {
-    clientRef.current?.setProfile(identity.name, identity.avatar);
-  }, [identity.name, identity.avatar]);
+/** Who this device is in parties: the active profile's name and picture, kept current (profile switch / edit). */
+function setIdentity(identity) {
+  const prev = S.identity;
+  if (prev.name === identity.name && prev.avatar === identity.avatar && prev.profileId === identity.profileId) return;
+  S.identity = identity;
+  S.client?.setProfile(identity.name, identity.avatar);
+}
+
+export function useWatchParty(identity = { name: "Guest", avatar: null, profileId: null }) {
+  useSyncExternalStore(subscribe, () => version);
+  useEffect(() => setIdentity(identity), [identity]);
+  if (!S.client) S.identity = identity; // used by the next connect
+  const myId = S.myId || clientId(identity.profileId);
+  const { state, rawChat } = S;
   const chat = useMemo(() => chatView(rawChat, state?.members, myId, fallbackAvatar), [rawChat, state?.members, myId]);
   // The native players (iPhone / Android) draw the same chat, pictures included.
   useEffect(() => {
-    if (!adapterRef.current?.setChat) return;
-    adapterRef.current.setChat(chat.map((m) => ({ id: m.id, name: m.rawName, text: m.rawText, ts: m.ts, mine: m.mine, ...nativeAvatar(m.avatar, m.name) })));
+    if (!S.adapter?.setChat) return;
+    S.adapter.setChat(chat.map((m) => ({ id: m.id, name: m.rawName, text: m.rawText, ts: m.ts, mine: m.mine, ...nativeAvatar(m.avatar, m.name) })));
   }, [chat]);
-  return { state, status, notice, chat, unread, speaking, micOn, identity, isHost: state?.host === myId, myId, ...api };
+  return {
+    state,
+    status: S.status,
+    notice: S.notice,
+    chat,
+    unread: S.unread,
+    speaking: S.speaking,
+    micOn: S.micOn,
+    identity,
+    isHost: state?.host === myId,
+    myId,
+    ...api,
+  };
 }
 
 // ── UI ──────────────────────────────────────────────────────────────────
@@ -746,10 +762,10 @@ export default function WatchParty({ page, onOpenTitle }) {
   useEffect(() => {
     let stop = null, gone = false;
     roomServer()
-      .then((base) => { if (base && !gone) stop = startPresence(base, setLive); })
+      .then((base) => { if (base && !gone) stop = startPresence(base, setLive, identity.profileId); })
       .catch(() => {});
     return () => { gone = true; stop?.(); };
-  }, []);
+  }, [identity.profileId]);
   useEffect(() => {
     if (party.status === "ended") setToast(party.notice || "The party was ended by the host");
     else if (party.status === "room-full") setToast(party.notice || `Party is full (${MAX_MEMBERS}/${MAX_MEMBERS})`);

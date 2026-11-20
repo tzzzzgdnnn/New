@@ -2,9 +2,11 @@
 // Android and web, and how many people have used it in total (counted by
 // the watch server's Presence object, see watch-together/worker.js).
 //
-// Each install keeps one server-issued user token (localStorage, mirrored to
-// the Keychain on iPhone so app updates and reinstalls keep it), so a person
-// is counted once however many tabs, reopens or updates. Each tab adds its
+// A person is a profile: each profile on a device (up to 5, no accounts)
+// keeps its own server-issued token (localStorage, mirrored to the Keychain
+// on iPhone so app updates and reinstalls keep it), so one profile counts
+// once however many tabs, reopens or updates, and a profile that is never
+// opened is never counted. Each tab adds its
 // own tab id; closing a tab tells the server at once, and anything silent for
 // 75 s drops off by itself.
 import { secureStorage } from "../utils/storage.js";
@@ -35,26 +37,26 @@ function tabId() {
   }
 }
 
-async function loadToken() {
+async function loadToken(key) {
   try {
-    const t = localStorage.getItem(TOKEN_KEY);
+    const t = localStorage.getItem(key);
     if (TOKEN_RE.test(t || "")) return t;
   } catch {}
   try {
-    const t = await secureStorage.get(TOKEN_KEY);
+    const t = await secureStorage.get(key);
     if (TOKEN_RE.test(t || "")) {
-      localStorage.setItem(TOKEN_KEY, t);
+      localStorage.setItem(key, t);
       return t;
     }
   } catch {}
   return null;
 }
 
-function saveToken(t) {
+function saveToken(key, t) {
   try {
-    localStorage.setItem(TOKEN_KEY, t);
+    localStorage.setItem(key, t);
   } catch {}
-  secureStorage.set(TOKEN_KEY, t)?.catch?.(() => {});
+  secureStorage.set(key, t)?.catch?.(() => {});
 }
 
 const platform = () =>
@@ -65,8 +67,12 @@ const watchingNow = () => {
   return [...document.querySelectorAll("video")].some((v) => !v.paused && !v.ended && v.readyState > 2);
 };
 
-/** Start the heartbeat. `onCounts({online, watching, total, byPlatform})` on each reply. */
-export function startPresence(base, onCounts) {
+/** Token storage key of a profile (the device itself when there are no profiles: desktop). */
+export const tokenKey = (profileId) => `${TOKEN_KEY}:${String(profileId || "device").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32) || "device"}`;
+
+/** Start the heartbeat for the active profile. `onCounts({online, watching, total, byPlatform})` on each reply. */
+export function startPresence(base, onCounts, profileId = null) {
+  const key = tokenKey(profileId);
   const url = `${base}/presence`;
   const tab = tabId();
   let token = null;
@@ -75,7 +81,7 @@ export function startPresence(base, onCounts) {
   let inFlight = false;
   window.addEventListener("sb-native-progress", markPlaying);
   window.addEventListener("__sbWatchState", markPlaying);
-  const ready = loadToken().then((t) => (token = t));
+  const ready = loadToken(key).then((t) => (token = t));
   const beat = async () => {
     if (stopped || inFlight) return;
     clearTimeout(timer);
@@ -87,7 +93,7 @@ export function startPresence(base, onCounts) {
         const d = await r.json().catch(() => null);
         if (d?.token && TOKEN_RE.test(d.token) && d.token !== token) {
           token = d.token;
-          saveToken(token);
+          saveToken(key, token);
         }
         if (d && Number.isFinite(d.online)) onCounts?.(d);
       }
