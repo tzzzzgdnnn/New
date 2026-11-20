@@ -12,6 +12,7 @@ import { prefetchAnipm, ANIPM_RELAY } from "./anipm";
 import { customCandidates, withCustom } from "./customServers";
 import { providerOf } from "../../utils/servers/ranking";
 import { MOVY_ID, MOVY_LABEL } from "./movy";
+import { ORION_ID, ORION_LABEL, EVION_ID, EVION_LABEL } from "./sevenmovies";
 import { sourcesForTitle } from "../../utils/api";
 
 /** The download sheet's "let the app pick" server choice. */
@@ -27,6 +28,10 @@ export function downloadServerChoices(ctx) {
   const type = ctx?.type === "tv" ? "tv" : "movie";
   const rows = [{ id: AUTO_DOWNLOAD_SERVER, label: "Auto", detail: "Best server for this title" }];
   if (!isAnime) rows.push({ id: MOVY_ID, label: MOVY_LABEL, detail: "Direct stream" });
+  if (!isAnime) {
+    rows.push({ id: ORION_ID, label: ORION_LABEL, detail: "Direct stream" });
+    rows.push({ id: EVION_ID, label: EVION_LABEL, detail: "Direct stream" });
+  }
   for (const s of sourcesForTitle(isAnime, type)) {
     if (s.async || s.idType || rows.some((r) => r.id === s.id)) continue;
     rows.push({ id: s.id, label: s.label, detail: s.custom ? "Custom" : s.note || null });

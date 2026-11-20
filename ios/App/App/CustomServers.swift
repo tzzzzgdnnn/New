@@ -70,6 +70,8 @@ final class AdFilter {
         "taboola.com", "outbrain.com", "revcontent.com", "adnxs.com", "criteo.com", "amazon-adsystem.com",
         "histats.com", "acscdn.com", "highperformanceformat.com", "profitablegatecpm.com", "realsrv.com",
         "tsyndicate.com", "magsrv.com", "pemsrv.com", "dtscout.com", "adskeeper.com", "pushame.com",
+        // 7Movies' ad tags
+        "felledpasillo.com", "ingangupbelt.com",
     ]
 
     private(set) var rules: WKContentRuleList?

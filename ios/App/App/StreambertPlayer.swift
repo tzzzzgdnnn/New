@@ -490,7 +490,9 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             sbLog("direct stream from \(c.id)")
             let slot = Slot(index: i, webView: WKWebView(frame: .zero))
             slots[i] = slot
-            slot.streams.append((direct, nil))
+            // Hosts whose playlists answer only with their own Referer (7Movies' Orion).
+            let page: URL? = direct.host == "embed.vidrift.net" ? URL(string: "https://embed.vidrift.net/") : nil
+            slot.streams.append((direct, page))
             DispatchQueue.main.async { [weak self, weak slot] in
                 guard let self = self, let slot = slot else { return }
                 self.markReady(slot)

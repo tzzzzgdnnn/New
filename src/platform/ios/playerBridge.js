@@ -36,6 +36,7 @@ export function publishPlayerContext(ctx) {
   if (ctx?.isAnime && ctx.anilistId) import("./anipm").then((m) => m.prefetchAnipm(ctx)).catch(() => {});
   // Movies and series: Movy's stream API, resolved now so Play is instant.
   if (!import.meta.env.VITE_WEB && ctx && !ctx.isAnime && ctx.tmdbId) import("./movy").then((m) => m.prefetchMovy(ctx)).catch(() => {});
+  if (!import.meta.env.VITE_WEB && ctx && !ctx.isAnime && ctx.tmdbId) import("./sevenmovies").then((m) => m.prefetchSevenMovies(ctx)).catch(() => {});
   if (ctx && !ctx.isAnime && ctx.tmdbId) import("./cinejoy").then((m) => m.prefetchCinejoy(ctx)).catch(() => {});
   // Measure the title's servers now (player Auto ranking), not on Play.
   import("./webview").then((m) => m.prefetchTitle(ctx)).catch(() => {});
