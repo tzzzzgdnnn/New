@@ -303,7 +303,44 @@ enum SniffScript {
 // view (never visible, never on top of anything), captures the first stream,
 // then tears the web view down. Tries candidates in order, ~9 s each.
 
-struct SniffCandidate { let id: String; let label: String; let url: URL }
+struct SniffCandidate {
+    let id: String
+    let label: String
+    let url: URL
+    /// Custom servers: the site's own domain. Main-frame navigations and new
+    /// windows that leave it are blocked, and the ad filter is applied.
+    var lockHost: String? = nil
+    /// How long this page may take to show a stream (nil: the default).
+    var timeout: TimeInterval? = nil
+    /// Reuse a stream found for this exact link earlier in the session.
+    var cacheable = false
+
+    /// A candidate from the JS bridge ({ id, label, url, lockHost?, timeoutMs?, cache? }).
+    static func from(_ d: [String: Any]) -> SniffCandidate? {
+        guard let id = d["id"] as? String, let u = (d["url"] as? String).flatMap({ URL(string: $0) }) else { return nil }
+        let host = (d["lockHost"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() }
+        let ms = (d["timeoutMs"] as? NSNumber)?.doubleValue
+        return SniffCandidate(id: id, label: (d["label"] as? String) ?? id, url: u, lockHost: host,
+                              timeout: ms.map { $0 / 1000 }, cacheable: (d["cache"] as? Bool) ?? false)
+    }
+
+    /// Whether `host` is the locked site or one of its subdomains.
+    func allows(host: String?) -> Bool {
+        guard let site = lockHost else { return true }
+        guard let h = host?.lowercased(), !h.isEmpty else { return false }
+        return h == site || h.hasSuffix("." + site)
+    }
+}
+
+/// What one hidden page did while it was tried: for the custom server Test.
+struct SniffReport {
+    var pageStatus: Int?
+    var pageError: String?
+    var pageLoadedAfter: TimeInterval?
+    var popupsBlocked = 0
+    var redirectsBlocked: [String] = []
+    var adFilterOn = false
+}
 
 /// A subtitle file seen on an embed page, with the page's label if it had one.
 struct SniffSub: Equatable { let url: URL; let label: String? }
@@ -369,22 +406,32 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     static let lingerAfterPick: TimeInterval = 12
     private var lingerTimer: Timer?
     private var startedAt = Date()
+    private var bypassCache = false
+    /// Per candidate index: what its page did (kept until the next start).
+    private(set) var reports: [Int: SniffReport] = [:]
+    private var launchedAt: [Int: Date] = [:]
 
     init(container: UIView) { self.container = container }
 
-    func start(_ list: [SniffCandidate], from: Int = 0, completion: @escaping (SniffResult?) -> Void) {
+    func start(_ list: [SniffCandidate], from: Int = 0, bypassCache: Bool = false,
+               completion: @escaping (SniffResult?) -> Void) {
         cancel()
         candidates = list
         nextIndex = max(0, from)
+        self.bypassCache = bypassCache
         self.completion = completion
+        reports = [:]
+        launchedAt = [:]
         running = true
         startedAt = Date()
         fill()
     }
 
     func resume(after i: Int, completion: @escaping (SniffResult?) -> Void) {
-        start(candidates, from: i + 1, completion: completion)
+        start(candidates, from: i + 1, bypassCache: bypassCache, completion: completion)
     }
+
+    func report(at i: Int) -> SniffReport { reports[i] ?? SniffReport() }
 
     func cancel() {
         preferTimer?.invalidate(); preferTimer = nil
@@ -450,7 +497,21 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             }
             return
         }
+        // Custom servers: a stream found for this link earlier in the session.
+        if c.cacheable, !bypassCache, let hit = ResolvedStreamCache.shared.stream(for: c.url) {
+            sbLog("cached stream for \(c.id)")
+            let slot = Slot(index: i, webView: WKWebView(frame: .zero))
+            slots[i] = slot
+            slot.streams.append((hit.stream, hit.page))
+            DispatchQueue.main.async { [weak self, weak slot] in
+                guard let self = self, let slot = slot else { return }
+                self.markReady(slot)
+            }
+            return
+        }
         sbLog("trying \(c.id) \(c.url.absoluteString) (slot \(slots.count + 1)/\(Self.parallel))")
+        launchedAt[i] = Date()
+        var report = SniffReport()
         let cfg = WKWebViewConfiguration()
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
@@ -461,6 +522,14 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         ucc.addUserScript(WKUserScript(source: SniffScript.source(subframesOnly: false, nudge: true),
                                        injectionTime: .atDocumentStart, forMainFrameOnly: false))
         ucc.add(WeakHandler(self), name: "sbMedia")
+        if c.lockHost != nil {
+            ucc.addUserScript(WKUserScript(source: SiteGuard.popupScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+            if let rules = AdFilter.shared.rules {
+                ucc.add(rules)
+                report.adFilterOn = true
+            }
+        }
+        reports[i] = report
         cfg.userContentController = ucc
         let wv = WKWebView(frame: container.bounds, configuration: cfg)
         wv.customUserAgent = StreambertBridgeViewController.safariUserAgent
@@ -474,10 +543,11 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         let slot = Slot(index: i, webView: wv)
         slots[i] = slot
         wv.load(URLRequest(url: c.url))
-        slot.timeout = Timer.scheduledTimer(withTimeInterval: Self.perServerTimeout, repeats: false) { [weak self, weak slot] _ in
+        let limit = c.timeout ?? Self.perServerTimeout
+        slot.timeout = Timer.scheduledTimer(withTimeInterval: limit, repeats: false) { [weak self, weak slot] _ in
             guard let self = self, let slot = slot, self.slots[slot.index] === slot else { return }
             if slot.streams.isEmpty {
-                sbLog("no stream from \(c.id) after \(Int(Self.perServerTimeout)) s")
+                sbLog("no stream from \(c.id) after \(Int(limit)) s")
                 self.remove(slot)
             } else {
                 self.markReady(slot)
@@ -499,8 +569,12 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     }
 
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
-        guard let b = m.body as? [String: Any], let s = b["url"] as? String, let u = URL(string: s),
-              let slot = slot(for: m.webView) else { return }
+        guard let b = m.body as? [String: Any], let slot = slot(for: m.webView) else { return }
+        if (b["kind"] as? String) == "blocked" {
+            reports[slot.index, default: SniffReport()].popupsBlocked += 1
+            return
+        }
+        guard let s = b["url"] as? String, let u = URL(string: s) else { return }
         let page = (b["page"] as? String).flatMap { URL(string: $0) }
         if (b["kind"] as? String) == "sub" {
             guard !slot.subs.contains(where: { $0.url == u }) else { return }
@@ -557,6 +631,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         let cand = candidates[slot.index]
         let ms = Int(Date().timeIntervalSince(startedAt) * 1000)
         sbLog("stream \(best.url.absoluteString) from \(cand.id) in \(ms) ms")
+        if cand.cacheable { ResolvedStreamCache.shared.store(best.url, page: best.page, for: cand.url) }
         var headers: [String: String] = ["User-Agent": StreambertBridgeViewController.safariUserAgent]
         if let page = best.page, let scheme = page.scheme, let host = page.host {
             let origin = "\(scheme)://\(host)" + (page.port.map { ":\($0)" } ?? "")
@@ -616,11 +691,26 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
 
     // Popups / new windows: never.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
-                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? { nil }
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if let slot = slot(for: webView) { reports[slot.index, default: SniffReport()].popupsBlocked += 1 }
+        return nil
+    }
 
-    // Top-frame navigation away from the embed by a click: blocked.
+    // Top-frame navigation away from the embed by a click: blocked. Custom
+    // servers: any main-frame navigation off the site's domain is blocked.
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if let slot = slot(for: webView), slot.index < candidates.count {
+            let cand = candidates[slot.index]
+            let host = navigationAction.request.url?.host
+            let toMain = navigationAction.targetFrame == nil || navigationAction.targetFrame?.isMainFrame == true
+            if cand.lockHost != nil, toMain, navigationAction.request.url?.scheme?.hasPrefix("http") == true,
+               !cand.allows(host: host) {
+                sbLog("blocked redirect from \(cand.id) to \(host ?? "?")")
+                reports[slot.index, default: SniffReport()].redirectsBlocked.append(host ?? "?")
+                decisionHandler(.cancel); return
+            }
+        }
         if navigationAction.targetFrame?.isMainFrame == true, navigationAction.navigationType == .linkActivated {
             decisionHandler(.cancel); return
         }
@@ -628,6 +718,41 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             decisionHandler(.cancel); return
         }
         decisionHandler(.allow)
+    }
+
+    // Page reached: the main frame's HTTP status, for the custom server Test.
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if navigationResponse.isForMainFrame, let slot = slot(for: webView),
+           let status = (navigationResponse.response as? HTTPURLResponse)?.statusCode {
+            reports[slot.index, default: SniffReport()].pageStatus = status
+        }
+        decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let slot = slot(for: webView), reports[slot.index]?.pageLoadedAfter == nil else { return }
+        reports[slot.index, default: SniffReport()].pageLoadedAfter =
+            Date().timeIntervalSince(launchedAt[slot.index] ?? startedAt)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        noteFailure(webView, error)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        noteFailure(webView, error)
+    }
+
+    /// First load error of a page (not the cancels this class causes itself).
+    private func noteFailure(_ webView: WKWebView, _ error: Error) {
+        let e = error as NSError
+        let selfInflicted = (e.domain == NSURLErrorDomain && e.code == NSURLErrorCancelled)
+            || (e.domain == "WebKitErrorDomain" && e.code == SiteGuard.frameLoadInterruptedCode)
+        guard !selfInflicted, let slot = slot(for: webView),
+              reports[slot.index]?.pageLoadedAfter == nil, reports[slot.index]?.pageError == nil else { return }
+        reports[slot.index, default: SniffReport()].pageError = e.localizedDescription
+        sbLog("page failed for \(candidates[slot.index].id): \(e.localizedDescription)")
     }
 }
 
@@ -676,6 +801,8 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         installWebProcessRecovery(wv)
         ucc.addScriptMessageHandler(DownloadMessageHandler(self), contentWorld: .page, name: "sbDownload")
+        ucc.addScriptMessageHandler(ServerTestMessageHandler(container: view), contentWorld: .page, name: "sbServerTest")
+        AdFilter.shared.warm()
         DownloadManager.shared.onEvent = { [weak self] e in self?.sendToJS("__sbDownloadEvent", e) }
     }
 
@@ -686,10 +813,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     /// Finds a stream for a title (same servers as Play) and reports what can
     /// be downloaded: an MP4, a media playlist, or a master playlist's variants.
     fileprivate func probeDownload(_ body: [String: Any], reply: @escaping ([String: Any]) -> Void) {
-        let list = (body["candidates"] as? [[String: Any]] ?? []).compactMap { d -> SniffCandidate? in
-            guard let u = (d["url"] as? String).flatMap({ URL(string: $0) }), let id = d["id"] as? String else { return nil }
-            return SniffCandidate(id: id, label: (d["label"] as? String) ?? id, url: u)
-        }
+        let list = (body["candidates"] as? [[String: Any]] ?? []).compactMap(SniffCandidate.from)
         guard !list.isEmpty else { reply(["ok": false, "error": "No server for this title"]); return }
         dlSniffer.start(list) { [weak self] r in
             self?.dlSniffer.cancel()
@@ -856,10 +980,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
               let list = body["candidates"] as? [[String: Any]] else { return }
         if let c = body["ctx"] as? [String: Any] { context["ctx"] = c }
         if let s = body["servers"] { context["servers"] = s }
-        resolveList = list.compactMap { d in
-            guard let u = (d["url"] as? String).flatMap({ URL(string: $0) }), let id = d["id"] as? String else { return nil }
-            return SniffCandidate(id: id, label: (d["label"] as? String) ?? id, url: u)
-        }
+        resolveList = list.compactMap(SniffCandidate.from)
         guard !resolveList.isEmpty else { return }
         // A previous request whose failure screen is still up is replaced.
         if let old = failedToken, old != token { notifyJS(token: old, ok: false, server: nil) }
