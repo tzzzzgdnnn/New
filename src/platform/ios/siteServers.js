@@ -9,6 +9,15 @@ import { discoverSite, resolveSite, streamHeaders, normalizeRecipe, isChallenge 
 
 const bridge = () => window.webkit?.messageHandlers?.sbSiteRender || null;
 export const canAddSites = () => !!bridge();
+/** Guard: the site adder is unfinished (no Settings UI yet, native bridge not device-tested), so it stays
+ * off unless turned on for testing with localStorage "sbSiteAdder" = "1". */
+export const siteAdderEnabled = () => {
+  try {
+    return canAddSites() && globalThis.localStorage?.getItem("sbSiteAdder") === "1";
+  } catch {
+    return false;
+  }
+};
 
 /** The `net` discoverSite / resolveSite expect, backed by the native bridge. */
 export function nativeNet() {
@@ -37,6 +46,7 @@ export function nativeNet() {
 
 /** Discover a site and confirm its stream plays. One saved server per passing source. */
 export async function addSiteFromLink(link, { apiKey = null, onStep } = {}) {
+  if (!siteAdderEnabled()) return { ok: false, step: "site", error: "Adding whole sites isn't available yet." };
   const net = nativeNet();
   const res = await discoverSite(link, { net, apiKey, onStep });
   if (!res.ok) return res;
@@ -76,7 +86,7 @@ export function normalizeSiteServer(s, idPrefix) {
 /** Play time: search the site for this title and return the page / stream to play. */
 export async function resolveSiteServer(s, ctx) {
   const want = { title: ctx.title || ctx.name, year: ctx.year, type: ctx.type === "tv" ? "tv" : "movie", season: ctx.season, episode: ctx.episode };
-  if (!want.title) return null;
+  if (!want.title || !siteAdderEnabled()) return null;
   const r = await resolveSite(s.recipe, want, { net: nativeNet() });
   if (!r.ok) return null;
   if (s.mirror) {

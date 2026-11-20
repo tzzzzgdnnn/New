@@ -11,7 +11,7 @@
 // copy, so the list survives app updates and a cleared web view.
 import { storage, secureStorage } from "../../utils/storage";
 import { fetchImdbId, lastTmdbKey, tmdbFetch } from "../../utils/api";
-import { normalizeSiteServer, resolveSiteServer } from "./siteServers";
+import { normalizeSiteServer, resolveSiteServer, siteAdderEnabled } from "./siteServers";
 import { buildUrl, deriveTemplate, siteDomain, templatePlaceholders, TEMPLATE_KINDS, validateTemplate } from "../../utils/customServers/template";
 import { matchSample, withTimeout, LOOKUP_TIMEOUT_MS } from "../../utils/customServers/match";
 import { isAutoPick } from "./autoServer";
@@ -353,6 +353,7 @@ export async function customCandidates(ctx, opts = {}) {
       .filter((s) => serverFits(s, { isAnime, type }))
       .map(async (s) => {
         if (s.kind === "site") {
+          if (!siteAdderEnabled()) return null;
           const r = await resolveSiteServer(s, ctx).catch(() => null);
           return r ? candidateFor(s, r.url) : null;
         }

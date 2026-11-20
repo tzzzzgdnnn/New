@@ -430,3 +430,36 @@ test("site: the site's own no-reuse / no-AI rules are respected", () => {
   assert.match(S.reusePolicy({ html: "<p>We prohibit reuse of our streams.</p>" }), /aren't authorized/);
   assert.equal(S.reusePolicy({ html: "<p>Our AI picks are great. Bots love us.</p>" }), null);
 });
+
+test("iPhone site connector: carry-over only from non-challenge pages; site servers saved and resolved", async () => {
+  const SS = await import("../src/platform/ios/siteServers.js");
+  const calls = [];
+  const frame = (html, title = "") => ({ kind: "frame", top: true, url: "https://ex.test/", title, html, links: [], forms: [] });
+  let next = { frames: [frame("<h1>Just a moment...</h1><div class=cf-turnstile></div>", "Just a moment...")], challenge: true, cookie: "cf_clearance=x", userAgent: "UA-1" };
+  globalThis.window = globalThis.window || {};
+  window.webkit = { messageHandlers: { sbSiteRender: { postMessage: async (m) => { calls.push(m); return m.op === "render" ? next : { ok: true, status: 200, text: "", url: m.url }; } } } };
+  assert.equal(SS.canAddSites(), true);
+  const net = SS.nativeNet();
+  const r1 = await net.render("https://ex.test/");
+  assert.equal(r1.challenge, true);
+  assert.equal(r1.cookie, null, "no cookie from a challenge page");
+  assert.deepEqual(net.carried(), { cookie: null, userAgent: null });
+  assert.match(calls[0].script, /sbCollect/, "collector.js injected");
+  next = { frames: [frame("<h1>Home</h1>", "Films")], challenge: false, cookie: "cf_clearance=ok", userAgent: "UA-2" };
+  const r2 = await net.render("https://ex.test/");
+  assert.equal(r2.cookie, "cf_clearance=ok");
+  assert.deepEqual(net.carried(), { cookie: "cf_clearance=ok", userAgent: "UA-2" });
+  await net.fetch("https://ex.test/x");
+  assert.equal(calls.at(-1).headers["User-Agent"], "UA-2");
+  // A page the bridge didn't flag but that is a challenge still gives nothing.
+  next = { frames: [frame('<script>window._cf_chl_opt={}</script><div class="cf-turnstile"></div>', "Just a moment...")], challenge: false, cookie: "c=1", userAgent: "UA-3" };
+  const r3 = await net.render("https://ex.test/");
+  assert.equal(r3.challenge, true);
+  assert.equal(r3.cookie, null);
+  // Saved "site" kind.
+  const s = SS.normalizeSiteServer({ kind: "site", name: "Ex", recipe: { home: "https://ex.test/", search: { type: "wp", url: "https://ex.test/wp-json/wp/v2/search?search={q}" } } }, "custom-");
+  assert.ok(s && s.kind === "site" && s.id.startsWith("custom-") && s.lists.movies && s.lists.tv && !s.lists.anime);
+  assert.equal(SS.normalizeSiteServer({ kind: "site", recipe: {} }, "custom-"), null);
+  delete window.webkit;
+  assert.equal(SS.canAddSites(), false);
+});
