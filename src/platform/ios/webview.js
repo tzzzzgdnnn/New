@@ -21,6 +21,7 @@ import { cinejoyCandidates, cachedCinejoy, prefetchCinejoy, CINEJOY_ID } from ".
 import { playDirect } from "../web/directPlayer";
 import { parseServerKey } from "../../utils/servers/catalog";
 import { diag } from "../../utils/diag";
+import { customCandidates, withCustom, pickedCustomId, isCustomPlaceholder } from "./customServers";
 
 const LOAD_TIMEOUT_MS = 8000;
 const MAX_CANDIDATES = 10;
@@ -46,7 +47,7 @@ const nativeAvailable = () => !!window.webkit?.messageHandlers?.sbResolve;
 
 /** Server list for the native server menu, built from the latest context. */
 function serverListFor(ctx) {
-  const list = nativeServerList(!!ctx.isAnime);
+  const list = nativeServerList(!!ctx.isAnime, ctx.type === "tv" ? "tv" : "movie");
   if (!ctx.isAnime) return list;
   // ani.pm leads the native menu for anime (Sub and Dub entries).
   return [
@@ -419,14 +420,18 @@ function upgrade(wv) {
       // Start on the fastest server: untested providers are probed at once,
       // within a short budget, while the Keychain read finishes.
       const tRank = Date.now();
-      const [subCtx, ranked, anipm, movy] = await Promise.all([
+      const [subCtx, ranked, anipm, movy, custom] = await Promise.all([
         subCtxReady,
         rankedCandidates(url, ctx, { signal: probing.signal }),
         ctx.isAnime ? anipmCandidates(ctx) : [],
         ctx.isAnime ? [] : directCandidates(ctx),
+        customCandidates(ctx).catch((e) => {
+          diag("player", `custom servers: ${e?.message || e}`);
+          return [];
+        }),
       ]);
       if (nativeToken !== token) return;
-      const candidates = withMovy(withAnipm(playerOrder(ranked, ctx), anipm), movy);
+      const candidates = withCustom(withMovy(withAnipm(playerOrder(ranked, ctx), anipm), movy), custom, pickedCustomId());
       diag(
         "player",
         `play: candidates in ${Date.now() - tRank} ms (tap→send ${Date.now() - lastNativeAt} ms): ` +
@@ -585,6 +590,13 @@ function upgrade(wv) {
       return;
     }
     if (import.meta.env.VITE_WEB && !webOnly && tryWebDirect(url)) return;
+    // A custom site never loads in the visible web view: its ads and pop-ups
+    // are only blocked in the native stream finder.
+    if (isCustomPlaceholder(url)) {
+      iframe.src = "about:blank";
+      showCard("No stream found on this server. Pick another server.", false);
+      return;
+    }
     // No load event in time: the next mirror takes over, else the page hears
     // did-fail-load and fails over to another server.
     webFallback = createFallback([url, ...mirrorsFor(url)], {

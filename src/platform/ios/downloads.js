@@ -9,6 +9,30 @@ import { diag } from "../../utils/diag";
 import { storage, STORAGE_KEYS } from "../../utils/storage";
 import { cinejoyCandidates, prefetchCinejoy } from "./cinejoy";
 import { prefetchAnipm, ANIPM_RELAY } from "./anipm";
+import { customCandidates, withCustom } from "./customServers";
+import { providerOf } from "../../utils/servers/ranking";
+import { MOVY_ID, MOVY_LABEL } from "./movy";
+import { sourcesForTitle } from "../../utils/api";
+
+/** The download sheet's "let the app pick" server choice. */
+export const AUTO_DOWNLOAD_SERVER = "auto";
+
+/**
+ * Servers the download sheet offers for the title on screen: Auto, Movy
+ * (movies and series), then every server of the player's list for this
+ * kind of title, custom ones included.
+ */
+export function downloadServerChoices(ctx) {
+  const isAnime = !!ctx?.isAnime;
+  const type = ctx?.type === "tv" ? "tv" : "movie";
+  const rows = [{ id: AUTO_DOWNLOAD_SERVER, label: "Auto", detail: "Best server for this title" }];
+  if (!isAnime) rows.push({ id: MOVY_ID, label: MOVY_LABEL, detail: "Direct stream" });
+  for (const s of sourcesForTitle(isAnime, type)) {
+    if (s.async || s.idType || rows.some((r) => r.id === s.id)) continue;
+    rows.push({ id: s.id, label: s.label, detail: s.custom ? "Custom" : s.note || null });
+  }
+  return rows;
+}
 
 // Web app: the browser can only save streams handed over directly (Cinejoy,
 // ani.pm), never embed pages, and a fresh lookup can take a while, so
@@ -104,7 +128,7 @@ const idOf = (path) => (String(path || "").startsWith(DL_SCHEME) ? String(path).
  * `ctx` and `tried` let a failed download restart on the next server.
  * The options' sizes are filled in by measureOptions().
  */
-export async function probeDownload({ season = null, episode = null, ctx = null, exclude = [] } = {}) {
+export async function probeDownload({ season = null, episode = null, ctx = null, exclude = [], server = null } = {}) {
   const override =
     season != null && episode != null ? { season, episode, tmdbSeason: season, tmdbEpisode: episode } : {};
   const context = ctx || downloadContext(override);
@@ -122,14 +146,26 @@ export async function probeDownload({ season = null, episode = null, ctx = null,
       tried: [...exclude, res.server].filter(Boolean),
     };
   }
-  const [ranked, movy] = await Promise.all([
+  const pinned = server && server !== AUTO_DOWNLOAD_SERVER ? server : null;
+  const [ranked, movy, custom] = await Promise.all([
     downloadCandidates(context, { exclude }),
     // Downloads wait up to 15 s for the direct streams (they carry every resolution).
     context?.isAnime ? [] : directCandidates(context, { waitMs: 15000 }).catch(() => []),
+    customCandidates(context).catch((e) => {
+      diag("download", `custom servers: ${e?.message || e}`);
+      return [];
+    }),
   ]);
-  // Direct streams (Movy, Cinejoy) first (no page to sniff), unless it already failed.
-  const candidates = [...movy.filter((c) => !exclude.includes(c.id)), ...ranked];
-  if (!candidates.length) return { ok: false, error: "No server returned a downloadable stream" };
+  // Direct streams (Movy, Cinejoy) first (no page to sniff), unless it already failed;
+  // custom servers next. A server picked in the sheet is the only one tried.
+  let candidates = withCustom(
+    [...movy.filter((c) => !exclude.includes(c.id)), ...ranked],
+    custom.filter((c) => !exclude.includes(c.id)),
+  );
+  if (pinned) candidates = candidates.filter((c) => providerOf(c) === pinned);
+  if (!candidates.length) {
+    return { ok: false, error: pinned ? "This server has nothing for this title. Pick another server." : "No server returned a downloadable stream" };
+  }
   const at = Date.now();
   let res = await call("probe", { candidates });
   recordLookup(res, candidates, Date.now() - at, streamHeight(res));
@@ -138,7 +174,7 @@ export async function probeDownload({ season = null, episode = null, ctx = null,
   const tiers = (r) => (r?.ok ? qualityOptions(r).length : 0);
   const skipped = [];
   const until = Date.now() + 15000;
-  while (res?.ok && tiers(res) <= 1 && Date.now() < until) {
+  while (!pinned && res?.ok && tiers(res) <= 1 && Date.now() < until) {
     skipped.push(res.server);
     const rest = candidates.filter((c) => !skipped.includes(c.id));
     if (!rest.length) break;
@@ -159,6 +195,7 @@ export async function probeDownload({ season = null, episode = null, ctx = null,
     subtitles: dedupeSubtitleTracks(res.subtitles || []),
     options: qualityOptions(res),
     ctx: context,
+    pinned,
     tried: [...exclude, res.server].filter(Boolean),
   };
 }
@@ -167,7 +204,7 @@ export async function probeDownload({ season = null, episode = null, ctx = null,
 // same subtitle languages when it has them; null when no server is left.
 async function nextServer({ probe, option, subtitles = [] }) {
   if (!probe.ctx) return null;
-  const next = await probeDownload({ ctx: probe.ctx, exclude: probe.tried });
+  const next = await probeDownload({ ctx: probe.ctx, exclude: probe.tried, server: probe.pinned });
   if (!next.ok) return null;
   const langs = new Set(subtitles.map((t) => t.lang));
   return {

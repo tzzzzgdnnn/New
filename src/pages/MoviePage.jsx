@@ -39,7 +39,7 @@ import {
   sourceIsAsync,
   sourceSupportsAnime,
   sourceIsAnimeCapable,
-  sourcesForContent,
+  sourcesForTitle,
   getAnimeSourceUrl,
   fetchAnilistData,
   ANILIST_MOVIE_FORMATS,
@@ -1395,7 +1395,7 @@ export default function MoviePage({
                 style={{ top: menuPos.top, left: menuPos.left }}
                 onClick={(e) => e.stopPropagation()}
               >
-                {(IS_IOS ? sourcesForContent(isAnime) : PLAYER_SOURCES).map((src) => (
+                {(IS_IOS ? sourcesForTitle(isAnime, "movie") : PLAYER_SOURCES).map((src) => (
                   <button
                     key={src.id}
                     className={

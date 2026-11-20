@@ -5,7 +5,7 @@
 // in ios.css (sp-ss-*), next to the action sheet it matches.
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { sourcesForContent } from "../../utils/api";
+import { sourcesForTitle } from "../../utils/api";
 import { serverSheetRows, shouldDismissDrag, dubControl } from "./serverSheetLogic";
 
 const CheckIcon = () => (
@@ -21,7 +21,7 @@ const CheckIcon = () => (
  *           onDubChange?: (mode: "sub"|"dub") => void }} props
  */
 export default function ServerSheet({ title, sources, choice, type = "movie", onSelect, onClose, anime = false, dubMode = "sub", onDubChange }) {
-  const list = sources ?? sourcesForContent(anime).filter((s) => !s.async && !s.idType);
+  const list = sources ?? sourcesForTitle(anime, type).filter((s) => !s.async && !s.idType);
   const rows = serverSheetRows({ sources: list, choice, type, anime });
   // Anime: ani.pm says whether this episode has a dub (lookup started when
   // the title page opened; usually already done).

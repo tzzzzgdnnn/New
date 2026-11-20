@@ -51,7 +51,7 @@ import {
   sourceIsAsync,
   sourceSupportsAnime,
   sourceIsAnimeCapable,
-  sourcesForContent,
+  sourcesForTitle,
   sourceIsMovieOnly,
   getAnimeSourceUrl,
   fetchAnilistData,
@@ -2851,7 +2851,7 @@ export default function TVPage({
                     style={{ top: menuPos.top, left: menuPos.left }}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {(IS_IOS ? sourcesForContent(isAnime) : PLAYER_SOURCES).filter((src) => !src.movieOnly).map(
+                    {(IS_IOS ? sourcesForTitle(isAnime, "tv") : PLAYER_SOURCES).filter((src) => !src.movieOnly).map(
                       (src) => (
                         <button
                           key={src.id}
