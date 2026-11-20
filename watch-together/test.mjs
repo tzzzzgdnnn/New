@@ -7,7 +7,7 @@ import { ClockSync } from "../src/watch/clock.js";
 import { decideCorrection, HARD_SEEK, MAX_NUDGE } from "../src/watch/drift.js";
 import { RoomCore } from "../src/watch/roomCore.js";
 import { SyncEngine } from "../src/watch/engine.js";
-import { makeCode, normalizeCode, isValidCode, mediaKey, expectedPosition, START_LEAD_MS, RECONNECT_GRACE_MS, START_WAIT_MS, IDLE_EVICT_MS, EMPTY_ROOM_TTL_MS } from "../src/watch/protocol.js";
+import { makeCode, normalizeCode, isValidCode, mediaKey, expectedPosition, START_LEAD_MS, RECONNECT_GRACE_MS, START_WAIT_MS, SEEK_WAIT_MS, IDLE_EVICT_MS, EMPTY_ROOM_TTL_MS } from "../src/watch/protocol.js";
 import { VirtualTime, SimPlayer, SimNet, addDevice } from "./sim.mjs";
 
 const MOVIE = { type: "movie", tmdbId: 603, title: "The Matrix", server: "cinejoy", audioLang: "en", subLang: "en" };
@@ -52,8 +52,11 @@ test("clock: asymmetric slow samples are outvoted by the fastest round trips", (
 
 // ── Drift correction decisions ───────────────────────────────────────────
 test("drift: deadband, gentle rate nudges, hard seek beyond 300 ms", () => {
-  assert.deepEqual(decideCorrection(0.01), { action: "none", rate: 1 });
-  assert.deepEqual(decideCorrection(-0.02), { action: "none", rate: 1 });
+  assert.deepEqual(decideCorrection(0.008), { action: "none", rate: 1 });
+  assert.deepEqual(decideCorrection(-0.009), { action: "none", rate: 1 });
+  // nudging starts at ~10 ms, gently (never past MAX_NUDGE = 3 %)
+  assert.equal(decideCorrection(0.015).action, "rate");
+  assert.ok(MAX_NUDGE <= 0.03);
   const ahead = decideCorrection(0.08);
   assert.equal(ahead.action, "rate");
   assert.ok(ahead.rate < 1 && ahead.rate >= 1 - MAX_NUDGE, `ahead slows ${ahead.rate}`);
@@ -63,10 +66,10 @@ test("drift: deadband, gentle rate nudges, hard seek beyond 300 ms", () => {
   assert.equal(decideCorrection(HARD_SEEK).action, "seek");
   assert.equal(decideCorrection(-2).action, "seek");
   // hysteresis: a running nudge continues inside the deadband until settled
-  assert.equal(decideCorrection(0.02, { nudging: true }).action, "rate");
-  assert.equal(decideCorrection(0.01, { nudging: true }).action, "none");
+  assert.equal(decideCorrection(0.008, { nudging: true }).action, "rate");
+  assert.equal(decideCorrection(0.003, { nudging: true }).action, "none");
   // nudges scale with the room's speed
-  assert.ok(Math.abs(decideCorrection(0.1, { baseRate: 1.5 }).rate - 1.5 * 0.95) < 1e-9);
+  assert.ok(Math.abs(decideCorrection(0.1, { baseRate: 1.5 }).rate - 1.5 * (1 - MAX_NUDGE)) < 1e-9);
   assert.equal(decideCorrection(NaN).action, "none");
 });
 
@@ -169,6 +172,34 @@ test("room: a phone stuck past START_WAIT_MS no longer blocks the start", () => 
   r.adv(START_WAIT_MS + 10);
   ready(r, "a");
   assert.equal(r.core.playback.paused, false, "started without b");
+});
+
+test("room: a seeker stuck on its frame with no data can't hold a seek forever (SEEK_WAIT_MS); a buffering stall still waits", () => {
+  const r = room();
+  r.core.join("a", {});
+  r.core.join("b", {});
+  r.core.handle("a", { type: "media", media: MOVIE });
+  ready(r, "a");
+  ready(r, "b");
+  r.adv(START_LEAD_MS + 5000);
+  r.core.handle("b", { type: "seek", pos: 84 });
+  ready(r, "a", { pos: 84 });
+  // b has the title open on the frame but never gets data there
+  r.core.handle("b", { type: "status", rev: r.core.media.rev, epoch: r.core.epoch, ready: false, pos: 84 });
+  r.adv(SEEK_WAIT_MS - 1000);
+  ready(r, "a", { pos: 84 });
+  assert.ok(r.core.playback.paused, "still waiting on the seeker");
+  r.adv(1500);
+  ready(r, "a", { pos: 84 });
+  assert.equal(r.core.playback.paused, false, "started without the stuck seeker");
+  assert.equal(r.core.playback.pos, 84, "from the seek target");
+  // a real buffering stall keeps the room waiting past SEEK_WAIT_MS
+  r.adv(5000);
+  r.core.handle("b", { type: "status", rev: r.core.media.rev, epoch: r.core.epoch, ready: false, buffering: true, pos: 88 });
+  assert.equal(r.core.holdReason, "buffering");
+  r.adv(SEEK_WAIT_MS + 1000);
+  ready(r, "a", { pos: 88 });
+  assert.ok(r.core.playback.paused, "buffering hold still waits on the stalled phone");
 });
 
 test("room: a silent socket is evicted as dropped, the party carries on", () => {
@@ -297,6 +328,23 @@ test("engine: schedules the start at the local instant of the room's start", () 
   assert.equal(sent.at(-1).ready, true);
   e.setRoom({ media, epoch: 1, playback: { paused: false, pos: 0, at: t + 2000 + 800, rate: 1 } });
   assert.deepEqual(cmds.at(-1), ["playAt", 0, t + 800, 1], "server start instant mapped to local time");
+});
+
+test("engine: on the hold frame with no data, the player's loading is restarted (backing off), never while it has data", () => {
+  let t = 0;
+  let ready = false;
+  const kicks = [];
+  const clock = new ClockSync();
+  const adapter = { read: () => ({ key: "k", ready, status: "paused", pos: 84, sampledAt: t, rate: 1 }), pause() {}, playAt() {}, setRate() {}, kick: (p) => kicks.push([t, p]) };
+  const e = new SyncEngine({ adapter, clock, now: () => t, send() {} });
+  e.setRoom({ media: { key: "k", rev: 1 }, epoch: 2, playback: { paused: true, pos: 84, at: 0, rate: 1 } });
+  for (t = 0; t <= 9000; t += 250) e.step();
+  assert.deepEqual(kicks.map((k) => k[0]), [2500, 7500], "2.5 s, then backs off (5 s, 10 s, ...)");
+  assert.ok(kicks.every((k) => k[1] === 84), "restarted at the hold frame");
+  ready = true;
+  const n = kicks.length;
+  for (; t <= 30_000; t += 250) e.step();
+  assert.equal(kicks.length, n, "no kicks once it has data");
 });
 
 test("engine: a confirmed stall is reported as buffering; a short blip is not", () => {

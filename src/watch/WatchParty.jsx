@@ -209,7 +209,10 @@ async function connect(code, transport) {
     },
     onRtc: (m) => S.voice?.onSignal(m).catch((e) => console.warn("[voice] signal failed", e)),
     onVoice: (m) => S.voice?.onVoice(m),
+    onVoiceFrame: (m) => S.voice?.onRelay(m),
   });
+  // Debug handle (the party test reads the sync engine's state on a failure).
+  globalThis.__sbParty = { engine: client.engine, adapter };
   // Voice: every device listens from the start; its own mic is opt-in (toggleMic).
   S.voice?.stop();
   const voice =
@@ -549,7 +552,9 @@ function PartyBar({ party, onOpenTitle, markOpened }) {
   const [chatOpen, setChatOpen] = useState(true);
   useEffect(() => party.setChatOpen(true), []);
   const st = party.state;
-  const paused = st?.intent !== "play" || st?.playback?.paused;
+  // The button follows what the party wants (a buffering hold still says Pause).
+  const paused = st?.intent !== "play";
+  const pauser = paused && st?.pausedBy ? st.members?.find((m) => m.id === st.pausedBy) : null;
   const here = currentMedia();
   const elsewhere = st?.media && (!here || mediaKey(here) !== st.media.key);
   const waitingNames = (st?.waiting || [])
@@ -565,11 +570,12 @@ function PartyBar({ party, onOpenTitle, markOpened }) {
         </span>
         {party.status === "reconnecting" && <span className="wp-dim">Reconnecting…</span>}
         {st?.holdReason === "buffering" && <span className="wp-dim wp-waiting">{waitingNames.length ? `Waiting for ${waitingNames.join(", ")}…` : "Buffering…"}</span>}
+        {pauser && <span className="wp-dim wp-paused-by">{pauser.id === party.myId ? "You paused" : `Paused by ${unescape(pauser.name)}`}</span>}
         <span className="wp-spacer" />
         <button className="wp-btn" onClick={() => setPicking(true)}>
           Pick
         </button>
-        <button className="wp-btn" onClick={party.togglePause}>
+        <button className="wp-btn wp-playpause" onClick={party.togglePause} aria-label={paused ? "Play for everyone" : "Pause for everyone"}>
           {paused ? "Play" : "Pause"}
         </button>
         <button className="wp-btn" onClick={party.toggleFullscreen} aria-label="Full screen">
@@ -734,7 +740,33 @@ function PickSheet({ onClose, onPick }) {
  * Mounted once in App. `page` is the current page; the Watch Party button
  * shows on movie / show pages. `onOpenTitle(media)` opens the party's title.
  */
+/**
+ * Where the party UI is drawn: inside the full-screen element while the
+ * player box is full screen (the top layer sits above every z-index, so a bar
+ * left in <body> would be covered and its clicks would land on the page
+ * behind it), otherwise <body>. A full-screen <video> can't hold children.
+ */
+function usePartyHost() {
+  const pick = () => {
+    if (typeof document === "undefined") return null;
+    const fs = document.fullscreenElement || document.webkitFullscreenElement;
+    return fs && fs.tagName !== "VIDEO" && fs.tagName !== "IFRAME" ? fs : document.body;
+  };
+  const [host, setHost] = useState(pick);
+  useEffect(() => {
+    const on = () => setHost(pick());
+    document.addEventListener("fullscreenchange", on);
+    document.addEventListener("webkitfullscreenchange", on);
+    return () => {
+      document.removeEventListener("fullscreenchange", on);
+      document.removeEventListener("webkitfullscreenchange", on);
+    };
+  }, []);
+  return host || document.body;
+}
+
 export default function WatchParty({ page, onOpenTitle }) {
+  const host = usePartyHost();
   const identity = usePartyIdentity();
   const party = useWatchParty(identity);
   const [sheet, setSheet] = useState(false);
@@ -811,6 +843,6 @@ export default function WatchParty({ page, onOpenTitle }) {
         </div>
       )}
     </div>,
-    document.body,
+    host,
   );
 }

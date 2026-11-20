@@ -4,11 +4,11 @@
 // phone is untouched; the native players keep pitch with a pitch-preserving
 // time-stretch, so a few percent is inaudible. Beyond HARD_SEEK the gap is
 // closed with an exact seek scheduled to land on the room's timeline.
-export const DEADBAND = 0.03; // within 30 ms: leave it at 1x
-export const SETTLE = 0.012; // once nudging, keep going until within 12 ms
+export const DEADBAND = 0.01; // within 10 ms: leave it at 1x
+export const SETTLE = 0.004; // once nudging, keep going until within 4 ms
 export const HARD_SEEK = 0.3; // over 300 ms: seek
-export const MAX_NUDGE = 0.05; // rate stays within 0.95x..1.05x
-export const CORRECT_SECONDS = 2; // close a gap over about 2 s
+export const MAX_NUDGE = 0.03; // rate stays within 0.97x..1.03x (no audible pitch / stretch artifacts)
+export const CORRECT_SECONDS = 1; // close a gap over about 1 s (a 10 ms gap: 1% for a second)
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 

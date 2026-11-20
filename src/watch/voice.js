@@ -17,6 +17,8 @@
 // when its TURN_KEY_ID / TURN_KEY_API_TOKEN secrets are set). Without it the
 // public STUN servers plus PeerJS's public TURN relay are used, so phones on
 // mobile data (symmetric NAT) still connect.
+import { VoiceRelay, RELAY_AFTER_MS } from "./voiceRelay.js";
+
 export const VOICE_ENABLED = true;
 export const SPEAKING_LEVEL = 0.04; // RMS above this = talking
 export const SPEAKING_HOLD_MS = 500; // the movie comes back up ~0.5 s after someone stops talking
@@ -78,6 +80,50 @@ export class VoiceMesh {
     this.speaking = new Set();
     this.blocked = new Set(); // remote <audio> the browser would not autoplay yet
     this.stopped = false;
+    // Fallback: voice over the party connection for anyone without a WebRTC link (voiceRelay.js).
+    this.relay = new VoiceRelay({ send: (m) => this.client.sendMsg(m), getCtx: () => this.audioCtx() });
+    this.pending = new Map(); // id -> since when there is no connected WebRTC link to them
+    this.relayTimer = setInterval(() => this.checkRelay(), 500);
+    this.relayTimer?.unref?.(); // never keeps a test process alive
+    globalThis.__sbVoiceStats = () => ({ relaying: this.relay.sending, relayFrom: this.relayIds(), codec: this.relay.codec, ...this.relay.stats });
+  }
+
+  audioCtx() {
+    if (!this.ctx) {
+      const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
+      if (!AC) return null;
+      this.ctx = new AC();
+    }
+    return this.ctx;
+  }
+
+  /** Members with no connected WebRTC voice link for RELAY_AFTER_MS: their voice (and mine to them) is relayed. */
+  needsRelay(id, now = Date.now()) {
+    const p = this.peers.get(id);
+    if (p?.connected) {
+      this.pending.delete(id);
+      return false;
+    }
+    if (!this.pending.has(id)) this.pending.set(id, now);
+    return now - this.pending.get(id) >= RELAY_AFTER_MS;
+  }
+
+  relayIds() {
+    const me = this.client.clientId;
+    return (this.lastState?.members || []).filter((m) => m.id !== me && m.connected && this.needsRelay(m.id)).map((m) => m.id);
+  }
+
+  checkRelay() {
+    if (this.stopped) return;
+    const ids = this.relayIds();
+    this.relay.sending = this.micOn && ids.length > 0;
+  }
+
+  /** A relayed voice frame: played only for a sender this device has no WebRTC link to. */
+  onRelay(msg) {
+    if (this.stopped || !msg?.from || msg.from === this.client.clientId) return;
+    if (!this.needsRelay(msg.from)) return;
+    this.relay.receive(msg.from, msg);
   }
 
   get micOn() {
@@ -126,6 +172,7 @@ export class VoiceMesh {
       if (!this.track) throw new Error("No microphone");
       for (const p of this.peers.values()) this.attachMic(p.pc);
       this.watchLevel();
+      this.relay.attach(stream).catch((e) => console.warn("[voice] relay unavailable", e));
     }
     this.unlockAudio();
     this.setMuted(false);
@@ -170,13 +217,19 @@ export class VoiceMesh {
 
   makePeer(id) {
     const pc = new this.RTCPeerConnectionImpl({ iceServers: this.iceServers });
-    const peer = { pc, audio: null, queue: [] };
+    const peer = { pc, audio: null, queue: [], connected: false };
     pc.onicecandidate = (e) => e.candidate && this.client.sendMsg({ type: "rtc", to: id, data: { ice: e.candidate.toJSON ? e.candidate.toJSON() : e.candidate } });
     pc.ontrack = (e) => {
       const stream = e.streams?.[0] || (this.MediaStreamImpl ? new this.MediaStreamImpl([e.track]) : null);
       this.playRemote(id, peer, stream);
     };
+    const live = () => {
+      peer.connected = pc.connectionState === "connected" || (!pc.connectionState && ["connected", "completed"].includes(pc.iceConnectionState));
+      if (peer.connected) this.pending.delete(id);
+    };
+    pc.oniceconnectionstatechange = live;
     pc.onconnectionstatechange = () => {
+      live();
       if (pc.connectionState === "failed" && this.peers.get(id)?.pc === pc) {
         // Lost (network change, NAT timeout): start over; the lower id re-offers.
         this.drop(id);
@@ -225,6 +278,7 @@ export class VoiceMesh {
   }
 
   unlockAudio() {
+    if (this.ctx?.state === "suspended") this.ctx.resume?.()?.catch?.(() => {});
     for (const a of [...this.blocked]) {
       this.blocked.delete(a);
       a.play?.()?.catch?.(() => {
@@ -286,6 +340,7 @@ export class VoiceMesh {
       p.audio.srcObject = null;
       p.audio.remove?.();
     }
+    this.relay?.drop(id);
     if (this.speaking.delete(id)) this.emitSpeaking();
   }
 
@@ -306,9 +361,7 @@ export class VoiceMesh {
 
   /** Local speaking indicator from an AnalyserNode on the mic (sent as "voice" to the room). */
   watchLevel() {
-    const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
-    if (!AC || !this.stream) return;
-    this.ctx = new AC();
+    if (!this.stream || !this.audioCtx()) return;
     const an = this.ctx.createAnalyser();
     an.fftSize = 512;
     this.ctx.createMediaStreamSource(this.stream).connect(an);
@@ -333,6 +386,8 @@ export class VoiceMesh {
   stop() {
     this.stopped = true;
     clearInterval(this.levelTimer);
+    clearInterval(this.relayTimer);
+    this.relay?.stop();
     this.ctx?.close?.()?.catch?.(() => {});
     if (this.track) this.client.sendMsg({ type: "voice", mic: false, speaking: false });
     for (const id of [...this.peers.keys()]) this.drop(id);

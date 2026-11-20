@@ -27,14 +27,35 @@ async function nativeGet(url, headers) {
 // Cloudflare Worker, relay/worker.js). The video itself plays straight from
 // the CDN in Safari's own player.
 export const ANIPM_RELAY = import.meta.env?.VITE_ANIPM_RELAY || "";
+// No relay baked into the build: the Watch Party room server (Cloudflare
+// Worker, watch-together/worker.js) serves one at /anipm once it is deployed;
+// its URL is published at gh-pages watch/config.json.
+const CONFIG_URL = "https://tzzzzgdnnn.github.io/New/watch/config.json";
+let runtimeRelay = ANIPM_RELAY ? `${ANIPM_RELAY}/` : undefined; // undefined = not looked up yet
+export async function resolveAnipmRelay() {
+  if (runtimeRelay !== undefined) return runtimeRelay;
+  try {
+    const r = await fetch(`${CONFIG_URL}?t=${Date.now()}`, { cache: "no-store", signal: AbortSignal.timeout?.(4000) });
+    const { url } = r.ok ? await r.json() : {};
+    runtimeRelay = url ? `${String(url).replace(/\/$/, "")}/anipm` : null;
+  } catch {
+    runtimeRelay = null;
+  }
+  return runtimeRelay;
+}
+/** Web app: true once a relay is known (build-time, or the room server's). */
+export const anipmRelayReady = () => !!runtimeRelay;
 async function relayGet(url, headers, signal) {
-  const u = `${ANIPM_RELAY}/?u=${encodeURIComponent(url)}&r=${encodeURIComponent(headers?.Referer || "https://ani.pm/")}`;
+  const base = await resolveAnipmRelay();
+  if (!base) throw new Error("no ani.pm relay");
+  const u = `${base}?u=${encodeURIComponent(url)}&r=${encodeURIComponent(headers?.Referer || "https://ani.pm/")}`;
   const res = await fetch(u, { signal: signal || AbortSignal.timeout?.(8000) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 // Android app: Capacitor's native HTTP (no CORS), so no relay is needed.
-const webRelay = !!(import.meta.env?.VITE_WEB && !import.meta.env?.VITE_ANDROID && ANIPM_RELAY);
+const webRelay = !!(import.meta.env?.VITE_WEB && !import.meta.env?.VITE_ANDROID);
+if (webRelay && typeof window !== "undefined") resolveAnipmRelay();
 
 let http = webRelay ? relayGet : nativeGet;
 /** Tests swap the HTTP client. */
@@ -166,4 +187,4 @@ export function cachedAnipm(ctx, now = Date.now()) {
   const e = cache.get(anipmKey(ctx));
   return fresh(e, now) && e.result?.ok ? e.result : null;
 }
-export const anipmWebReady = webRelay || !!import.meta.env?.VITE_ANDROID;
+export const anipmWebReady = webRelay || !!import.meta.env?.VITE_ANDROID; // web: also needs anipmRelayReady() (or the test stream)

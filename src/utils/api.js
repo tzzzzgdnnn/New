@@ -472,7 +472,7 @@ const IOS_DIRECT_SOURCES = [
     tvUrl: (id, season, ep) => `https://rive-primevids.invalid/tv/${id}/${season}/${ep}` },
 ];
 export const PLAYER_SOURCES = import.meta.env?.VITE_WEB
-  ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id) && !["vidnest", "hexa"].includes(s.id)).sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"))]
+  ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id) && !["vidnest", "hexa"].includes(s.id)).sort((a, b) => (a.id === "vidrift") - (b.id === "vidrift"))] // vidrift last: it refuses sandboxed frames (now played unsandboxed, webview.js) and is the riskiest for ads
   : [...WEB_DIRECT_SOURCES, ...IOS_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES]; // iPhone app: Cinejoy, then 7Movies, direct and listed first
 
 // Sources that require a transparent webRequest intercept to load properly

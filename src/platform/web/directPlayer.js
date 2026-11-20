@@ -176,6 +176,7 @@ export function prewarmDirect(src, { startAt = 0, nativeOnly = false } = {}) {
     hls.loadSource(src);
     hls.attachMedia(video);
     w.hls = hls;
+    video.__sbHls = hls; // Watch Party: restart a loader stuck after a seek
   } else {
     video.addEventListener("error", () => (w.dead = true));
     if (startAt > 0) video.addEventListener("loadedmetadata", () => (video.currentTime = startAt), { once: true });
@@ -220,7 +221,7 @@ export function forceFullscreen(el) {
 }
 
 const IS_IPHONE = /iPhone|iPod/.test(navigator.userAgent);
-const BTN_CSS = "position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:6;padding:14px 26px;border-radius:26px;border:0;background:rgba(229,9,20,.94);color:#fff;font-size:17px;font-weight:700;display:none";
+const BTN_CSS = "position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:6;padding:14px 26px;border-radius:26px;border:0;background:rgba(229,9,20,.94);color:#fff;font-size:17px;font-weight:700;display:none;visibility:visible";
 
 // The page's player box when the browser can put an element in full screen
 // (Android, iPad, desktop): the box keeps our buttons and the Up Next card
@@ -285,7 +286,9 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   video.preload = "auto";
   // Required for ManagedMediaSource (hls.js on iPhone, iOS 17.1+).
   video.disableRemotePlayback = true;
-  video.style.cssText = "position:absolute;inset:0;width:100%;height:100%;background:#000;object-fit:contain;z-index:3";
+  // visibility: the page may still hide its embed web view (the box) while it
+  // "loads"; the direct video and its controls are the player and always show.
+  video.style.cssText = "position:absolute;inset:0;width:100%;height:100%;background:#000;object-fit:contain;z-index:3;visibility:visible";
   try { video.playbackRate = Number(localStorage.getItem("sbWebRate")) || 1; } catch {}
   for (const el of box.querySelectorAll(":scope > .sb-direct-ui")) el.remove();
   let done = false;
@@ -342,6 +345,7 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     hls.on(Hls.Events.ERROR, (_, d) => d.fatal && fail(d.details));
     hls.loadSource(src);
     hls.attachMedia(video);
+    video.__sbHls = hls; // Watch Party: restart a loader stuck after a seek
   };
   // hls.js first wherever it runs (iPhone too, via ManagedMediaSource): Cinejoy's
   // segments are TS wrapped in a fake PNG header that Safari's own HLS can't play.
@@ -439,7 +443,7 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     if (left === 0 || (IS_IPHONE && video.webkitDisplayingFullscreen)) return playNext();
     upNextCard = document.createElement("div");
     upNextCard.className = "sb-direct-ui";
-    upNextCard.style.cssText = "position:absolute;right:16px;bottom:64px;z-index:7;max-width:280px;background:rgba(20,20,22,.94);color:#fff;border-radius:14px;padding:12px;font:14px -apple-system,system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.5)";
+    upNextCard.style.cssText = "visibility:visible;position:absolute;right:16px;bottom:64px;z-index:7;max-width:280px;background:rgba(20,20,22,.94);color:#fff;border-radius:14px;padding:12px;font:14px -apple-system,system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.5)";
     const thumb = info.thumb ? `<img src="${info.thumb}" style="width:100%;border-radius:8px;margin-bottom:8px;display:block" alt="">` : "";
     upNextCard.innerHTML = `${thumb}<div style="opacity:.7;font-size:12px">${info.subtitle || "Up Next"}</div><div style="font-weight:700;margin:2px 0 10px"></div><div style="display:flex;gap:8px"><button data-a="play" style="flex:1;padding:9px;border:0;border-radius:8px;background:#e50914;color:#fff;font-weight:700"></button><button data-a="cancel" style="padding:9px 12px;border:0;border-radius:8px;background:#3a3a3e;color:#fff">Cancel</button></div>`;
     upNextCard.children[thumb ? 2 : 1].textContent = info.title || "Next episode";
@@ -483,6 +487,7 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     ac.abort();
     try { hls?.destroy(); } catch {}
     hls = null;
+    video.__sbHls = null;
     video.pause();
     video.removeAttribute("src");
     try { video.load(); } catch {}

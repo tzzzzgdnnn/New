@@ -81,6 +81,8 @@ const ALLOW = [/^http:\/\/127\.0\.0\.1:/, /^https:\/\/tzzzzgdnnn\.github\.io\//,
 // Clients whose video segments from a given time on are held back (a phone
 // on a stalling connection): kind -> first held-back second.
 const stallFrom = new Map();
+// Clients whose stream requests all fail (404) right now (embed-guard scenario).
+const failStream = new Set();
 const segStart = (url) => Number(/seg(\d+)\.ts/.exec(url)?.[1] ?? -1) * 2;
 
 async function routeAll(ctx, streamDir, kind) {
@@ -88,6 +90,7 @@ async function routeAll(ctx, streamDir, kind) {
     const url = route.request().url();
     if (url.startsWith(STREAM_HOST)) {
       while (stallFrom.has(kind) && segStart(url) >= stallFrom.get(kind)) await sleep(200);
+      if (failStream.has(kind)) return route.fulfill({ status: 404, body: "gone" });
       const f = path.join(streamDir, path.basename(new URL(url).pathname));
       if (!fs.existsSync(f)) return route.fulfill({ status: 404 });
       return route.fulfill({
@@ -148,6 +151,21 @@ async function makeClient(kind, { base, streamDir }) {
     profile = seed({ name: "Desk Web", avatar: "sp:gold" });
   }
   await routeAll(ctx, streamDir, kind);
+  // "No direct voice path" switch (voice-relay scenario): peer connections
+  // get no STUN/TURN and relay-only ICE, so they can never connect, like two
+  // phones behind carrier-grade NAT with no TURN server.
+  await ctx.addInitScript(() => {
+    const PC = window.RTCPeerConnection;
+    if (!PC) return;
+    window.RTCPeerConnection = function (cfg = {}, ...rest) {
+      let block = false;
+      try {
+        block = localStorage.getItem("sbBlockIce") === "1";
+      } catch {}
+      return new PC(block ? { ...cfg, iceServers: [], iceTransportPolicy: "relay" } : cfg, ...rest);
+    };
+    window.RTCPeerConnection.prototype = PC.prototype;
+  });
   await ctx.addInitScript(
     ({ profile, stream }) => {
       try {
@@ -331,7 +349,7 @@ async function scenario(name, clients, fn) {
       await c.page.screenshot({ path: path.join(CACHE, `fail-${tag}-${c.kind}.png`) }).catch(() => {});
       const dom = await c.page
         .evaluate(() => ({
-          videos: [...document.querySelectorAll("video")].map((v) => `${v.className}|rs${v.readyState}|p${v.paused}|t${v.currentTime.toFixed(1)}|w${v.offsetWidth}|warm${!!v.closest("[data-sb-warm]")}|buf${v.buffered.length ? v.buffered.end(v.buffered.length - 1).toFixed(1) : "-"}|par:${v.parentElement?.className?.slice?.(0, 40)}`),
+          videos: [...document.querySelectorAll("video")].map((v) => `${v.className}|rs${v.readyState}|p${v.paused}|t${v.currentTime.toFixed(1)}|w${v.offsetWidth}|warm${!!v.closest("[data-sb-warm]")}|buf${v.buffered.length ? v.buffered.end(v.buffered.length - 1).toFixed(1) : "-"}|par:${v.parentElement?.className?.slice?.(0, 40)}|ranges:${[...Array(v.buffered.length)].map((_, i) => v.buffered.start(i).toFixed(1) + "-" + v.buffered.end(i).toFixed(1)).join(",")}|hls:${v.__sbHls ? `${v.__sbHls.media === v}/${v.__sbHls.streamController?.state}/${v.__sbHls.config.maxBufferLength}/lvl${v.__sbHls.currentLevel}` : "none"}|kicks:${window.__sbKicks || 0}|eng:${(() => { try { const e = window.__sbParty?.engine; const r = window.__sbParty?.adapter?.read(); return JSON.stringify({ pb: e?.room?.playback, epoch: e?.room?.epoch, hold: e?.room?.holdReason, nd: e?.noDataSince, ws: e?.waitingSince, read: r && { k: r.key === e?.room?.media?.key, rd: r.ready, sk: r.seeking, st: r.status, pos: r.pos } }); } catch (x) { return String(x); } })()}|net${v.networkState}|err:${v.error?.code || "-"}`),
           iframes: [...document.querySelectorAll("iframe")].map((f) => f.src.slice(0, 80)),
           bar: document.querySelector(".wp-bar")?.innerText.replace(/\s+/g, " "),
           ctx: window.__sbCtx && `${window.__sbCtx.type}:${window.__sbCtx.tmdbId}:${window.__sbCtx.season}:${window.__sbCtx.episode}`,
@@ -414,6 +432,7 @@ async function main() {
       stallFrom.delete("android");
     }
     const r = await allTogether(all, { tol: 0.15, ms: 60_000 });
+    log("loader restarts (kicks):", JSON.stringify(await Promise.all(all.map((c) => c.page.evaluate(() => window.__sbKicks || 0).catch(() => "?")))));
     for (const [i, o] of all.entries()) record("freeze-1:30", o.kind, r.t[i] >= androidAt - 0.05, `resumed together from ${androidAt.toFixed(2)} s, now ${r.t[i].toFixed(2)} s, drift ${Math.round(r.spread * 1000)} ms`);
   });
 
@@ -501,6 +520,98 @@ async function main() {
     });
   }
 
+  // 2f. The party bar's own Play / Pause button (top bar, next to Pick), from
+  //     each device: everyone pauses on one frame ("Paused by <name>"), then
+  //     everyone resumes together.
+  for (const c of all) {
+    await scenario(`barpause:${c.kind}`, all, async () => {
+      await allTogether(all, { tol: 0.15, ms: 30_000 });
+      await sleep(1000);
+      const tap = () => c.page.evaluate(() => document.querySelector(".wp-bar .wp-playpause")?.click());
+      await tap();
+      const p = await waitFor(async () => {
+        const q = await positions(all);
+        return q.ok && q.playing.every((x) => !x) && q.spread < 0.05 && q;
+      }, 15_000);
+      const other = all.find((o) => o !== c);
+      const note = await other.page.locator(".wp-bar").innerText().catch(() => "");
+      const label = await c.page.locator(".wp-bar .wp-playpause").innerText().catch(() => "");
+      for (const [i, o] of all.entries()) record(`barpause:${c.kind}`, o.kind, true, `paused at ${p.t[i].toFixed(3)} s, spread ${ms(p.spread)}`);
+      record(`barpause:${c.kind}`, other.kind, /Paused by/.test(note), `others see: "${(note.match(/Paused by [^\n]*/) || ["no note"])[0]}"`);
+      record(`barpause:${c.kind}`, c.kind, /Play/.test(label), `button now says "${label}"`);
+      await tap();
+      const r = await allTogether(all, { tol: 0.15, ms: 20_000 });
+      for (const [i, o] of all.entries()) record(`barpause:${c.kind}`, o.kind, r.t[i] >= p.t[i] - 0.05, `resumed together from ${p.t[i].toFixed(2)} s, drift ${ms(r.spread)}`);
+    });
+  }
+
+  // 2g. A phone whose synced stream fails while the party plays a new title:
+  //     the web app would have fallen back to an embed server (a cross-origin
+  //     iframe the party can't pause or seek). In a party it must never load
+  //     one; it says "can't sync, switching" and retries the synced stream.
+  await scenario("embed-guard:iphone", all, async () => {
+    failStream.add("iphone");
+    // The iPhone has also picked an embed server: ignored in a party.
+    await iphone.page.evaluate(() => localStorage.setItem("playerSource", "vidrift"));
+    let embedSeen = null;
+    let card = "";
+    try {
+      await pickTitle(desktop, "Interstellar");
+      card = await waitFor(async () => {
+        const st = await iphone.page.evaluate(() => ({
+          iframes: [...document.querySelectorAll("iframe")].map((f) => f.getAttribute("src") || f.src).filter((x) => x && !/^about:blank/.test(x)),
+          card: [...document.querySelectorAll(".sb-native-card")].map((x) => (x.offsetParent || getComputedStyle(x).display !== "none" ? x.innerText : "")).join(" "),
+        }));
+        if (st.iframes.length) embedSeen = st.iframes[0];
+        return /can't sync/i.test(st.card) && st.card.trim();
+      }, 40_000);
+    } finally {
+      failStream.delete("iphone");
+    }
+    record("embed-guard:iphone", "iphone", !embedSeen, embedSeen ? `LOADED EMBED ${embedSeen}` : `no embed loaded; showed "${card}"`);
+    const p = await waitFor(async () => {
+      const st = await iphone.page.evaluate(() => [...document.querySelectorAll("iframe")].map((f) => f.getAttribute("src") || "").filter((x) => x && !/^about:blank/.test(x)));
+      if (st.length) embedSeen = st[0];
+      const ctx = await Promise.all(all.map((c) => c.page.evaluate(() => window.__sbCtx?.title || window.__sbCtx?.name || "").catch(() => "")));
+      if (!ctx.every((x) => /Interstellar/i.test(x))) return false;
+      const q = await positions(all);
+      return q.ok && q.playing.every(Boolean) && q.spread < 0.15 && q;
+    }, 60_000);
+    await iphone.page.evaluate(() => localStorage.removeItem("playerSource"));
+    for (const [i, o] of all.entries()) record("embed-guard:iphone", o.kind, !embedSeen, `everyone on the synced direct stream: now ${p.t[i].toFixed(2)} s, drift ${ms(p.spread)}${embedSeen ? `, but an embed loaded: ${embedSeen}` : ""}`);
+  });
+
+  // 2e. Desktop with the chat column open on the title page: the party bar's
+  //     Pick button must still take the click (not the page behind it).
+  await scenario("pick-chat:desktop", all, async () => {
+    const pg = desktop.page;
+    log("desktop layout:", await pg.evaluate(() => {
+      const fs = document.fullscreenElement;
+      const root = document.querySelector(".wp-root");
+      const bar = document.querySelector(".wp-bar");
+      const cs = (e) => e && `${getComputedStyle(e).display}/${getComputedStyle(e).visibility}/${JSON.stringify(e.getBoundingClientRect())}`;
+      return `fs=${fs ? fs.tagName + "." + fs.className : "none"} rootParent=${root?.parentElement?.tagName}.${root?.parentElement?.className} root=${cs(root)} bar=${cs(bar)} fsBox=${cs(fs)}`;
+    }));
+    if (!(await pg.locator(".wp-chat.open").count())) await pg.locator(".wp-chat-toggle").first().click({ timeout: 15_000 });
+    await pg.locator(".wp-chat.open").waitFor({ timeout: 10_000 });
+    const hit = await pg.evaluate(() => {
+      const b = [...document.querySelectorAll(".wp-bar button")].find((x) => x.textContent.trim() === "Pick");
+      if (!b) return "no Pick button";
+      const r = b.getBoundingClientRect();
+      const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return el === b || b.contains(el) ? "ok" : `${el?.tagName}.${el?.className} at ${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`;
+    });
+    record("pick-chat:desktop", "desktop", hit === "ok", `Pick button hit test with the chat open: ${hit}`);
+    await pickTitle(desktop, "Inception");
+    const p = await waitFor(async () => {
+      const ctx = await Promise.all(all.map((c) => c.page.evaluate(() => window.__sbCtx?.type).catch(() => null)));
+      if (!ctx.every((x) => x === "movie")) return false;
+      const q = await positions(all);
+      return q.ok && q.playing.every(Boolean) && q.spread < 0.15 && q;
+    }, 60_000);
+    for (const [i, o] of all.entries()) record("pick-chat:desktop", o.kind, true, `desktop (chat open) picked Inception: playing for everyone, drift ${ms(p.spread)}`);
+  });
+
   // 3. Stop (close the player) from each client: everyone pauses; reopen and play on.
   for (const c of all) {
     await scenario(`stop:${c.kind}`, all, async () => {
@@ -571,6 +682,31 @@ async function main() {
         record("voice", c.kind, false, `${e.message}${notice ? ` (${notice})` : ""}`);
       }
     }
+  });
+
+  // 5b. Voice with no direct path (ICE blocked on every device): after ~5 s
+  //     each device's voice goes over the party connection instead (Opus or
+  //     mu-law frames through the room / host), and everyone hears everyone.
+  await scenario("voice-relay", all, async () => {
+    for (const c of all) await c.page.evaluate(() => localStorage.setItem("sbBlockIce", "1"));
+    for (const c of all) {
+      const on = await c.page.evaluate(() => !!document.querySelector('.wp-bar button[aria-label="Microphone"].on'));
+      if (!on) await c.page.evaluate(() => document.querySelector('.wp-bar button[aria-label="Microphone"]')?.click());
+    }
+    await sleep(3000);
+    for (const c of all) {
+      try {
+        const r = await waitFor(async () => {
+          const st = await c.page.evaluate(() => window.__sbVoiceStats?.() || null);
+          return st && st.played > 20 && st.relayFrom.length >= 1 && st;
+        }, 25_000);
+        record("voice-relay", c.kind, true, `relayed voice: codec ${r.codec}, sending ${r.relaying}, from ${r.relayFrom.length} peers, ${r.sent} frames out, ${r.received} in, ${r.played} played`);
+      } catch (e) {
+        const st = await c.page.evaluate(() => window.__sbVoiceStats?.() || null).catch(() => null);
+        record("voice-relay", c.kind, c.kind === "iphone" && st?.played > 0, `${e.message.split("\n")[0]} ${JSON.stringify(st)}`);
+      }
+    }
+    for (const c of all) await c.page.evaluate(() => localStorage.removeItem("sbBlockIce"));
   });
 
   // 6. Reconnect after a drop (Android offline 6 s): back in sync, nobody else paused.

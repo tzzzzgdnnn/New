@@ -35,6 +35,21 @@ export async function handle(request, env, fetchImpl = globalThis.fetch) {
   const url = new URL(request.url);
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "superplayer-watch" });
+  // ani.pm API relay for the web app (ani.pm sends no CORS headers). Only
+  // ani.pm's own hosts, GET only; the video itself never passes through here.
+  if (url.pathname === "/anipm" && request.method === "GET") {
+    let target;
+    try {
+      target = new URL(url.searchParams.get("u") || "");
+    } catch {
+      return json({ error: "bad url" }, 400);
+    }
+    if (target.protocol !== "https:" || !/(^|\.)ani\.pm$/i.test(target.hostname)) return json({ error: "host not allowed" }, 403);
+    const ref = url.searchParams.get("r") || "https://ani.pm/";
+    const up = await fetchImpl(target.toString(), { headers: { Referer: /^https:\/\/([a-z0-9-]+\.)*ani\.pm\//i.test(ref) ? ref : "https://ani.pm/", "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", Accept: "application/json, text/plain, */*" } });
+    const body = await up.text();
+    return new Response(body, { status: up.status, headers: { "content-type": up.headers.get("content-type") || "application/json", "cache-control": "public, max-age=300", ...CORS } });
+  }
   if (url.pathname === "/turn" && request.method === "POST") return json({ iceServers: await iceServers(env, fetchImpl) });
   if (url.pathname === "/presence" && env.PRESENCE) {
     const stub = env.PRESENCE.get(env.PRESENCE.idFromName("global"));

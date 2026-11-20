@@ -19,7 +19,8 @@ export const REARM_LEAD_MS = 600; // a hard seek while playing lands this far ah
 export const SETTLE_MS = 900; // no drift decisions right after a (re)start
 export const PAUSE_POS_TOLERANCE = 0.04; // paused this close to the hold = on the frame
 export const STATUS_EVERY_MS = 1000;
-export const STUCK_REARM_MS = 1500; // buffered again but still not playing this long: rejoin the room's timeline
+export const STUCK_REARM_MS = 1500;
+export const KICK_MS = 2500; // on the frame (or playing) but no data there this long: restart the player's loading // buffered again but still not playing this long: rejoin the room's timeline
 
 export class SyncEngine {
   constructor({ adapter, clock, now = () => Date.now(), send }) {
@@ -38,6 +39,8 @@ export class SyncEngine {
     this.lastStatus = null;
     this.lastStatusAt = 0;
     this.lastDrift = null;
+    this.noDataSince = null; // loaded, not seeking, but not ready (no data at the frame)
+    this.lastKickAt = 0;
   }
 
   setRoom(state) {
@@ -72,6 +75,27 @@ export class SyncEngine {
     this.report({ rev: st.media.rev, epoch: st.epoch, ready, buffering, pos: Number.isFinite(posNow) ? posNow : null }, now);
 
     if (!loaded) return;
+
+    // ── A player that sits on its frame without ever getting data there (a
+    // stream loader left idle after a seek) would hold the room until the
+    // safety timeout: restart its loading at the frame every KICK_MS. ──
+    // (A seek that never completes counts: the player stays "seeking" forever
+    // when no data ever arrives at the target.)
+    const starving = !s.ready && (pb.paused ? onHold : buffering);
+    if (!starving) {
+      this.noDataSince = null;
+      this.kicks = 0;
+    } else {
+      this.noDataSince ??= now;
+      // Backs off (2.5 s, 5 s, 10 s, ...) so a slow but working connection
+      // still gets to finish its download.
+      const gap = KICK_MS * 2 ** Math.min(this.kicks || 0, 4);
+      if (now - this.noDataSince >= KICK_MS && now - this.lastKickAt >= gap && this.adapter.kick) {
+        this.lastKickAt = now;
+        this.kicks = (this.kicks || 0) + 1;
+        this.adapter.kick(pb.paused ? pb.pos : Number.isFinite(s.pos) ? s.pos : this.target(now));
+      }
+    }
 
     // ── Held (paused, waiting on a stalled phone, or on someone loading) ──
     if (pb.paused) {
