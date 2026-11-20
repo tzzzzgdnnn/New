@@ -7,7 +7,7 @@
 //   GET  /rooms/:code/ws?id=&platform=&name=           join (WebSocket)
 //
 //   POST /turn                  -> { iceServers }      voice: STUN + short-lived TURN credentials
-//   POST /presence {id,watching,platform} -> { online, watching, byPlatform }  live counter (heartbeat)
+//   POST /presence {token,tab,watching,platform[,leaving]} -> { online, watching, total, byPlatform[, token] }  live counter
 //   GET  /presence              -> same counts, read only
 //
 // Rooms are deleted EMPTY_ROOM_TTL_MS after the last person leaves.
@@ -38,9 +38,14 @@ export async function handle(request, env, fetchImpl = globalThis.fetch) {
   if (url.pathname === "/turn" && request.method === "POST") return json({ iceServers: await iceServers(env, fetchImpl) });
   if (url.pathname === "/presence" && env.PRESENCE) {
     const stub = env.PRESENCE.get(env.PRESENCE.idFromName("global"));
-    const body = request.method === "POST" ? await request.text() : "";
-    const res = await stub.fetch("https://presence/", { method: request.method === "POST" ? "POST" : "GET", body: body || undefined });
-    return json(await res.json());
+    const body = request.method === "POST" ? (await request.text()).slice(0, 1024) : "";
+    const res = await stub.fetch("https://presence/", {
+      method: request.method === "POST" ? "POST" : "GET",
+      body: body || undefined,
+      // The counter limits per IP; only Cloudflare's own header is trusted.
+      headers: { "x-client-ip": request.headers.get("cf-connecting-ip") || "unknown" },
+    });
+    return json(await res.json(), res.status);
   }
   if (url.pathname === "/rooms" && request.method === "POST") {
     for (let i = 0; i < 6; i++) {
@@ -300,41 +305,177 @@ export class Room {
 
 
 // ── Live counter ─────────────────────────────────────────────────────────
-// One object for the whole app. Each open app (iPhone, Android, web) sends a
-// heartbeat every PRESENCE_BEAT_MS with a random device id and whether a
-// video is playing; anyone heard from in the last PRESENCE_TTL_MS counts.
-// Only counts are kept: no names, no titles, nothing written to storage.
+// One object for the whole app: how many people have the app open right now
+// (iPhone, Android, web) and how many people have used it in total.
+//
+// Identity: the first heartbeat from an install gets a server-signed user
+// token (random id + issue time + HMAC with a key this object generated and
+// keeps in its storage). The app keeps it (localStorage, plus the Keychain
+// on iPhone, so it survives app updates and reinstalls there) and sends it
+// with every heartbeat, so one person is one user however many tabs,
+// reopens or updates. Tabs of one install share the token and send their own
+// tab id: the person is online while any tab is.
+//
+// Anti-inflation: only server-issued, signature-checked tokens count;
+// malformed or forged ones are ignored. New tokens are rate limited per IP,
+// requests per IP are rate limited, at most PRESENCE_ONLINE_PER_IP people
+// count as online from one IP, and an install only joins the all-time total
+// once it has stayed open PRESENCE_TOTAL_AFTER_MS (a script minting tokens
+// adds nothing). Online expires PRESENCE_TTL_MS after the last heartbeat
+// (apps beat every 30 s; a closing tab says so at once).
 export const PRESENCE_TTL_MS = 75_000;
+export const PRESENCE_TOTAL_AFTER_MS = 20_000;
+export const PRESENCE_TOKENS_PER_IP_HOUR = 30;
+export const PRESENCE_REQ_PER_IP_MIN = 120;
+export const PRESENCE_ONLINE_PER_IP = 50;
+const PRESENCE_TABS_PER_USER = 8;
 const PLATFORMS = ["ios", "android", "web"];
+const TOKEN_RE = /^([A-Za-z0-9_-]{22})\.([0-9a-z]{6,12})\.([A-Za-z0-9_-]{22})$/;
+const TAB_RE = /^[A-Za-z0-9_-]{6,40}$/;
+
+const b64url = (buf) =>
+  btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
 export class Presence {
   constructor(state, env, { now = () => Date.now() } = {}) {
+    this.state = state;
     this.now = now;
-    this.seen = new Map(); // id -> { at, watching, platform }
+    this.online = new Map(); // uid -> { ip, tabs: Map(tab -> { at, watching, platform }) }
+    this.ips = new Map(); // ip -> { at, req, tokens: number[] }
+    this.counted = new Set(); // uids already in the total (cache of storage "u:<uid>")
+    this.total = null;
+    this.key = null;
   }
-  counts() {
+
+  async hmacKey() {
+    if (this.key) return this.key;
+    let raw = await this.state.storage.get("hmac");
+    if (!raw) {
+      raw = b64url(crypto.getRandomValues(new Uint8Array(32)));
+      await this.state.storage.put("hmac", raw);
+    }
+    const bytes = Uint8Array.from(atob(raw.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (raw.length % 4)) % 4)), (c) => c.charCodeAt(0));
+    this.key = await crypto.subtle.importKey("raw", bytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    return this.key;
+  }
+
+  async sign(uid, issued) {
+    const mac = await crypto.subtle.sign("HMAC", await this.hmacKey(), new TextEncoder().encode(`${uid}.${issued}`));
+    return b64url(mac).slice(0, 22);
+  }
+
+  async issue() {
+    const uid = b64url(crypto.getRandomValues(new Uint8Array(16))).slice(0, 22);
+    const issued = this.now().toString(36);
+    return { uid, issuedAt: this.now(), token: `${uid}.${issued}.${await this.sign(uid, issued)}` };
+  }
+
+  /** { uid, issuedAt } for a genuine token, else null. */
+  async verify(token) {
+    const m = typeof token === "string" ? TOKEN_RE.exec(token) : null;
+    if (!m) return null;
+    const issuedAt = parseInt(m[2], 36);
+    if (!Number.isFinite(issuedAt) || issuedAt > this.now() + 60_000) return null;
+    const want = await this.sign(m[1], m[2]);
+    // Constant-time compare.
+    let diff = 0;
+    for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ m[3].charCodeAt(i);
+    return diff === 0 ? { uid: m[1], issuedAt } : null;
+  }
+
+  ipState(ip) {
+    const now = this.now();
+    let s = this.ips.get(ip);
+    if (!s || now - s.at > 60_000) {
+      s = { at: now, req: 0, tokens: s?.tokens || [] };
+      this.ips.set(ip, s);
+    }
+    s.tokens = s.tokens.filter((t) => now - t < 3_600_000);
+    if (this.ips.size > 100_000) this.ips.clear();
+    return s;
+  }
+
+  async loadTotal() {
+    if (this.total === null) this.total = (await this.state.storage.get("total")) || 0;
+    return this.total;
+  }
+
+  async countUser(uid) {
+    if (this.counted.has(uid)) return;
+    if (await this.state.storage.get(`u:${uid}`)) {
+      this.counted.add(uid);
+      return;
+    }
+    await this.loadTotal();
+    this.total += 1;
+    this.counted.add(uid);
+    await this.state.storage.put({ [`u:${uid}`]: 1, total: this.total });
+  }
+
+  prune() {
     const cut = this.now() - PRESENCE_TTL_MS;
-    let online = 0, watching = 0;
-    const byPlatform = { ios: 0, android: 0, web: 0 };
-    for (const [id, v] of this.seen) {
-      if (v.at < cut) { this.seen.delete(id); continue; }
-      online++;
-      if (v.watching) watching++;
-      byPlatform[v.platform]++;
+    for (const [uid, u] of this.online) {
+      for (const [tab, t] of u.tabs) if (t.at < cut) u.tabs.delete(tab);
+      if (!u.tabs.size) this.online.delete(uid);
     }
-    return { online, watching, byPlatform };
   }
-  async fetch(request) {
-    if (request.method === "POST") {
-      let b = {};
-      try { b = JSON.parse(await request.text()); } catch {}
-      const id = typeof b.id === "string" ? b.id.slice(0, 64) : "";
-      if (/^[A-Za-z0-9_-]{8,64}$/.test(id)) {
-        if (b.leaving) this.seen.delete(id);
-        else if (this.seen.has(id) || this.seen.size < 200_000) {
-          this.seen.set(id, { at: this.now(), watching: !!b.watching, platform: PLATFORMS.includes(b.platform) ? b.platform : "web" });
-        }
-      }
+
+  async counts() {
+    this.prune();
+    let watching = 0;
+    const byPlatform = { ios: 0, android: 0, web: 0 };
+    for (const u of this.online.values()) {
+      const tabs = [...u.tabs.values()];
+      if (tabs.some((t) => t.watching)) watching++;
+      const latest = tabs.reduce((a, b) => (b.at > a.at ? b : a));
+      byPlatform[latest.platform]++;
     }
-    return new Response(JSON.stringify(this.counts()), { headers: { "content-type": "application/json" } });
+    return { online: this.online.size, watching, total: await this.loadTotal(), byPlatform };
+  }
+
+  onlineFromIp(ip) {
+    let n = 0;
+    for (const u of this.online.values()) if (u.ip === ip) n++;
+    return n;
+  }
+
+  async fetch(request) {
+    const ip = (request.headers.get("x-client-ip") || "unknown").slice(0, 64);
+    const reply = async (extra = {}, status = 200) =>
+      new Response(JSON.stringify({ ...(await this.counts()), ...extra }), { status, headers: { "content-type": "application/json" } });
+    if (request.method !== "POST") return reply();
+    const lim = this.ipState(ip);
+    if (++lim.req > PRESENCE_REQ_PER_IP_MIN) return reply({ limited: true }, 429);
+    let b = {};
+    try {
+      const text = await request.text();
+      if (text.length <= 1024) b = JSON.parse(text);
+    } catch {}
+    if (!b || typeof b !== "object") return reply({}, 400);
+    const tab = typeof b.tab === "string" && TAB_RE.test(b.tab) ? b.tab : null;
+    if (!tab) return reply({}, 400);
+    let who = await this.verify(b.token);
+    let issued = null;
+    if (!who) {
+      if (b.leaving) return reply();
+      if (lim.tokens.length >= PRESENCE_TOKENS_PER_IP_HOUR) return reply({ limited: true }, 429);
+      lim.tokens.push(this.now());
+      who = await this.issue();
+      issued = who.token;
+    }
+    const u = this.online.get(who.uid);
+    if (b.leaving) {
+      u?.tabs.delete(tab);
+      if (u && !u.tabs.size) this.online.delete(who.uid);
+      return reply();
+    }
+    if (!u && this.onlineFromIp(ip) >= PRESENCE_ONLINE_PER_IP) return reply(issued ? { token: issued } : {});
+    const entry = u || { ip, tabs: new Map() };
+    entry.ip = ip;
+    if (entry.tabs.has(tab) || entry.tabs.size < PRESENCE_TABS_PER_USER)
+      entry.tabs.set(tab, { at: this.now(), watching: b.watching === true, platform: PLATFORMS.includes(b.platform) ? b.platform : "web" });
+    this.online.set(who.uid, entry);
+    if (this.now() - who.issuedAt >= PRESENCE_TOTAL_AFTER_MS) await this.countUser(who.uid);
+    return reply(issued ? { token: issued } : {});
   }
 }

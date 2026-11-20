@@ -770,9 +770,15 @@ export default function WatchParty({ page, onOpenTitle }) {
       {sheet && !inParty && <StartSheet party={party} onClose={() => setSheet(false)} />}
       {toast && <div className="wp-toast">{toast}</div>}
       {live && page === "home" && !inParty && (
-        <div className="wp-live" aria-label="Live now">
+        <div className="wp-live" aria-label="Live counter" title={`iPhone ${live.byPlatform?.ios ?? 0} · Android ${live.byPlatform?.android ?? 0} · Web ${live.byPlatform?.web ?? 0} · ${live.watching ?? 0} watching`}>
           <span className="wp-live-dot" />
-          {live.online.toLocaleString()} online · {live.watching.toLocaleString()} watching
+          <b>{live.online.toLocaleString()}</b>&nbsp;online now
+          {Number.isFinite(live.total) && (
+            <>
+              {" · "}
+              <b>{live.total.toLocaleString()}</b>&nbsp;{live.total === 1 ? "user" : "users"}
+            </>
+          )}
         </div>
       )}
     </div>,
