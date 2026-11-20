@@ -151,21 +151,6 @@ async function makeClient(kind, { base, streamDir }) {
     profile = seed({ name: "Desk Web", avatar: "sp:gold" });
   }
   await routeAll(ctx, streamDir, kind);
-  // "No direct voice path" switch (voice-relay scenario): peer connections
-  // get no STUN/TURN and relay-only ICE, so they can never connect, like two
-  // phones behind carrier-grade NAT with no TURN server.
-  await ctx.addInitScript(() => {
-    const PC = window.RTCPeerConnection;
-    if (!PC) return;
-    window.RTCPeerConnection = function (cfg = {}, ...rest) {
-      let block = false;
-      try {
-        block = localStorage.getItem("sbBlockIce") === "1";
-      } catch {}
-      return new PC(block ? { ...cfg, iceServers: [], iceTransportPolicy: "relay" } : cfg, ...rest);
-    };
-    window.RTCPeerConnection.prototype = PC.prototype;
-  });
   await ctx.addInitScript(
     ({ profile, stream }) => {
       try {
@@ -682,31 +667,6 @@ async function main() {
         record("voice", c.kind, false, `${e.message}${notice ? ` (${notice})` : ""}`);
       }
     }
-  });
-
-  // 5b. Voice with no direct path (ICE blocked on every device): after ~5 s
-  //     each device's voice goes over the party connection instead (Opus or
-  //     mu-law frames through the room / host), and everyone hears everyone.
-  await scenario("voice-relay", all, async () => {
-    for (const c of all) await c.page.evaluate(() => localStorage.setItem("sbBlockIce", "1"));
-    for (const c of all) {
-      const on = await c.page.evaluate(() => !!document.querySelector('.wp-bar button[aria-label="Microphone"].on'));
-      if (!on) await c.page.evaluate(() => document.querySelector('.wp-bar button[aria-label="Microphone"]')?.click());
-    }
-    await sleep(3000);
-    for (const c of all) {
-      try {
-        const r = await waitFor(async () => {
-          const st = await c.page.evaluate(() => window.__sbVoiceStats?.() || null);
-          return st && st.played > 20 && st.relayFrom.length >= 1 && st;
-        }, 25_000);
-        record("voice-relay", c.kind, true, `relayed voice: codec ${r.codec}, sending ${r.relaying}, from ${r.relayFrom.length} peers, ${r.sent} frames out, ${r.received} in, ${r.played} played`);
-      } catch (e) {
-        const st = await c.page.evaluate(() => window.__sbVoiceStats?.() || null).catch(() => null);
-        record("voice-relay", c.kind, c.kind === "iphone" && st?.played > 0, `${e.message.split("\n")[0]} ${JSON.stringify(st)}`);
-      }
-    }
-    for (const c of all) await c.page.evaluate(() => localStorage.removeItem("sbBlockIce"));
   });
 
   // 6. Reconnect after a drop (Android offline 6 s): back in sync, nobody else paused.

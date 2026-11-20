@@ -641,7 +641,10 @@ function upgrade(wv) {
   const tryWebDirect = (url) => {
     const ctx = currentCtx();
     if (ctx?.isAnime) {
-      if (tryWebAnipm(url, ctx)) return true;
+      // Anime: vidrift (embed) is Auto's first choice when watching alone;
+      // in a Watch Party only a direct stream (ani.pm) can be kept in sync.
+      if (inParty() && tryWebAnipm(url, ctx)) return true;
+      if (!inParty() && !/cinejoy\.invalid\//.test(url)) return false;
       if (/cinejoy\.invalid\//.test(url)) { loadUrl(embedFor(url), { webOnly: true }); return true; }
       return false;
     }
