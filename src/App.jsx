@@ -94,6 +94,9 @@ import {
 // iOS has no Discord client.
 const DISCORD_OFF = { enabled: false };
 
+// "Can't reach TMDB": retry this often until it answers.
+const TMDB_RETRY_MS = 3000;
+
 export default function App() {
   // apiKey loaded async from secure storage (OS keychain)
   const [apiKey, setApiKey] = useState(null);
@@ -626,34 +629,54 @@ export default function App() {
   // Android WebView often has no network for a moment at launch/resume).
   useEffect(() => {
     if (apiKeyStatus !== "unreachable" || !apiKey) return;
-    let stop = false, delay = 2000, timer = 0;
+    let stop = false, timer = 0, inFlight = false;
     const probe = () => {
-      if (stop) return;
+      if (stop || inFlight) return;
       clearTimeout(timer);
+      inFlight = true;
       fetch("https://api.themoviedb.org/3/configuration", { headers: { Authorization: `Bearer ${apiKey}` } })
         .then((res) => {
           if (stop) return;
           if (res.status === 401 || res.status === 403) setApiKeyStatus("invalid_token");
-          else { setApiKeyStatus("ok"); fetchTrending(); }
+          else setApiKeyStatus("ok");
         })
         .catch(() => {
-          if (stop) return;
-          timer = setTimeout(probe, delay);
-          delay = Math.min(delay * 2, 30000);
+          if (!stop) timer = setTimeout(probe, TMDB_RETRY_MS);
+        })
+        .finally(() => {
+          inFlight = false;
         });
     };
-    const now = () => { delay = 2000; probe(); };
-    const vis = () => document.visibilityState === "visible" && now();
-    timer = setTimeout(probe, delay);
-    window.addEventListener("online", now);
+    const vis = () => document.visibilityState === "visible" && probe();
+    timer = setTimeout(probe, TMDB_RETRY_MS);
+    window.addEventListener("online", probe);
+    window.addEventListener("focus", probe);
+    window.addEventListener("pageshow", probe);
     document.addEventListener("visibilitychange", vis);
+    document.addEventListener("resume", probe); // Capacitor/Cordova app resume
     return () => {
       stop = true;
       clearTimeout(timer);
-      window.removeEventListener("online", now);
+      window.removeEventListener("online", probe);
+      window.removeEventListener("focus", probe);
+      window.removeEventListener("pageshow", probe);
       document.removeEventListener("visibilitychange", vis);
+      document.removeEventListener("resume", probe);
     };
-  }, [apiKeyStatus, apiKey, fetchTrending]);
+  }, [apiKeyStatus, apiKey]);
+
+  // Back from "unreachable" (the probe above, or any TMDB request getting
+  // through): reload Home (trending + every row) without a manual refresh.
+  const [homeEpoch, setHomeEpoch] = useState(0);
+  const prevApiStatusRef = useRef(apiKeyStatus);
+  useEffect(() => {
+    const prev = prevApiStatusRef.current;
+    prevApiStatusRef.current = apiKeyStatus;
+    if (prev === "unreachable" && apiKeyStatus === "ok") {
+      fetchTrending();
+      setHomeEpoch((n) => n + 1);
+    }
+  }, [apiKeyStatus, fetchTrending]);
 
   const retryHome = useCallback(() => {
     if (offline) return;
@@ -1366,6 +1389,7 @@ export default function App() {
             {(page === "home" || homeSeenRef.current) && (
               <div className="sp-keep-home" style={page === "home" ? undefined : { display: "none" }}>
               <HomePage
+                key={homeEpoch}
                 trending={trending}
                 trendingTV={trendingTV}
                 loading={loadingHome}
