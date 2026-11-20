@@ -1802,6 +1802,12 @@ export default function TVPage({
         episode: ep.episode_number,
         episodeName: ep.name,
       });
+      // Watch Party: this episode plays for everyone (taps, Up Next, shuffle).
+      window.dispatchEvent(new CustomEvent("sb-party-play", { detail: {
+        ...(window.__sbCtx?.tmdbId === d?.id ? window.__sbCtx : {}),
+        type: "tv", tmdbId: d?.id, title: d?.name || d?.title,
+        season: selectedSeason, episode: ep.episode_number, poster: d?.poster_path || null,
+      } }));
       // d and selectedSeason are stable within a season view; onHistory is useCallback in App
     },
     [d, selectedSeason, onHistory],

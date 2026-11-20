@@ -13,7 +13,7 @@ import { prettyCode, normalizeCode, isValidCode, mediaKey, cleanMedia, MAX_MEMBE
 import { createWebAdapter } from "./adapters/web.js";
 import { createIosAdapter, isIosNative } from "./adapters/ios.js";
 import { createAndroidAdapter } from "./adapters/android.js";
-import { shouldAutoOpen } from "./autoOpen.js";
+import { shouldAutoOpen, shouldAnnounce, localKey, nowPlayingNote } from "./autoOpen.js";
 import { registerPlugin } from "@capacitor/core";
 import { tmdbJson, imgUrl } from "../utils/api.js";
 import { startPresence } from "./presence.js";
@@ -155,6 +155,13 @@ if (typeof window !== "undefined") {
   const bye = () => S.host?.endParty();
   window.addEventListener("pagehide", bye);
   window.addEventListener("beforeunload", bye);
+  // Play pressed on a movie / episode page (or Up Next): everyone watches it.
+  window.addEventListener("sb-party-play", (e) => {
+    const cl = S.client;
+    if (!cl?.connected) return;
+    const m = cleanMedia(e.detail);
+    if (m && shouldAnnounce(m, cl.state?.media)) cl.pickMedia(m);
+  });
 }
 
 /** Opens the party; resolves with the first outcome ("connected", "no-room", "room-full", "ended", "timeout"). */
@@ -166,7 +173,7 @@ async function connect(code, transport) {
   });
   const getKey = () => {
     const m = currentMedia();
-    return m ? mediaKey(m) : null;
+    return m ? localKey(mediaKey(m), S.client?.state?.media) : null;
   };
   const adapter = isIosNative()
     ? createIosAdapter({ getKey })
@@ -356,7 +363,11 @@ const api = {
   /** True when this device's player already has `key` open. */
   playerHas: (key) => {
     try {
-      return !!key && S.adapter?.read()?.key === key;
+      // The adapters label the page's title, not a running player: only an
+      // open, playing or loaded player counts (a phone sitting on the same
+      // title page must still open it).
+      const r = S.adapter?.read();
+      return !!key && r?.key === key && (r.status === "playing" || r.status === "waiting" || !!r.ready);
     } catch {
       return false;
     }
@@ -752,6 +763,8 @@ export default function WatchParty({ page, onOpenTitle }) {
     const o = openedRef.current;
     if (o.rev === media.rev) return;
     o.rev = media.rev;
+    setToast(nowPlayingNote(media));
+    setTimeout(() => setToast((t) => (t === nowPlayingNote(media) ? null : t)), 5000);
     if (shouldAutoOpen(media, o, Date.now(), party.playerHas)) {
       markOpened(media.key);
       onOpenTitle({ ...media, autoplay: true });
