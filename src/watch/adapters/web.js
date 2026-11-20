@@ -65,6 +65,16 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
   // anything else (stalls, visibility, the engine) is not.
   const markTap = () => (userTapAt = Date.now());
   const isViewer = (kind) => applying[kind] === 0 && Date.now() - userTapAt < 1500;
+  // The engine's own last position write. A tapped seek that lands somewhere
+  // else is the viewer's, even inside the engine's 250 ms window (a skip right
+  // after a drift correction or the synchronized start must move everyone).
+  let engineSetPos = NaN;
+  const setPos = (v, p) => {
+    engineSetPos = p;
+    v.currentTime = p;
+  };
+  const isViewerSeek = () =>
+    Date.now() - userTapAt < 1500 && (applying.seek === 0 || !(Math.abs(video.currentTime - engineSetPos) < 0.5));
 
   const onPlay = () => {
     if (!isViewer("play")) return;
@@ -78,7 +88,7 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
   };
   const onSeeking = () => {
     seeking = true;
-    if (isViewer("seek")) adapter.onIntent?.({ action: "seek", pos: video.currentTime });
+    if (isViewerSeek()) adapter.onIntent?.({ action: "seek", pos: video.currentTime });
   };
   const onSeeked = () => (seeking = false);
   const onRate = () => {
@@ -128,7 +138,7 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
     b.onclick = (e) => {
       e.stopPropagation();
       v.muted = false;
-      if (v.paused && adapter.roomPlaying?.()) drive(() => v.play().catch(() => {}));
+      if (v.paused && adapter.roomPlaying?.()) drive(() => v.play().catch(() => {}), ["play"]);
       b.remove();
       soundBtn = null;
     };
@@ -141,7 +151,7 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
     if (!v || document.fullscreenElement || document.webkitFullscreenElement) return;
     // Some browsers (iPhone Safari) pause when full screen ends: carry on.
     setTimeout(() => {
-      if (v.paused && adapter.roomPlaying?.()) drive(() => playSafe(v, offerSound));
+      if (v.paused && adapter.roomPlaying?.()) drive(() => playSafe(v, offerSound), ["play"]);
     }, 50);
   };
 
@@ -193,8 +203,8 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
       clearTimeout(startTimer);
       drive(() => {
         v.pause();
-        if (Number.isFinite(pos) && Math.abs(v.currentTime - pos) > 0.03) v.currentTime = pos;
-      });
+        if (Number.isFinite(pos) && Math.abs(v.currentTime - pos) > 0.03) setPos(v, pos);
+      }, ["pause", "seek"]);
     },
     playAt(pos, atLocal, rate = 1) {
       const v = attach();
@@ -205,10 +215,10 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
         const wait = atLocal - Date.now();
         if (wait > 0) {
           v.pause();
-          v.currentTime = pos;
-          startTimer = setTimeout(() => drive(() => playSafe(v, offerSound)), wait);
+          setPos(v, pos);
+          startTimer = setTimeout(() => drive(() => playSafe(v, offerSound), ["play"]), wait);
         } else {
-          v.currentTime = pos + (-wait / 1000) * rate;
+          setPos(v, pos + (-wait / 1000) * rate);
           playSafe(v, offerSound);
         }
       });
@@ -219,7 +229,7 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
     },
     seekTo(pos) {
       const v = attach();
-      if (v) drive(() => (v.currentTime = pos), ["seek"]);
+      if (v) drive(() => setPos(v, pos), ["seek"]);
     },
     /** Full screen on / off for the party player (never pauses). */
     toggleFullscreen() {

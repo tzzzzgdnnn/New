@@ -265,6 +265,16 @@ async function pickBreakingBad(c) {
   await c.page.locator(".wp-pick button", { hasText: "Watch S1 E1 together" }).click();
 }
 
+async function pickTitle(c, query, { tv = false, episode = 1 } = {}) {
+  await c.page.locator(".wp-bar button", { hasText: "Pick" }).click();
+  await c.page.locator(".wp-pick input").fill(query);
+  await c.page.locator(".wp-pick-row", { hasText: query }).first().click({ timeout: 20_000 });
+  if (tv) {
+    await c.page.locator(".wp-pick .wp-se", { hasText: "Episode" }).locator("input").fill(String(episode));
+    await c.page.locator(".wp-pick button", { hasText: "together" }).click();
+  }
+}
+
 async function openTitleFromSearch(c) {
   // Search (top bar / tab bar), then the Breaking Bad result: its title page.
   await c.page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "/" })));
@@ -380,6 +390,8 @@ async function main() {
   await scenario("freeze-1:30", all, async () => {
     const T = 90;
     stallFrom.set("android", T);
+    let androidAt;
+    try {
     await viewer(desktop, "seek", T - 6);
     await allTogether(all, { tol: 0.2, ms: 30_000 });
     const held = await waitFor(async () => {
@@ -387,11 +399,13 @@ async function main() {
       return q.ok && q.playing.every((x) => !x) && q.t.every((t) => Math.abs(t - T) < 0.3) && q;
     }, 40_000);
     const note = (await iphone.page.locator(".wp-bar").innerText()).replace(/\s+/g, " ");
-    const androidAt = held.t[1];
+    androidAt = held.t[1];
     for (const [i, o] of all.entries())
       record("freeze-1:30", o.kind, Math.abs(held.t[i] - androidAt) < 0.05, `held at ${held.t[i].toFixed(3)} s (Android froze at ${androidAt.toFixed(3)} s, off by ${Math.round(Math.abs(held.t[i] - androidAt) * 1000)} ms)`);
     record("freeze-1:30", "iphone", /Waiting for Amy Android/.test(note), `bar: "${note.match(/Waiting for [^…]*…|Buffering…/)?.[0] || "no note"}"`);
-    stallFrom.delete("android");
+    } finally {
+      stallFrom.delete("android");
+    }
     const r = await allTogether(all, { tol: 0.15, ms: 60_000 });
     for (const [i, o] of all.entries()) record("freeze-1:30", o.kind, r.t[i] >= androidAt - 0.05, `resumed together from ${androidAt.toFixed(2)} s, now ${r.t[i].toFixed(2)} s, drift ${Math.round(r.spread * 1000)} ms`);
   });
@@ -457,6 +471,28 @@ async function main() {
     steady = false;
     for (const c of all) record("drift", c.kind, (worst[c.kind] ?? 1) <= 0.15, `30 s of playback: max ${Math.round((worst[c.kind] ?? NaN) * 1000)} ms from the group`);
   });
+
+  // 2d. Pick + Play from each device: a movie, an anime (dub by default) and a TV episode start for everyone.
+  for (const [who, query, opt, want] of [
+    [iphone, "Inception", {}, "movie"],
+    [desktop, "Frieren", { tv: true, episode: 1 }, "anime"],
+    [iphone, "Breaking Bad", { tv: true, episode: 2 }, "tv"],
+  ]) {
+    await scenario(`pickplay:${want}`, all, async () => {
+      await pickTitle(who, query, opt);
+      const p = await waitFor(async () => {
+        const ctx = await Promise.all(all.map((c) => c.page.evaluate(() => window.__sbCtx && { type: window.__sbCtx.type, anime: !!window.__sbCtx.isAnime, dub: window.__sbCtx.dubMode, ep: window.__sbCtx.episode, title: window.__sbCtx.title || window.__sbCtx.name }).catch(() => null)));
+        const right = ctx.every((x) => x && (want === "movie" ? x.type === "movie" : want === "anime" ? x.anime : x.type === "tv" && !x.anime && Number(x.ep) === 2));
+        if (!right) return false;
+        const q = await positions(all);
+        return q.ok && q.playing.every(Boolean) && q.spread < 0.15 && { q, ctx };
+      }, 60_000);
+      for (const [i, o] of all.entries()) {
+        const dubOk = want !== "anime" || p.ctx[i].dub === "dub";
+        record(`pickplay:${want}`, o.kind, dubOk, `${who.kind} picked ${query}: playing for everyone, drift ${ms(p.q.spread)}${want === "anime" ? `, audio ${p.ctx[i].dub}` : ""}`);
+      }
+    });
+  }
 
   // 3. Stop (close the player) from each client: everyone pauses; reopen and play on.
   for (const c of all) {
