@@ -1,0 +1,63 @@
+/* Ad-block sheet (AdBlockSheet.jsx): iPhone/iPad Safari and Android browsers. */
+.sp-ab-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 13000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, .55);
+  animation: spAbFade .2s ease-out both;
+}
+.sp-ab {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 520px;
+  max-height: 92vh;
+  overflow-y: auto;
+  padding: 10px calc(22px + env(safe-area-inset-right)) calc(18px + env(safe-area-inset-bottom)) calc(22px + env(safe-area-inset-left));
+  border-radius: 18px 18px 0 0;
+  background: rgba(28, 28, 30, .94);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  backdrop-filter: blur(30px) saturate(180%);
+  color: var(--text, #f0f0f0);
+  font: 400 15px/1.45 -apple-system, system-ui, sans-serif;
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, .5);
+  animation: spAbUp .34s cubic-bezier(.2, .8, .2, 1) both;
+}
+.sp-ab-grab { width: 36px; height: 5px; margin: 0 auto 12px; border-radius: 3px; background: rgba(235, 235, 245, .3); }
+.sp-ab-steps { display: flex; gap: 6px; justify-content: center; margin-bottom: 14px; }
+.sp-ab-steps span { width: 22px; height: 4px; border-radius: 2px; background: rgba(235, 235, 245, .2); }
+.sp-ab-steps span.on, .sp-ab-steps span.done { background: var(--red, #e50914); }
+.sp-ab-steps span.done { opacity: .5; }
+.sp-ab h2 { margin: 0 0 6px; font: 700 22px/1.2 -apple-system, system-ui, sans-serif; color: #fff; text-align: center; }
+.sp-ab-lead { margin: 0 0 16px; color: rgba(235, 235, 245, .7); text-align: center; }
+.sp-ab-list { margin: 14px 0 6px; padding-left: 22px; color: rgba(235, 235, 245, .85); }
+.sp-ab-list li { margin: 6px 0; }
+.sp-ab-list b { color: #fff; font-weight: 600; }
+.sp-ab-note { margin: 10px 0 14px; font-size: 13px; color: rgba(235, 235, 245, .55); text-align: center; }
+.sp-ab-share { width: 18px; height: 18px; vertical-align: -3px; fill: none; stroke: #0a84ff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.sp-ab-primary, .sp-ab-secondary {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 50px;
+  border: 0;
+  border-radius: 12px;
+  font: 600 17px/50px -apple-system, system-ui, sans-serif;
+  text-align: center;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.sp-ab-primary { background: var(--red, #e50914); color: #fff; }
+.sp-ab-primary:active { background: var(--red2, #ff1a24); }
+.sp-ab-primary.is-quiet { margin-top: 10px; background: rgba(255, 255, 255, .12); }
+.sp-ab-copy { display: flex; align-items: center; gap: 10px; margin: 4px 0 8px; padding: 6px 6px 6px 14px; border-radius: 12px; background: rgba(255, 255, 255, .08); }
+.sp-ab-host { flex: 1; min-width: 0; overflow-wrap: anywhere; font: 600 16px/1.3 ui-monospace, Menlo, monospace; color: #fff; user-select: all; -webkit-user-select: all; }
+.sp-ab-copy-btn { flex: none; min-width: 74px; min-height: 40px; border: 0; border-radius: 9px; background: var(--red, #e50914); color: #fff; font: 600 15px/40px -apple-system, system-ui, sans-serif; }
+.sp-ab-secondary { margin-top: 8px; background: transparent; color: rgba(235, 235, 245, .7); font-weight: 500; }
+.sp-ab-secondary:active { background: rgba(255, 255, 255, .08); }
+@keyframes spAbUp { from { transform: translate3d(0, 110%, 0); } to { transform: none; } }
+@keyframes spAbFade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .sp-ab, .sp-ab-scrim { animation: none; } }
+body.no-anim .sp-ab, body.no-anim .sp-ab-scrim { animation: none !important; }

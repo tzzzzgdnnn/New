@@ -47,7 +47,6 @@ export default function pwa() {
           {
             name: NAME,
             short_name: NAME,
-            start_url: "./",
             scope: "./",
             display: "standalone",
             orientation: "any",

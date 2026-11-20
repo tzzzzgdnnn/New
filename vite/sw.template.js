@@ -39,6 +39,8 @@ self.addEventListener("fetch", (e) => {
   // Private IPA install page (get/<token>/): always straight from the site,
   // never the cached app and never cached (the IPA is tens of MB).
   if (url.origin === self.location.origin && url.pathname.includes("/get/")) return;
+  // Ad-block profile (dns/): straight from the site, so Safari hands it to Settings.
+  if (url.origin === self.location.origin && url.pathname.includes("/dns/")) return;
 
   // Downloaded shows: only ever from the phone (no internet needed).
   if (url.origin === self.location.origin && url.pathname.includes("/offline/")) {

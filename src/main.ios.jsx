@@ -14,17 +14,24 @@ import { installImageReadyMarker } from "./platform/ios/imageReady";
 
 import { installDiagnostics } from "./utils/diag";
 import { keepData } from "./platform/web/keepData";
+import { prepareWebLaunch, offerAdBlockSheet } from "./platform/ios/web";
 
 installDiagnostics();
 
 // Web install: keep the whole app on the phone (works if the site is down).
 // Web app: browser stand-in for the app's native downloader (saved for
 // offline), installed before the app asks whether downloads are available.
+let webLaunch = Promise.resolve();
 if (import.meta.env.VITE_WEB) {
   document.documentElement.classList.add("sb-web");
-  // Never lose profiles, PINs or progress: persistent storage + IndexedDB
-  // backup, restored (then reloaded) if the browser ever empties localStorage.
-  keepData().then((restored) => restored && location.reload());
+  // A Home Screen launch first imports the data carried over from Safari
+  // (#sp-import), then keepData runs on the merged storage: persistent
+  // storage + IndexedDB backup, restored (then reloaded) if the browser ever
+  // empties localStorage.
+  webLaunch = prepareWebLaunch()
+    .catch((e) => console.warn("[web] launch prep failed", e))
+    .then(() => keepData())
+    .then((restored) => restored && location.reload());
   // Cinejoy (direct, no ads) becomes the default server once on the web app.
   try {
     if (!localStorage.getItem("sbWebCinejoyDefault")) {
@@ -37,7 +44,7 @@ if (import.meta.env.VITE_WEB) {
   import("./platform/web/web.css");
 }
 const webReady = import.meta.env.VITE_WEB
-  ? import("./platform/web/offlineDownloads").then((m) => m.installWebDownloads()).catch(() => {})
+  ? webLaunch.then(() => import("./platform/web/offlineDownloads")).then((m) => m.installWebDownloads()).catch(() => {})
   : Promise.resolve();
 if (import.meta.env.VITE_WEB && "serviceWorker" in navigator) {
   // A new version installs in the background, then the app reloads once onto
@@ -74,4 +81,5 @@ webReady.then(bootIOS).then(async () => {
       </ProfileGate>
     </React.StrictMode>,
   );
+  if (import.meta.env.VITE_WEB) offerAdBlockSheet();
 });

@@ -18,7 +18,7 @@ jobs:
       - run: npx vite build --mode web --outDir dist-web && touch dist-web/.nojekyll
       - name: Keep the private IPA install page (get/)
         run: |
-          git fetch -q --depth=1 origin gh-pages && git --work-tree=dist-web checkout FETCH_HEAD -- get 2>/dev/null || echo "no get/ yet"
+          git fetch -q --depth=1 origin gh-pages && git --work-tree=dist-web checkout FETCH_HEAD -- get dns 2>/dev/null || echo "no get/ yet"
           git reset -q
       - name: Publish to gh-pages
         run: |
