@@ -27,8 +27,10 @@ export function downloadServerChoices(ctx) {
   const isAnime = !!ctx?.isAnime;
   const type = ctx?.type === "tv" ? "tv" : "movie";
   const rows = [{ id: AUTO_DOWNLOAD_SERVER, label: "Auto", detail: "Best server for this title" }];
-  if (!isAnime) rows.push({ id: MOVY_ID, label: MOVY_LABEL, detail: "Direct stream" });
-  if (!isAnime) {
+  // Web app (#19): Movy / 7Movies need native HTTP; never listed in a browser.
+  const web = !!(import.meta.env?.VITE_WEB && !import.meta.env?.VITE_ANDROID);
+  if (!isAnime && !web) rows.push({ id: MOVY_ID, label: MOVY_LABEL, detail: "Direct stream" });
+  if (!isAnime && !web) {
     rows.push({ id: ORION_ID, label: ORION_LABEL, detail: "Direct stream" });
     rows.push({ id: EVION_ID, label: EVION_LABEL, detail: "Direct stream" });
   }
