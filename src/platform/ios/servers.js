@@ -49,7 +49,7 @@ setCustomServersApplyHook(() => applyServers(_lastCfg));
 /** The viewer's custom servers as sources, with the lists each one joins. */
 function customSources() {
   // Custom servers play through the native stream finder (iPhone app only).
-  if (import.meta.env?.VITE_WEB) return [];
+  if (import.meta.env?.VITE_WEB && !import.meta.env?.VITE_ANDROID) return [];
   const fits = new Map(
     listCustomServers().map((s) => [
       s.id,
