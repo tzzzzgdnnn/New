@@ -12,6 +12,10 @@ export const START_LEAD_MS = 800;
 export const RECONNECT_GRACE_MS = 30_000;
 /** An empty room is deleted after this long. */
 export const EMPTY_ROOM_TTL_MS = 10 * 60_000;
+/** A Play waits this long at most for every phone to buffer, then starts anyway. */
+export const START_WAIT_MS = 45_000;
+/** A socket silent this long (no ping) is treated as dropped. */
+export const IDLE_EVICT_MS = 20_000;
 export const MAX_MEMBERS = 9; // a party holds up to 9 people (dropped members keep their seat through the grace period)
 export const fullMessage = () => `Party is full (${MAX_MEMBERS}/${MAX_MEMBERS})`;
 export const PLATFORMS = ["ios", "android", "web"];

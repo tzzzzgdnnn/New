@@ -6,9 +6,20 @@
 //   GET  /rooms/:code           -> { exists, members } check a code
 //   GET  /rooms/:code/ws?id=&platform=&name=           join (WebSocket)
 //
+//   POST /turn                  -> { iceServers }      voice: STUN + short-lived TURN credentials
+//
 // Rooms are deleted EMPTY_ROOM_TTL_MS after the last person leaves.
+// WebSockets use the Durable Object Hibernation API (state.acceptWebSocket):
+// an idle room is evicted from memory while its sockets stay open, and it is
+// rebuilt from storage on the next message. The member id rides in the
+// socket's tag. A housekeeping alarm every SWEEP_MS evicts silent sockets
+// (no ping for IDLE_EVICT_MS), frees seats whose grace ran out and deletes
+// rooms that stayed empty.
 import { RoomCore } from "../src/watch/roomCore.js";
-import { makeCode, isValidCode, normalizeCode, EMPTY_ROOM_TTL_MS, RECONNECT_GRACE_MS, MAX_MEMBERS, fullMessage } from "../src/watch/protocol.js";
+import { makeCode, isValidCode, normalizeCode, EMPTY_ROOM_TTL_MS, RECONNECT_GRACE_MS, MAX_MEMBERS, fullMessage, IDLE_EVICT_MS } from "../src/watch/protocol.js";
+
+export const SWEEP_MS = 10_000;
+const STUN = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -18,10 +29,11 @@ const CORS = {
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...CORS } });
 
-export async function handle(request, env) {
+export async function handle(request, env, fetchImpl = globalThis.fetch) {
   const url = new URL(request.url);
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "superplayer-watch" });
+  if (url.pathname === "/turn" && request.method === "POST") return json({ iceServers: await iceServers(env, fetchImpl) });
   if (url.pathname === "/rooms" && request.method === "POST") {
     for (let i = 0; i < 6; i++) {
       const code = makeCode();
@@ -44,19 +56,52 @@ export async function handle(request, env) {
   return json({ error: "not-found" }, 404);
 }
 
+/**
+ * Voice ICE servers. With Cloudflare Realtime TURN configured (worker secrets
+ * TURN_KEY_ID + TURN_KEY_API_TOKEN) each call mints 24 h TURN credentials, so
+ * phones behind strict / symmetric NATs still connect. Without them: STUN only.
+ */
+export async function iceServers(env, fetchImpl = globalThis.fetch) {
+  if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN) return STUN;
+  try {
+    const r = await fetchImpl(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.TURN_KEY_API_TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ ttl: 86_400 }),
+    });
+    if (!r.ok) return STUN;
+    const d = await r.json();
+    const list = Array.isArray(d.iceServers) ? d.iceServers : d.iceServers ? [d.iceServers] : [];
+    return list.length ? list : STUN;
+  } catch {
+    return STUN;
+  }
+}
+
 const stubFor = (env, code) => env.ROOMS.get(env.ROOMS.idFromName(code));
 
 export default { fetch: (req, env) => handle(req, env) };
 
 export class Room {
-  constructor(state, env, { now = () => Date.now(), timers = globalThis } = {}) {
+  constructor(state, env, { now = () => Date.now() } = {}) {
     this.state = state;
     this.env = env;
     this.now = now;
-    this.timers = timers;
     this.core = null;
-    this.sockets = new Map(); // member id -> WebSocket
     this.loaded = false;
+  }
+
+  /** Open sockets for a member id (the Hibernation API keeps them across evictions). */
+  socketsFor(id) {
+    return this.state.getWebSockets(id);
+  }
+
+  socketOf(id) {
+    return this.socketsFor(id).at(-1) || null;
+  }
+
+  idOf(ws) {
+    return this.state.getTags?.(ws)?.[0] ?? ws.deserializeAttachment?.()?.id ?? null;
   }
 
   async load() {
@@ -66,6 +111,11 @@ export class Room {
     if (snap) {
       this.core = this.makeCore(snap.code);
       this.core.restore(snap);
+      this.core.emptySince = snap.emptySince ?? null;
+      // Woken from hibernation: members whose socket is still open are still here.
+      for (const m of this.core.members.values()) {
+        if (this.socketsFor(m.id).length) Object.assign(m, { connected: true, droppedAt: null, lastSeen: this.now() });
+      }
     }
     return this.core;
   }
@@ -79,7 +129,7 @@ export class Room {
       sendMany: (ids, frame) => {
         for (const id of ids) {
           try {
-            this.sockets.get(id)?.send(frame);
+            this.socketOf(id)?.send(frame);
           } catch {}
         }
       },
@@ -87,7 +137,7 @@ export class Room {
   }
 
   sendTo(id, msg) {
-    const ws = this.sockets.get(id);
+    const ws = this.socketOf(id);
     if (!ws) return;
     try {
       ws.send(JSON.stringify(msg));
@@ -95,7 +145,13 @@ export class Room {
   }
 
   async save() {
-    if (this.core) await this.state.storage.put("room", this.core.snapshot());
+    if (this.core) await this.state.storage.put("room", { ...this.core.snapshot(), emptySince: this.core.emptySince ?? null });
+  }
+
+  async armSweep() {
+    const want = this.now() + SWEEP_MS;
+    const cur = await this.state.storage.getAlarm?.();
+    if (!cur || cur > want) await this.state.storage.setAlarm(want);
   }
 
   async fetch(request) {
@@ -105,8 +161,9 @@ export class Room {
       if (this.core) return new Response("exists", { status: 409 });
       const { code } = await request.json();
       this.core = this.makeCore(code);
+      this.core.emptySince = this.now();
       await this.save();
-      await this.state.storage.setAlarm(this.now() + EMPTY_ROOM_TTL_MS);
+      await this.state.storage.setAlarm(this.now() + SWEEP_MS);
       return new Response("ok");
     }
     if (url.pathname === "/info") {
@@ -115,88 +172,120 @@ export class Room {
     return this.accept(url);
   }
 
-  accept(url) {
-    const pair = new WebSocketPair();
-    const [client, server] = Object.values(pair);
+  refuse(code, reason) {
+    const [client, server] = Object.values(new WebSocketPair());
     server.accept();
+    server.close(code, reason);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async accept(url) {
     const id = (url.searchParams.get("id") || "").slice(0, 64);
-    if (!this.core) {
-      server.close(4404, "no such room");
-      return new Response(null, { status: 101, webSocket: client });
-    }
-    if (!id) {
-      server.close(4400, "missing id");
-      return new Response(null, { status: 101, webSocket: client });
-    }
-    if (!this.core.members.has(id) && this.core.members.size >= MAX_MEMBERS) {
-      server.close(4409, fullMessage()); // "Party is full (9/9)"
-      return new Response(null, { status: 101, webSocket: client });
-    }
+    if (!this.core) return this.refuse(4404, "no such room");
+    if (!id) return this.refuse(4400, "missing id");
+    if (!this.core.members.has(id) && this.core.members.size >= MAX_MEMBERS) return this.refuse(4409, fullMessage()); // "Party is full (9/9)"
     // Same device reconnecting: the new socket replaces the old one.
-    const old = this.sockets.get(id);
-    this.sockets.set(id, server);
-    if (old) {
+    for (const old of this.socketsFor(id)) {
       try {
         old.close(4000, "replaced");
       } catch {}
     }
+    const [client, server] = Object.values(new WebSocketPair());
+    this.state.acceptWebSocket(server, [id]);
+    server.serializeAttachment?.({ id });
     this.core.join(id, { platform: url.searchParams.get("platform"), name: url.searchParams.get("name") });
-    this.save();
-    server.addEventListener("message", (e) => {
-      let msg;
-      try {
-        msg = JSON.parse(typeof e.data === "string" ? e.data : "");
-      } catch {
-        return;
-      }
-      if (this.sockets.get(id) !== server) return;
-      this.core.handle(id, msg);
-      if (msg.type !== "ping" && msg.type !== "status") this.save();
-      if (msg.type === "leave") this.gone(id, server, true);
-      if (this.core?.ended) this.endRoom();
-    });
-    const onClose = () => this.gone(id, server, false);
-    server.addEventListener("close", onClose);
-    server.addEventListener("error", onClose);
+    this.core.emptySince = null;
+    await this.save();
+    await this.armSweep();
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  gone(id, server, left) {
-    if (this.sockets.get(id) !== server) return;
-    this.sockets.delete(id);
-    if (!left) this.core.drop(id);
+  // ── Hibernation API handlers ──────────────────────────────────────────
+  async webSocketMessage(ws, data) {
+    await this.load();
+    const id = this.idOf(ws);
+    if (!this.core || !id) return;
+    if (this.socketOf(id) !== ws) return; // a replaced socket
+    let msg;
     try {
-      server.close(1000, "bye");
+      msg = JSON.parse(typeof data === "string" ? data : "");
+    } catch {
+      return;
+    }
+    // A socket the room had already let go (idle-evicted, seat expired): rejoin it.
+    if (!this.core.members.get(id)?.connected && msg.type !== "leave") {
+      if (!this.core.members.has(id) && this.core.members.size >= MAX_MEMBERS) return ws.close(4409, fullMessage());
+      this.core.join(id, this.core.members.get(id) || {});
+    }
+    this.core.handle(id, msg);
+    if (msg.type === "leave") return this.gone(id, ws, true);
+    if (this.core?.ended) return this.endRoom();
+    if (msg.type !== "ping" && msg.type !== "status") await this.save();
+  }
+
+  async webSocketClose(ws) {
+    await this.load();
+    const id = this.idOf(ws);
+    if (id) await this.gone(id, ws, false);
+  }
+
+  async webSocketError(ws) {
+    return this.webSocketClose(ws);
+  }
+
+  async gone(id, ws, left) {
+    try {
+      ws.close(1000, "bye");
     } catch {}
-    this.timers.setTimeout(() => {
-      this.core?.prune();
-      this.afterChange();
-    }, RECONNECT_GRACE_MS + 50);
-    this.afterChange();
+    if (!this.core) return;
+    const stillOpen = this.socketsFor(id).some((s) => s !== ws && s.readyState !== 3);
+    if (stillOpen && !left) return; // replaced by a newer socket
+    if (!left) this.core.drop(id);
+    await this.afterChange();
   }
 
   async afterChange() {
+    if (!this.core) return;
+    if (this.core.empty && this.core.emptySince == null) this.core.emptySince = this.now();
     await this.save();
-    if (this.core?.empty) await this.state.storage.setAlarm(this.now() + EMPTY_ROOM_TTL_MS);
+    await this.armSweep();
   }
 
   /** Host pressed End: close every socket (4410) and delete the room. */
   async endRoom() {
-    for (const ws of this.sockets.values()) {
+    for (const ws of this.state.getWebSockets()) {
       try {
         ws.close(4410, "ended by host");
       } catch {}
     }
-    this.sockets.clear();
     this.core = null;
     await this.state.storage.deleteAll();
   }
 
+  /** Housekeeping: idle sockets, expired seats, empty rooms. */
   async alarm() {
     await this.load();
-    if (this.core && !this.core.empty) return;
-    this.core = null;
-    this.sockets.clear();
-    await this.state.storage.deleteAll();
+    if (!this.core) {
+      await this.state.storage.deleteAll();
+      return;
+    }
+    for (const id of this.core.evictIdle()) {
+      for (const ws of this.socketsFor(id)) {
+        try {
+          ws.close(4408, "idle");
+        } catch {}
+      }
+    }
+    this.core.prune();
+    if (this.core.empty) {
+      this.core.emptySince ??= this.now();
+      if (this.now() - this.core.emptySince >= EMPTY_ROOM_TTL_MS) {
+        this.core = null;
+        await this.state.storage.deleteAll();
+        return;
+      }
+    } else this.core.emptySince = null;
+    await this.save();
+    await this.state.storage.setAlarm(this.now() + SWEEP_MS);
   }
 }

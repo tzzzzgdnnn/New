@@ -15,8 +15,8 @@ export class WatchClient {
    * @param {"ios"|"android"|"web"} o.platform
    * @param {object} o.adapter    player adapter (see engine.js)
    */
-  constructor({ url, clientId, platform, name, adapter, WebSocketImpl = globalThis.WebSocket, now = () => Date.now(), timers = globalThis, onState, onStatus, onChat }) {
-    Object.assign(this, { url, clientId, platform, name, adapter, WebSocketImpl, now, timers, onState, onStatus, onChat });
+  constructor({ url, clientId, platform, name, adapter, WebSocketImpl = globalThis.WebSocket, now = () => Date.now(), timers = globalThis, onState, onStatus, onChat, onRtc, onVoice }) {
+    Object.assign(this, { url, clientId, platform, name, adapter, WebSocketImpl, now, timers, onState, onStatus, onChat, onRtc, onVoice });
     this.clock = new ClockSync();
     this.engine = new SyncEngine({ adapter, clock: this.clock, now, send: (m) => this.sendMsg(m) });
     this.state = null;
@@ -93,6 +93,8 @@ export class WatchClient {
       this.close();
       return;
     }
+    if (msg.type === "rtc") return void this.onRtc?.(msg);
+    if (msg.type === "voice") return void this.onVoice?.(msg);
     if (msg.type === "chat") {
       this.chat = [...(this.chat || []), msg].slice(-50);
       this.onChat?.(this.chat, msg);

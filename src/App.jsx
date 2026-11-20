@@ -69,6 +69,9 @@ const SearchModal = lazy(() => import("./components/SearchModal"));
 // Lazy-loaded pages: each chunk is only downloaded when the user first visits
 const HomePage = lazy(() => import("./pages/HomePage"));
 const MoviePage = lazy(() => import("./pages/MoviePage"));
+// Watch Party (iPhone app + web app only; the desktop app has no room client).
+// Watch Party: iPhone app and web app (Android uses the web app for now).
+const WatchParty = lazy(() => import("./watch/WatchParty"));
 const TVPage = lazy(() => import("./pages/TVPage"));
 const LibraryPage = lazy(() => import("./pages/LibraryPage"));
 const DownloadsPage = lazy(() => import("./pages/DownloadsPage"));
@@ -1650,6 +1653,22 @@ export default function App() {
         )}
         {KeyboardShortcutsModal && showShortcuts && (
           <Suspense fallback={null}><KeyboardShortcutsModal onClose={() => setShowShortcuts(false)} /></Suspense>
+        )}
+        {WatchParty && (
+          <Suspense fallback={null}>
+            <WatchParty
+              page={page}
+              onOpenTitle={(m) =>
+                navigate(m.type === "tv" ? "tv" : "movie", {
+                  id: m.tmdbId,
+                  media_type: m.type === "tv" ? "tv" : "movie",
+                  title: m.type === "tv" ? undefined : m.title,
+                  name: m.type === "tv" ? m.title : undefined,
+                  poster_path: m.poster || null,
+                })
+              }
+            />
+          </Suspense>
         )}
       </div>
     </ErrorBoundary>

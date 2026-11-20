@@ -19,6 +19,7 @@ export const REARM_LEAD_MS = 600; // a hard seek while playing lands this far ah
 export const SETTLE_MS = 900; // no drift decisions right after a (re)start
 export const PAUSE_POS_TOLERANCE = 0.04; // paused this close to the hold = on the frame
 export const STATUS_EVERY_MS = 1000;
+export const STUCK_REARM_MS = 1500; // buffered again but still not playing this long: rejoin the room's timeline
 
 export class SyncEngine {
   constructor({ adapter, clock, now = () => Date.now(), send }) {
@@ -99,6 +100,14 @@ export class SyncEngine {
       } else {
         this.rearm(now);
       }
+      return;
+    }
+    // The room never waits on one phone: once this one has data again (after a
+    // stall, an interruption or the app coming back), jump onto the room's timeline.
+    const stuck = s.status === "paused" || (this.waitingSince != null && now - this.waitingSince >= STUCK_REARM_MS);
+    if (sNow >= pb.at && stuck && s.ready && !s.seeking && now >= this.settleUntil) {
+      this.waitingSince = null;
+      this.rearm(now);
       return;
     }
     if (sNow < pb.at || s.status !== "playing" || now < this.settleUntil) return;

@@ -19,6 +19,8 @@
 // before a seek can never trigger a start.
 import {
   START_LEAD_MS,
+  START_WAIT_MS,
+  IDLE_EVICT_MS,
   RECONNECT_GRACE_MS,
   PLATFORMS,
   cleanMedia,
@@ -71,6 +73,7 @@ export class RoomCore {
       hostId: this.hostId,
       chatLog: this.chatLog || [],
       chatSeq: this.chatSeq || 0,
+      seq: this.seq || 0,
       members: [...this.members.values()].map((m) => ({ ...m, connected: false, droppedAt: this.now() })),
     };
   }
@@ -88,8 +91,9 @@ export class RoomCore {
       chatLog: s.chatLog || [],
       chatSeq: s.chatSeq || 0,
     });
-    // After an eviction everyone has to reconnect: hold where we were.
-    if (!this.playback.paused) this.hold(expectedPosition(this.playback, this.now()));
+    // Playback is a timeline on the server clock, so it simply carries on
+    // across a hibernation / eviction: only a Pause tap pauses the party.
+    this.seq = Math.max(this.seq || 0, s.seq ?? 0);
     for (const m of s.members || []) this.members.set(m.id, m);
   }
 
@@ -118,6 +122,7 @@ export class RoomCore {
       epoch: -1,
       pos: null,
       cseq: 0,
+      lastSeen: this.now(),
       synced: false, // becomes true once it has been ready at the room's current position
     });
     this.members.set(id, m);
@@ -153,6 +158,14 @@ export class RoomCore {
     this.broadcast();
   }
 
+  /** Connected members silent for IDLE_EVICT_MS (no ping): dropped. Returns their ids. */
+  evictIdle() {
+    const now = this.now();
+    const idle = this.connected.filter((m) => now - (m.lastSeen ?? now) >= IDLE_EVICT_MS).map((m) => m.id);
+    for (const id of idle) this.drop(id);
+    return idle;
+  }
+
   /** Drops members whose grace ran out. Returns true if anything changed. */
   prune() {
     const now = this.now();
@@ -174,6 +187,7 @@ export class RoomCore {
   handle(id, msg) {
     const m = this.members.get(id);
     if (!m || !msg || typeof msg !== "object" || typeof msg.type !== "string") return;
+    m.lastSeen = this.now();
     // Per-member ordering: a command older than one already applied is stale.
     if (msg.type !== "ping" && Number.isInteger(msg.cseq)) {
       if (msg.cseq <= (m.cseq || 0)) return;
@@ -365,8 +379,10 @@ export class RoomCore {
   evaluate() {
     if (!this.media || this.connected.length === 0) return false;
     const now = this.now();
+    // A Pause tap or a phone that is buffering pauses the party; chat, the
+    // keyboard or the app in the background never do. Once every phone is
+    // buffered again at that frame, they all start back on the same instant.
     if (!this.playback.paused) {
-      // Someone stalled: everyone stops on the stalled phone's frame.
       const stalled = this.connected.filter((m) => m.synced && m.buffering && m.rev === this.media.rev && m.epoch === this.epoch);
       if (stalled.length) {
         const expected = expectedPosition(this.playback, now);
@@ -380,7 +396,9 @@ export class RoomCore {
       return false;
     }
     if (this.intent !== "play") return false;
-    if (this.waitingOn().length) return false;
+    // Start once everyone is buffered at the hold. Safety net: a phone stuck
+    // for START_WAIT_MS (its stream died) is left to catch up on its own.
+    if (this.waitingOn().length && now - (this.playback.at || 0) < START_WAIT_MS) return false;
     // Everyone is loaded and buffered at the hold position: start together.
     this.playback = { paused: false, pos: this.playback.pos, at: now + START_LEAD_MS, rate: this.playback.rate || 1 };
     this.holdReason = null;

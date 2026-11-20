@@ -7,7 +7,7 @@ import { ClockSync } from "../src/watch/clock.js";
 import { decideCorrection, HARD_SEEK, MAX_NUDGE } from "../src/watch/drift.js";
 import { RoomCore } from "../src/watch/roomCore.js";
 import { SyncEngine } from "../src/watch/engine.js";
-import { makeCode, normalizeCode, isValidCode, mediaKey, expectedPosition, START_LEAD_MS, RECONNECT_GRACE_MS } from "../src/watch/protocol.js";
+import { makeCode, normalizeCode, isValidCode, mediaKey, expectedPosition, START_LEAD_MS, RECONNECT_GRACE_MS, START_WAIT_MS, IDLE_EVICT_MS, EMPTY_ROOM_TTL_MS } from "../src/watch/protocol.js";
 import { VirtualTime, SimPlayer, SimNet, addDevice } from "./sim.mjs";
 
 const MOVIE = { type: "movie", tmdbId: 603, title: "The Matrix", server: "cinejoy", audioLang: "en", subLang: "en" };
@@ -146,6 +146,43 @@ test("room: buffering freezes everyone on the stalled frame, resumes together fr
   assert.equal(r.core.playback.pos, 9.88, "resumes from that exact point");
 });
 
+test("room: chat never pauses the party", () => {
+  const r = room();
+  r.core.join("a", {});
+  r.core.join("b", {});
+  r.core.handle("a", { type: "media", media: MOVIE });
+  ready(r, "a");
+  ready(r, "b");
+  r.adv(START_LEAD_MS + 3000);
+  r.core.handle("a", { type: "chat", text: "typing never pauses" });
+  r.core.handle("b", { type: "chat", text: "same" });
+  assert.equal(r.core.playback.paused, false);
+});
+
+test("room: a phone stuck past START_WAIT_MS no longer blocks the start", () => {
+  const r = room();
+  r.core.join("a", {});
+  r.core.join("b", {});
+  r.core.handle("a", { type: "media", media: MOVIE });
+  ready(r, "a");
+  assert.ok(r.core.playback.paused, "waiting on b");
+  r.adv(START_WAIT_MS + 10);
+  ready(r, "a");
+  assert.equal(r.core.playback.paused, false, "started without b");
+});
+
+test("room: a silent socket is evicted as dropped, the party carries on", () => {
+  const r = room();
+  r.core.join("a", {});
+  r.core.join("b", {});
+  r.adv(5000);
+  r.core.handle("a", { type: "ping", t0: 1 });
+  r.adv(IDLE_EVICT_MS - 4000);
+  assert.deepEqual(r.core.evictIdle(), ["b"]);
+  assert.equal(r.core.connected.length, 1);
+  assert.equal(r.core.hostId, "a");
+});
+
 test("room: pause / seek / play from any member apply to all", () => {
   const r = room();
   r.core.join("a", {});
@@ -221,7 +258,7 @@ test("room: a drop never pauses the others; reconnect keeps the seat; grace time
   assert.equal(r.core.playback.paused, false, "the one left carries on");
 });
 
-test("room: leave removes at once; snapshot/restore survives an eviction (held)", () => {
+test("room: leave removes at once; snapshot/restore survives an eviction and keeps playing", () => {
   const r = room();
   r.core.join("a", {});
   r.core.join("b", {});
@@ -234,8 +271,9 @@ test("room: leave removes at once; snapshot/restore survives an eviction (held)"
   const snap = JSON.parse(JSON.stringify(r.core.snapshot()));
   const again = new RoomCore({ code: "ABC234", now: r.now, send: () => {} });
   again.restore(snap);
-  assert.ok(again.playback.paused);
-  assert.ok(Math.abs(again.playback.pos - 2) < 0.01);
+  assert.equal(again.playback.paused, false, "a hibernation never pauses the movie");
+  assert.ok(Math.abs(expectedPosition(again.playback, r.now()) - 2) < 0.01);
+  assert.ok(again.seq >= r.core.seq, "state seq carries over (clients would drop older seqs)");
   assert.equal(again.media.key, mediaKey(MOVIE));
 });
 
@@ -428,16 +466,19 @@ test("mixed room: a dropped connection never pauses the other; reconnect resumes
   assert.ok(R.gap() < 0.1, `gap ${(R.gap() * 1000).toFixed(1)} ms`);
 });
 
-// ── Worker + Durable Object glue (fake runtime) ──────────────────────────
+// ── Worker + Durable Object glue (fake runtime, Hibernation API) ────────
 class FakeSocket {
   constructor() {
-    this.listeners = {};
     this.sent = [];
     this.closed = null;
+    this.readyState = 1;
   }
   accept() {}
-  addEventListener(t, fn) {
-    (this.listeners[t] ||= []).push(fn);
+  serializeAttachment(a) {
+    this.att = a;
+  }
+  deserializeAttachment() {
+    return this.att;
   }
   send(d) {
     this.sent.push(JSON.parse(d));
@@ -445,14 +486,11 @@ class FakeSocket {
   close(code, reason) {
     if (this.closed) return;
     this.closed = { code, reason };
-  }
-  emit(t, e) {
-    for (const fn of this.listeners[t] || []) fn(e);
+    this.readyState = 3;
   }
 }
 
-test("worker: create a room, join from two platforms, relay, expire when empty", async () => {
-  const { handle, Room } = await import("./worker.js");
+function fakeRuntime(Room, clock) {
   const pairs = [];
   globalThis.WebSocketPair = class {
     constructor() {
@@ -470,33 +508,53 @@ test("worker: create a room, join from two platforms, relay, expire when empty",
       this.webSocket = init.webSocket;
     }
   };
-  let t = 5_000_000;
-  const timers = { setTimeout: () => 0 };
   const objects = new Map();
+  const make = (id) => {
+    const store = new Map();
+    const accepted = []; // [ws, tags]
+    const storage = {
+      alarm: null,
+      get: async (k) => store.get(k),
+      put: async (k, v) => store.set(k, structuredClone(v)),
+      setAlarm: async (a) => (storage.alarm = a),
+      getAlarm: async () => storage.alarm,
+      deleteAll: async () => store.clear(),
+    };
+    const state = {
+      storage,
+      acceptWebSocket: (ws, tags) => accepted.push([ws, tags]),
+      getWebSockets: (tag) => accepted.filter(([ws, t]) => ws.readyState !== 3 && (tag == null || t.includes(tag))).map(([ws]) => ws),
+      getTags: (ws) => accepted.find(([w]) => w === ws)?.[1] || [],
+    };
+    const o = { state, storage, store, obj: new Room(state, env, { now: () => clock.t }) };
+    // Hibernation: drop the object from memory, keep sockets + storage.
+    o.hibernate = () => (o.obj = new Room(state, env, { now: () => clock.t }));
+    objects.set(id, o);
+    return o;
+  };
   const env = {
     ROOMS: {
       idFromName: (n) => n,
       get: (id) => {
-        if (!objects.has(id)) {
-          const store = new Map();
-          const storage = {
-            alarm: null,
-            get: async (k) => store.get(k),
-            put: async (k, v) => store.set(k, structuredClone(v)),
-            setAlarm: async (a) => (storage.alarm = a),
-            deleteAll: async () => store.clear(),
-          };
-          objects.set(id, { obj: new Room({ storage }, env, { now: () => t, timers }), storage, store });
-        }
-        const o = objects.get(id).obj;
-        return { fetch: (req, init) => o.fetch(typeof req === "string" ? new Request(req, init) : req) };
+        const o = objects.get(id) || make(id);
+        return { fetch: (req, init) => o.obj.fetch(typeof req === "string" ? new Request(req, init) : req) };
       },
     },
   };
+  return { env, pairs, objects, restore: () => ((globalThis.Response = OrigResponse), delete globalThis.WebSocketPair) };
+}
+
+test("worker: create a room, join from two platforms, relay, hibernate, expire when empty", async () => {
+  const { handle, Room } = await import("./worker.js");
+  const clock = { t: 5_000_000 };
+  const R = fakeRuntime(Room, clock);
+  const { env, pairs, objects } = R;
   try {
     const created = await handle(new Request("https://w/rooms", { method: "POST" }), env);
     const { code } = await created.json();
     assert.ok(isValidCode(code));
+    const o = objects.get(code);
+    const say = (s, m) => o.obj.webSocketMessage(s, JSON.stringify(m));
     const info = await (await handle(new Request(`https://w/rooms/${code.toLowerCase()}`), env)).json();
     assert.deepEqual(info, { exists: true, members: 0 });
     const join = (id, platform) =>
@@ -508,12 +566,19 @@ test("worker: create a room, join from two platforms, relay, expire when empty",
     const sWeb = pairs.at(-1);
     const last = (s) => s.sent.filter((m) => m.type === "state").at(-1);
     assert.deepEqual(last(sIos).members.map((m) => m.platform).sort(), ["ios", "web"]);
-    // ping/pong clock
-    sWeb.emit("message", { data: JSON.stringify({ type: "ping", t0: 1 }) });
-    assert.deepEqual(sWeb.sent.at(-1), { type: "pong", t0: 1, ts: t });
-    // the web member picks, both see it
-    sWeb.emit("message", { data: JSON.stringify({ type: "media", media: MOVIE }) });
+    await say(sWeb, { type: "ping", t0: 1 });
+    assert.deepEqual(sWeb.sent.at(-1), { type: "pong", t0: 1, ts: clock.t });
+    await say(sWeb, { type: "media", media: MOVIE });
     assert.equal(last(sIos).media.key, mediaKey(MOVIE));
+    // hibernation: object rebuilt from storage, both still connected, nothing paused
+    const seqBefore = last(sIos).seq;
+    o.hibernate();
+    await say(sIos, { type: "chat", text: "still here" });
+    assert.equal(sWeb.sent.at(-1).type, "chat");
+    await say(sWeb, { type: "ping", t0: 2 });
+    assert.equal(o.obj.core.connected.length, 2, "members survive hibernation");
+    await say(sIos, { type: "pause", pos: 0 });
+    assert.ok(last(sWeb).seq > seqBefore, "state seq keeps growing after a wake");
     // unknown code
     const bad = await handle(new Request(`https://w/rooms/ZZZ999/ws?id=x`, { headers: { upgrade: "websocket" } }), env);
     assert.equal(bad.status, 101);
@@ -521,15 +586,33 @@ test("worker: create a room, join from two platforms, relay, expire when empty",
     // reconnect replaces the old socket
     await join("browser", "web");
     assert.equal(sWeb.closed.code, 4000);
-    // everyone leaves -> alarm -> storage wiped
-    for (const s of pairs.slice(-1).concat([sIos])) s.emit("message", { data: JSON.stringify({ type: "leave" }) });
-    const o = objects.get(code);
-    await new Promise((r) => setTimeout(r, 0));
-    assert.ok(o.storage.alarm > t, "expiry alarm set");
+    const sWeb2 = pairs.at(-1);
+    // idle eviction: the iPhone goes silent past IDLE_EVICT_MS
+    clock.t += IDLE_EVICT_MS + 1000;
+    await say(sWeb2, { type: "ping", t0: 3 });
+    await o.obj.alarm();
+    assert.equal(sIos.closed?.code, 4408, "silent socket closed");
+    assert.equal(o.obj.core.connected.length, 1);
+    // everyone leaves -> sweeps -> deleted after EMPTY_ROOM_TTL_MS
+    await say(sWeb2, { type: "leave" });
+    assert.ok(o.storage.alarm > clock.t, "sweep alarm set");
+    await o.obj.alarm();
+    assert.ok(o.store.size > 0, "kept while inside the TTL");
+    clock.t += EMPTY_ROOM_TTL_MS + 1;
     await o.obj.alarm();
     assert.equal(o.store.size, 0, "room deleted");
   } finally {
-    globalThis.Response = OrigResponse;
-    delete globalThis.WebSocketPair;
+    R.restore();
   }
+});
+
+test("worker: /turn mints TURN credentials when configured, STUN otherwise", async () => {
+  const { handle } = await import("./worker.js");
+  const stun = await (await handle(new Request("https://w/turn", { method: "POST" }), {})).json();
+  assert.ok(stun.iceServers[0].urls.some((u) => u.startsWith("stun:")));
+  let called = null;
+  const fake = async (url, init) => ((called = { url, init }), new Response(JSON.stringify({ iceServers: [{ urls: ["turn:turn.cloudflare.com:3478"], username: "u", credential: "c" }] })));
+  const turn = await (await handle(new Request("https://w/turn", { method: "POST" }), { TURN_KEY_ID: "kid", TURN_KEY_API_TOKEN: "tok" }, fake)).json();
+  assert.equal(turn.iceServers[0].username, "u");
+  assert.ok(called.url.includes("/turn/keys/kid/"));
 });

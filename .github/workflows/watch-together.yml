@@ -25,6 +25,8 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       WORKER_NAME: superplayer-watch
+      TURN_KEY_ID: ${{ secrets.TURN_KEY_ID }}
+      TURN_KEY_API_TOKEN: ${{ secrets.TURN_KEY_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -52,6 +54,13 @@ jobs:
         if: steps.secrets.outputs.have == 'true'
         working-directory: watch-together
         run: npx --yes wrangler@4 deploy --name "$WORKER_NAME" 2>&1 | tee ../wrangler-deploy.log
+
+      - name: TURN credentials for voice (optional)
+        if: steps.secrets.outputs.have == 'true' && env.TURN_KEY_ID != '' && env.TURN_KEY_API_TOKEN != ''
+        working-directory: watch-together
+        run: |
+          printf '%s' "$TURN_KEY_ID" | npx --yes wrangler@4 secret put TURN_KEY_ID --name "$WORKER_NAME"
+          printf '%s' "$TURN_KEY_API_TOKEN" | npx --yes wrangler@4 secret put TURN_KEY_API_TOKEN --name "$WORKER_NAME"
 
       - name: Find workers.dev URL
         if: steps.secrets.outputs.have == 'true'
