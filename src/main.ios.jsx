@@ -104,7 +104,29 @@ if (import.meta.env.VITE_WEB && !import.meta.env.VITE_ANDROID && "serviceWorker"
         lastCheck = Date.now();
         reg.update().catch(() => {});
       };
-      document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && check());
+      // A fix only helps once it is running: when a new version has taken
+      // over and nothing is playing (no video, no server page, no party),
+      // switch to it right away instead of waiting for a relaunch (an iPhone
+      // home-screen app is often resumed, not relaunched, for days).
+      let pending = false;
+      const idle = () =>
+        !window.__sbWatchParty &&
+        ![...document.querySelectorAll("video")].some((v) => !v.paused && !v.closest("[data-sb-warm]")) &&
+        ![...document.querySelectorAll("iframe")].some((f) => f.src && !/^about:blank/.test(f.src) && f.offsetWidth > 0);
+      const switchIfIdle = () => {
+        if (pending && document.visibilityState === "visible" && idle()) {
+          pending = false;
+          location.reload();
+        }
+      };
+      const hadController = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (!hadController) return; // first install: nothing old is running
+        pending = true;
+        switchIfIdle();
+      });
+      setInterval(switchIfIdle, 15_000);
+      document.addEventListener("visibilitychange", () => { switchIfIdle(); document.visibilityState === "visible" && check(); });
       setInterval(check, 30 * 60 * 1000);
       check();
     }).catch(() => {});
