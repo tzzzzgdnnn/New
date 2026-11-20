@@ -14,7 +14,9 @@ export const DISMISS_VELOCITY = 0.6; // px per ms
  *           choice?: string, type?: "movie"|"tv" }} opts
  */
 export function serverSheetRows({ sources = [], choice = AUTO_SERVER, type = "movie", anime = false } = {}) {
-  const lead = anime ? [{ id: ANIPM_CHOICE, label: "ani.pm", detail: "Main anime server", auto: false }] : [];
+  // Web app (#19): ani.pm doesn't play in a browser (no relay), so it is never listed there.
+  const web = !!(import.meta.env?.VITE_WEB && !import.meta.env?.VITE_ANDROID);
+  const lead = anime && !web ? [{ id: ANIPM_CHOICE, label: "ani.pm", detail: "Main anime server", auto: false }] : [];
   const servers = lead.concat(sources
     .filter((s) => s && s.id && !(type === "tv" && s.movieOnly))
     .map((s) => ({
