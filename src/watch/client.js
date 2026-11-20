@@ -54,15 +54,16 @@ export class WatchClient {
       this.timers.clearInterval(this.pingTimer);
       this.timers.clearInterval(this.tickTimer);
       if (this.closed) return;
-      if (e?.code === 4410) {
+      if (e?.code === 4410 || e?.code === 4411) {
+        // 4410: host pressed End. 4411: peer-to-peer party whose host left / stayed unreachable.
         this.closed = true;
         this.ended = true;
-        this.onStatus?.("ended", { reason: "host", message: "The party was ended by the host" });
+        this.onStatus?.("ended", { reason: "host", message: e.code === 4411 ? e.reason || "The host left, so the party ended" : "The party was ended by the host" });
         return;
       }
       if (e?.code === 4404 || e?.code === 4409) {
         this.closed = true;
-        this.onStatus?.(e.code === 4404 ? "no-room" : "room-full", { message: e.code === 4409 ? e.reason || "Party is full (9/9)" : "That party code wasn't found" });
+        this.onStatus?.(e.code === 4404 ? "no-room" : "room-full", { message: e.code === 4409 ? e.reason || "Party is full (9/9)" : "No party with that code" });
         return;
       }
       this.onStatus?.("reconnecting");

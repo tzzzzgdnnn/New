@@ -59,7 +59,7 @@ jobs:
         run: npm run test:swift
 
       - name: Watch Together tests (sync engine, room, worker)
-        run: node --test watch-together/test.mjs
+        run: node --test watch-together/test.mjs watch-together/p2p.test.mjs
 
       - name: Build web (iOS mode)
         # TMDB token is built in via .env.ios

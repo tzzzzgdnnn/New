@@ -14,22 +14,41 @@ import { createWebAdapter } from "./adapters/web.js";
 import { createIosAdapter, isIosNative } from "./adapters/ios.js";
 import { tmdbJson, imgUrl } from "../utils/api.js";
 import { startPresence } from "./presence.js";
+import { P2PHost, guestSocketClass, P2P_URL, NO_PARTY_MESSAGE } from "./p2p.js";
 import "./watch-party.css";
 
 const CONFIG_URL = "https://tzzzzgdnnn.github.io/New/watch/config.json";
 const CLIENT_ID_KEY = "sbWatchClientId";
 const NAME_KEY = "sbWatchName";
 
-let serverBase = null;
+/** fetch with a time limit (a dead server must never hang Start / Join). */
+async function fetchT(url, opts = {}, ms = 5000) {
+  const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const t = setTimeout(() => ctl?.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ctl?.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+let serverBase; // undefined = not looked up yet, null = none configured
+/**
+ * The Cloudflare room server, or null when none is configured. Null is not an
+ * error: parties then run peer-to-peer (src/watch/p2p.js) with no server of our own.
+ */
 export async function roomServer() {
-  if (serverBase) return serverBase;
+  if (serverBase !== undefined) return serverBase;
   const env = import.meta.env?.VITE_WATCH_URL;
   if (env) return (serverBase = env.replace(/\/$/, ""));
-  const r = await fetch(`${CONFIG_URL}?t=${Date.now()}`, { cache: "no-store" });
-  if (!r.ok) throw new Error("Watch Party isn't set up yet");
-  const { url } = await r.json();
-  if (!url) throw new Error("Watch Party isn't set up yet");
-  return (serverBase = url.replace(/\/$/, ""));
+  try {
+    const r = await fetchT(`${CONFIG_URL}?t=${Date.now()}`, { cache: "no-store" }, 4000);
+    const { url } = r.ok ? await r.json() : {};
+    serverBase = url ? String(url).replace(/\/$/, "") : null;
+  } catch {
+    return null; // offline / blocked: try again next time
+  }
+  return serverBase;
 }
 
 function clientId() {
@@ -74,6 +93,8 @@ export function useWatchParty() {
   const adapterRef = useRef(null);
   const voiceRef = useRef(null);
   const chatOpenRef = useRef(false);
+  const hostRef = useRef(null); // P2PHost when this device hosts a peer-to-peer party
+  const settleRef = useRef(null); // resolves connect()'s outcome: "connected" | "no-room" | ...
 
   const leaveCleanup = useCallback(() => {
     voiceRef.current?.stop();
@@ -81,17 +102,34 @@ export function useWatchParty() {
     setMicOn(false);
     adapterRef.current?.end?.();
     adapterRef.current = null;
+    hostRef.current?.endParty(); // peer-to-peer host: the room lived here, so it ends for everyone
+    hostRef.current = null;
     clientRef.current = null;
     setState(null);
     setChat([]);
     setUnread(0);
   }, []);
 
+  // Peer-to-peer host closing the app / tab: tell the guests the party is over.
+  useEffect(() => {
+    const bye = () => hostRef.current?.endParty();
+    window.addEventListener("pagehide", bye);
+    window.addEventListener("beforeunload", bye);
+    return () => {
+      window.removeEventListener("pagehide", bye);
+      window.removeEventListener("beforeunload", bye);
+    };
+  }, []);
+
+  /** Opens the party; resolves with the first outcome ("connected", "no-room", "room-full", "ended", "timeout"). */
   const connect = useCallback(
-    async (code, name) => {
+    async (code, name, transport) => {
       setStatus("connecting");
       setNotice(null);
-      const base = await roomServer();
+      const outcome = new Promise((resolve) => {
+        settleRef.current = resolve;
+        setTimeout(() => resolve("timeout"), 25_000);
+      });
       const ios = isIosNative();
       const getKey = () => {
         const m = currentMedia();
@@ -101,7 +139,8 @@ export function useWatchParty() {
       adapterRef.current = adapter;
       const myId = clientId();
       const client = new WatchClient({
-        url: `${base.replace(/^http/, "ws")}/rooms/${code}/ws`,
+        url: transport.url,
+        WebSocketImpl: transport.WebSocketImpl,
         clientId: myId,
         platform: platform(),
         name,
@@ -111,6 +150,10 @@ export function useWatchParty() {
           adapter.setParty?.({ code: st.code, count: st.count, max: st.max || MAX_MEMBERS, host: st.host === myId });
         },
         onStatus: (s, info) => {
+          if (s !== "reconnecting") {
+            settleRef.current?.(s);
+            settleRef.current = null;
+          }
           setStatus(s);
           if (info?.message) setNotice(info.message);
           if (s === "ended" || s === "no-room" || s === "room-full") leaveCleanup();
@@ -133,29 +176,52 @@ export function useWatchParty() {
       try {
         localStorage.setItem(NAME_KEY, name);
       } catch {}
+      return outcome;
     },
     [leaveCleanup],
   );
+
+  /** How to reach party `code`: the room server when it has it, otherwise the host peer-to-peer. */
+  const serverTransport = (base, code) => ({ url: `${base.replace(/^http/, "ws")}/rooms/${code}/ws` });
+  const guestTransport = (code) => ({ url: P2P_URL(code), WebSocketImpl: guestSocketClass(code) });
 
   const create = useCallback(
     async (name) => {
       try {
         const base = await roomServer();
-        const r = await fetch(`${base}/rooms`, { method: "POST" });
-        const { code } = await r.json();
-        if (!code) throw new Error("Couldn't start a party");
-        await connect(code, name);
+        let code = null;
+        let transport = null;
+        if (base) {
+          try {
+            const r = await fetchT(`${base}/rooms`, { method: "POST" }, 6000);
+            code = r.ok ? (await r.json()).code : null;
+            if (code) transport = serverTransport(base, code);
+          } catch {
+            code = null; // server down: fall back to peer-to-peer
+          }
+        }
+        if (!code) {
+          // No room server: this device runs the room; guests connect to it directly.
+          const host = await P2PHost.create();
+          hostRef.current = host;
+          code = host.code;
+          transport = { url: P2P_URL(code), WebSocketImpl: host.socketClass() };
+        }
+        const res = await connect(code, name, transport);
+        if (res !== "connected") throw new Error("Couldn't start a party");
         // The title open on this phone is what the party watches.
         const media = currentMedia();
         if (media) setTimeout(() => clientRef.current?.pickMedia(media), 400);
         return code;
       } catch (e) {
+        clientRef.current?.close();
+        leaveCleanup();
         setStatus("error");
         setNotice(e.message || "Couldn't start a party");
         return null;
       }
     },
-    [connect],
+    [connect, leaveCleanup],
   );
 
   const join = useCallback(
@@ -166,15 +232,32 @@ export function useWatchParty() {
         return false;
       }
       try {
-        await connect(code, name);
-        return true;
+        const base = await roomServer();
+        let transport = guestTransport(code);
+        if (base) {
+          try {
+            const r = await fetchT(`${base}/rooms/${code}`, {}, 5000);
+            if (r.ok && (await r.json()).exists) transport = serverTransport(base, code);
+          } catch {
+            // server unreachable: the party (if any) is peer-to-peer
+          }
+        }
+        const res = await connect(code, name, transport);
+        if (res === "connected") return true;
+        if (res === "timeout") {
+          clientRef.current?.close();
+          leaveCleanup();
+          setStatus("no-room");
+          setNotice(NO_PARTY_MESSAGE);
+        }
+        return false;
       } catch (e) {
         setStatus("error");
         setNotice(e.message || "Couldn't join");
         return false;
       }
     },
-    [connect],
+    [connect, leaveCleanup],
   );
 
   const c = () => clientRef.current;
@@ -195,6 +278,7 @@ export function useWatchParty() {
         cl.intent({ action: paused ? "play" : "pause", pos: cl.engine.target() });
       },
       leave: () => {
+        if (hostRef.current) hostRef.current.endParty(); // the host's device is the room: leaving ends it
         c()?.leave();
         setStatus("idle");
         leaveCleanup();
@@ -214,11 +298,13 @@ export function useWatchParty() {
         if (!cl) return;
         try {
           if (!voiceRef.current) {
-            const base = await roomServer();
-            const ice = await fetch(`${base}/turn`, { method: "POST" })
-              .then((r) => r.json())
-              .then((d) => d.iceServers)
-              .catch(() => undefined);
+            const base = hostRef.current || cl.url.startsWith("p2p:") ? null : await roomServer();
+            const ice = base
+              ? await fetchT(`${base}/turn`, { method: "POST" })
+                  .then((r) => r.json())
+                  .then((d) => d.iceServers)
+                  .catch(() => undefined)
+              : undefined;
             adapterRef.current?.setVoice?.(true);
             const v = new VoiceMesh({
               client: cl,
@@ -577,14 +663,14 @@ export default function WatchParty({ page, onOpenTitle }) {
   useEffect(() => {
     let stop = null, gone = false;
     roomServer()
-      .then((base) => { if (!gone) stop = startPresence(base, setLive); })
+      .then((base) => { if (base && !gone) stop = startPresence(base, setLive); })
       .catch(() => {});
     return () => { gone = true; stop?.(); };
   }, []);
   useEffect(() => {
-    if (party.status === "ended") setToast("The party was ended by the host");
+    if (party.status === "ended") setToast(party.notice || "The party was ended by the host");
     else if (party.status === "room-full") setToast(party.notice || `Party is full (${MAX_MEMBERS}/${MAX_MEMBERS})`);
-    else if (party.status === "no-room") setToast("That party code wasn't found");
+    else if (party.status === "no-room") setToast(NO_PARTY_MESSAGE);
     else return;
     const t = setTimeout(() => setToast(null), 4000);
     return () => clearTimeout(t);

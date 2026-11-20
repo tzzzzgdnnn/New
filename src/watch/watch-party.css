@@ -49,6 +49,8 @@
   .wp-chat.open { top: 0; bottom: 0; width: min(34vw, 360px); max-height: none; border-top: 0; border-left: 1px solid rgba(255,255,255,.08);
     padding-top: calc(env(safe-area-inset-top, 0px) + 64px); }
   .wp-chat.open .wp-chat-list { flex: 1; max-height: none; }
+  /* Keep the party controls (Pick / Pause / Leave / End) clear of the chat column. */
+  html.wp-chat-open .wp-bar { right: calc(min(34vw, 360px) + 8px); }
   html.wp-chat-open .sb-direct-video { width: calc(100% - min(34vw, 360px)) !important; right: auto !important; }
   html.wp-chat-open :fullscreen { right: min(34vw, 360px) !important; width: auto !important; }
 }
