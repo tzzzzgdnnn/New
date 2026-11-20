@@ -617,7 +617,7 @@ function GirlsNight({ rows, common }) {
         <div className="sb-gn-body">
           <div className="sb-gn-kicker">Grab the popcorn</div>
           <div className="sb-gn-title">Girls Night</div>
-          <div className="sb-gn-sub">Rom-coms, chick flicks and the shows you binge together</div>
+          <div className="sb-gn-sub">Rom-coms, chick flicks, Baddies and the shows you binge together</div>
         </div>
       </div>
       <div className="sb-chips" role="tablist" aria-label="Girls Night">

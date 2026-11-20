@@ -444,6 +444,145 @@
    "label": "Shows",
    "rows": [
     {
+     "id": "gn-s-zeus",
+     "title": "Baddies & Zeus",
+     "sub": "Baddies, Joseline's Cabaret and the Zeus Network drama",
+     "items": [
+      {
+       "title": "Baddies USA: Chapter 3",
+       "year": 2026,
+       "tmdb_id": 337395,
+       "type": "tv"
+      },
+      {
+       "title": "Baddies USA",
+       "year": 2025,
+       "tmdb_id": 306499,
+       "type": "tv"
+      },
+      {
+       "title": "Baddies Africa",
+       "year": 2025,
+       "tmdb_id": 291017,
+       "type": "tv"
+      },
+      {
+       "title": "Baddies Gone Wild",
+       "year": 2025,
+       "tmdb_id": 291018,
+       "type": "tv"
+      },
+      {
+       "title": "Baddies Midwest",
+       "year": 2024,
+       "tmdb_id": 275096,
+       "type": "tv"
+      },
+      {
+       "title": "Baddies Caribbean",
+       "year": 2024,
+       "tmdb_id": 253092,
+       "type": "tv"
+      },
+      {
+       "title": "Baddies East",
+       "year": 2023,
+       "tmdb_id": 234927,
+       "type": "tv"
+      },
+      {
+       "title": "Baddies West",
+       "year": 2023,
+       "tmdb_id": 218537,
+       "type": "tv"
+      },
+      {
+       "title": "Baddies South",
+       "year": 2022,
+       "tmdb_id": 204410,
+       "type": "tv"
+      },
+      {
+       "title": "Baddies ATL",
+       "year": 2021,
+       "tmdb_id": 206329,
+       "type": "tv"
+      },
+      {
+       "title": "Baddies Caribbean Auditions",
+       "year": 2024,
+       "tmdb_id": 246811,
+       "type": "tv"
+      },
+      {
+       "title": "Baddies Caribbean Reunion",
+       "year": 2024,
+       "tmdb_id": 273647,
+       "type": "tv"
+      },
+      {
+       "title": "Baddies Midwest Reunion",
+       "year": 2025,
+       "tmdb_id": 288715,
+       "type": "tv"
+      },
+      {
+       "title": "Joseline's Cabaret California",
+       "year": 2025,
+       "tmdb_id": 297403,
+       "type": "tv"
+      },
+      {
+       "title": "Joseline's Cabaret Texas",
+       "year": 2024,
+       "tmdb_id": 271079,
+       "type": "tv"
+      },
+      {
+       "title": "Joseline's Cabaret: New York",
+       "year": 2023,
+       "tmdb_id": 230451,
+       "type": "tv"
+      },
+      {
+       "title": "Joseline's Cabaret: Las Vegas",
+       "year": 2022,
+       "tmdb_id": 194822,
+       "type": "tv"
+      },
+      {
+       "title": "Joseline's Cabaret: Atlanta",
+       "year": 2021,
+       "tmdb_id": 132881,
+       "type": "tv"
+      },
+      {
+       "title": "Joseline's Cabaret: Miami",
+       "year": 2020,
+       "tmdb_id": 100048,
+       "type": "tv"
+      },
+      {
+       "title": "The Real Blac Chyna",
+       "year": 2019,
+       "tmdb_id": 91421,
+       "type": "tv"
+      },
+      {
+       "title": "One Mo' Chance",
+       "year": 2020,
+       "tmdb_id": 156307,
+       "type": "tv"
+      },
+      {
+       "title": "Bad Girls Club",
+       "year": 2006,
+       "tmdb_id": 4940,
+       "type": "tv"
+      }
+     ]
+    },
+    {
      "id": "gn-s-picks",
      "title": "Girls Night Shows",
      "sub": "Sex and the City, Gossip Girl, Bridgerton and more",
