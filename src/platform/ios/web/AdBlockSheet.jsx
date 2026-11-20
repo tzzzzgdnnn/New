@@ -72,8 +72,8 @@ export default function AdBlockSheet() {
           <>
             <h2 id="sp-ab-title">Block ads &amp; pop-ups</h2>
             <p className="sp-ab-lead">
-              Install the Super Player Ad Block profile. It blocks the ad and pop-up domains the app already knows about,
-              right on your iPhone.
+              Install the Super Player Ad Block profile. It switches this device to ad-blocking encrypted DNS
+              (AdGuard), so ad and pop-up domains don't load.
             </p>
             <a
               className="sp-ab-primary"
