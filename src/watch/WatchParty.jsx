@@ -13,6 +13,7 @@ import { prettyCode, normalizeCode, isValidCode, mediaKey, cleanMedia, MAX_MEMBE
 import { createWebAdapter } from "./adapters/web.js";
 import { createIosAdapter, isIosNative } from "./adapters/ios.js";
 import { tmdbJson, imgUrl } from "../utils/api.js";
+import { startPresence } from "./presence.js";
 import "./watch-party.css";
 
 const CONFIG_URL = "https://tzzzzgdnnn.github.io/New/watch/config.json";
@@ -571,6 +572,15 @@ export default function WatchParty({ page, onOpenTitle }) {
   const [sheet, setSheet] = useState(false);
   const [toast, setToast] = useState(null);
   const inParty = !!party.state || party.status === "connecting" || party.status === "reconnecting";
+  // Live counter (everyone, every device): shown on Home.
+  const [live, setLive] = useState(null);
+  useEffect(() => {
+    let stop = null, gone = false;
+    roomServer()
+      .then((base) => { if (!gone) stop = startPresence(base, setLive); })
+      .catch(() => {});
+    return () => { gone = true; stop?.(); };
+  }, []);
   useEffect(() => {
     if (party.status === "ended") setToast("The party was ended by the host");
     else if (party.status === "room-full") setToast(party.notice || `Party is full (${MAX_MEMBERS}/${MAX_MEMBERS})`);
@@ -590,6 +600,12 @@ export default function WatchParty({ page, onOpenTitle }) {
       {inParty && <PartyBar party={party} onOpenTitle={onOpenTitle} />}
       {sheet && !inParty && <StartSheet party={party} onClose={() => setSheet(false)} />}
       {toast && <div className="wp-toast">{toast}</div>}
+      {live && page === "home" && !inParty && (
+        <div className="wp-live" aria-label="Live now">
+          <span className="wp-live-dot" />
+          {live.online.toLocaleString()} online · {live.watching.toLocaleString()} watching
+        </div>
+      )}
     </div>,
     document.body,
   );

@@ -7,6 +7,8 @@
 //   GET  /rooms/:code/ws?id=&platform=&name=           join (WebSocket)
 //
 //   POST /turn                  -> { iceServers }      voice: STUN + short-lived TURN credentials
+//   POST /presence {id,watching,platform} -> { online, watching, byPlatform }  live counter (heartbeat)
+//   GET  /presence              -> same counts, read only
 //
 // Rooms are deleted EMPTY_ROOM_TTL_MS after the last person leaves.
 // WebSockets use the Durable Object Hibernation API (state.acceptWebSocket):
@@ -34,6 +36,12 @@ export async function handle(request, env, fetchImpl = globalThis.fetch) {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "superplayer-watch" });
   if (url.pathname === "/turn" && request.method === "POST") return json({ iceServers: await iceServers(env, fetchImpl) });
+  if (url.pathname === "/presence" && env.PRESENCE) {
+    const stub = env.PRESENCE.get(env.PRESENCE.idFromName("global"));
+    const body = request.method === "POST" ? await request.text() : "";
+    const res = await stub.fetch("https://presence/", { method: request.method === "POST" ? "POST" : "GET", body: body || undefined });
+    return json(await res.json());
+  }
   if (url.pathname === "/rooms" && request.method === "POST") {
     for (let i = 0; i < 6; i++) {
       const code = makeCode();
@@ -287,5 +295,46 @@ export class Room {
     } else this.core.emptySince = null;
     await this.save();
     await this.state.storage.setAlarm(this.now() + SWEEP_MS);
+  }
+}
+
+
+// ── Live counter ─────────────────────────────────────────────────────────
+// One object for the whole app. Each open app (iPhone, Android, web) sends a
+// heartbeat every PRESENCE_BEAT_MS with a random device id and whether a
+// video is playing; anyone heard from in the last PRESENCE_TTL_MS counts.
+// Only counts are kept: no names, no titles, nothing written to storage.
+export const PRESENCE_TTL_MS = 75_000;
+const PLATFORMS = ["ios", "android", "web"];
+export class Presence {
+  constructor(state, env, { now = () => Date.now() } = {}) {
+    this.now = now;
+    this.seen = new Map(); // id -> { at, watching, platform }
+  }
+  counts() {
+    const cut = this.now() - PRESENCE_TTL_MS;
+    let online = 0, watching = 0;
+    const byPlatform = { ios: 0, android: 0, web: 0 };
+    for (const [id, v] of this.seen) {
+      if (v.at < cut) { this.seen.delete(id); continue; }
+      online++;
+      if (v.watching) watching++;
+      byPlatform[v.platform]++;
+    }
+    return { online, watching, byPlatform };
+  }
+  async fetch(request) {
+    if (request.method === "POST") {
+      let b = {};
+      try { b = JSON.parse(await request.text()); } catch {}
+      const id = typeof b.id === "string" ? b.id.slice(0, 64) : "";
+      if (/^[A-Za-z0-9_-]{8,64}$/.test(id)) {
+        if (b.leaving) this.seen.delete(id);
+        else if (this.seen.has(id) || this.seen.size < 200_000) {
+          this.seen.set(id, { at: this.now(), watching: !!b.watching, platform: PLATFORMS.includes(b.platform) ? b.platform : "web" });
+        }
+      }
+    }
+    return new Response(JSON.stringify(this.counts()), { headers: { "content-type": "application/json" } });
   }
 }
