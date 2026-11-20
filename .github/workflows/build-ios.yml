@@ -55,6 +55,12 @@ jobs:
             xcode-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ios/App/App.xcodeproj/project.pbxproj', 'ios/App/CapApp-SPM/Package.swift', 'package-lock.json') }}-
             xcode-${{ runner.os }}-${{ runner.arch }}-
 
+      - name: Download math tests (Swift)
+        run: npm run test:swift
+
+      - name: Watch Together tests (sync engine, room, worker)
+        run: node --test watch-together/test.mjs watch-together/p2p.test.mjs
+
       - name: Build web (iOS mode)
         # TMDB token is built in via .env.ios
         run: npx vite build --mode ios

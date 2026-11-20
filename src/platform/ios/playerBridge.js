@@ -60,6 +60,9 @@ export function publishPlayerContext(ctx) {
       .then((r) => r?.ok && r.lang === (ctx.dubMode === "dub" ? "dub" : "sub") && warmWeb(ctx, r.source, true))
       .catch(() => {});
   }
+  if (!import.meta.env.VITE_WEB && ctx && !ctx.isAnime && ctx.tmdbId) import("./sevenmovies").then((m) => m.prefetchSevenMovies(ctx)).catch(() => {});
+  if (!import.meta.env.VITE_WEB && ctx && !ctx.isAnime && ctx.tmdbId) import("./flixer").then((m) => m.prefetchFlixer(ctx)).catch(() => {});
+  if (!import.meta.env.VITE_WEB && ctx && !ctx.isAnime && ctx.tmdbId) import("./rivestream").then((m) => m.prefetchRive(ctx)).catch(() => {});
   // Measure the title's servers now (player Auto ranking), not on Play.
   import("./webview").then((m) => m.prefetchTitle(ctx)).catch(() => {});
 }
@@ -109,13 +112,14 @@ export function useAnimeServerGuard({ isAnime, playerSource, dubMode, setPlayerS
     if (!IS_IOS || !isAnime) return;
     const usable = sourcesForContent(true).filter((s) => !s.async);
     if (!usable.length) return;
-    const animeRoute = usable.find((s) => s.animeUrl);
+    // Built-in anime routes only: a custom server leads only when picked by hand.
+    const animeRoute = usable.find((s) => s.animeUrl && !s.custom);
     const enteredDub = dubMode === "dub" && dubAppliedRef.current !== "dub";
     dubAppliedRef.current = dubMode;
     if (enteredDub && animeRoute && playerSource !== animeRoute.id) {
       setPlayerSource(animeRoute.id);
     } else if (!usable.some((s) => s.id === playerSource)) {
-      setPlayerSource((animeRoute || usable[0]).id);
+      setPlayerSource((animeRoute || usable.find((s) => !s.custom) || usable[0]).id);
     }
   }, [isAnime, playerSource, dubMode, setPlayerSource]);
 }

@@ -14,6 +14,7 @@ import {
   useCallback,
   useMemo,
   useRef,
+  useLayoutEffect,
   lazy,
   Suspense,
 } from "react";
@@ -69,6 +70,8 @@ const SearchModal = lazy(() => import("./components/SearchModal"));
 // Lazy-loaded pages: each chunk is only downloaded when the user first visits
 const HomePage = lazy(() => import("./pages/HomePage"));
 const MoviePage = lazy(() => import("./pages/MoviePage"));
+// Watch Party: iPhone app, web app and Android app (web adapter, PeerJS P2P).
+const WatchParty = lazy(() => import("./watch/WatchParty"));
 const TVPage = lazy(() => import("./pages/TVPage"));
 const LibraryPage = lazy(() => import("./pages/LibraryPage"));
 const DownloadsPage = lazy(() => import("./pages/DownloadsPage"));
@@ -132,8 +135,15 @@ export default function App() {
   const [episodeCheckStatus, setEpisodeCheckStatus] = useState(null);
   const episodeDismissTimerRef = useRef(null);
 
-  const [trending, setTrending] = useState([]);
-  const [trendingTV, setTrendingTV] = useState([]);
+  // Web app: Home opens on the last trending rows saved on the phone (even
+  // old ones), refreshed quietly, instead of a blank Home on every launch.
+  const [launchTrending] = useState(() =>
+    import.meta.env.VITE_WEB
+      ? readTrendingCache(storage.get(STORAGE_KEYS.TMDB_LANG) || "en-US", { allowStale: true })
+      : null,
+  );
+  const [trending, setTrending] = useState(() => launchTrending?.movies || []);
+  const [trendingTV, setTrendingTV] = useState(() => launchTrending?.tv || []);
   const [loadingHome, setLoadingHome] = useState(false);
   const [offline, setOffline] = useState(() => !navigator.onLine);
 
@@ -583,13 +593,14 @@ export default function App() {
   const fetchTrending = useCallback(() => {
     if (!apiKey) return;
     const lang = storage.get(STORAGE_KEYS.TMDB_LANG) || "en-US";
-    const cached = readTrendingCache(lang);
+    const cached = readTrendingCache(lang, { allowStale: !!import.meta.env.VITE_WEB });
     if (cached) {
       setTrending(cached.movies);
       setTrendingTV(cached.tv);
-      return;
+      if (!cached.stale) return;
     }
-    setLoadingHome(true);
+    // A stale copy stays on screen while the fresh one loads (no skeleton).
+    if (!cached) setLoadingHome(true);
     Promise.all([
       tmdbFetch("/trending/movie/week", apiKey),
       tmdbFetch("/trending/tv/week", apiKey),
@@ -777,7 +788,35 @@ export default function App() {
     }
   }, []);
 
+  // Home keep-alive + its scroll position (see the Home render below).
+  const homeSeenRef = useRef(false);
+  if (page === "home") homeSeenRef.current = true;
+  const homeScrollRef = useRef(0);
+  const lastPageRef = useRef(page);
+  useLayoutEffect(() => {
+    const main = document.querySelector(".main");
+    const prev = lastPageRef.current;
+    lastPageRef.current = page;
+    if (!main || prev === page) return;
+    if (page === "home") main.scrollTop = homeScrollRef.current;
+    else main.scrollTop = 0;
+  }, [page]);
+  useEffect(() => {
+    const main = document.querySelector(".main");
+    if (!main) return;
+    const onScroll = () => { if (pageRef.current === "home") homeScrollRef.current = main.scrollTop; };
+    main.addEventListener("scroll", onScroll, { passive: true });
+    return () => main.removeEventListener("scroll", onScroll);
+  }, []);
+
   const navigate = useCallback((pg, data = null) => {
+    // Home tapped while on Home: glide back to the top, like the app.
+    if (pg === "home" && pageRef.current === "home" && !data) {
+      document.querySelector(".main")?.scrollTo({ top: 0, behavior: "smooth" });
+      showSearchRef.current = false;
+      setShowSearch(false);
+      return;
+    }
     const stack = pushNav(
       navStackRef.current,
       { page: pageRef.current, selected: selectedRef.current },
@@ -1286,7 +1325,11 @@ export default function App() {
             }
           >
             <PageBoundary resetKey={`${page}:${selected?.id ?? ""}`}>
-            {page === "home" && (
+            {/* Home stays mounted once opened (hidden on other pages), so
+                tapping Home is instant: same rows, same posters, same scroll,
+                like the iPhone app, instead of rebuilding the page. */}
+            {(page === "home" || homeSeenRef.current) && (
+              <div className="sp-keep-home" style={page === "home" ? undefined : { display: "none" }}>
               <HomePage
                 trending={trending}
                 trendingTV={trendingTV}
@@ -1306,6 +1349,7 @@ export default function App() {
                 saved={savedList}
                 onSearch={() => setShowSearch(true)}
               />
+              </div>
             )}
             {page === "movie" && selected && (
               <KidsTitleGate item={selected} type="movie" apiKey={apiKey} onBack={navigateBackOrHome}>
@@ -1677,6 +1721,22 @@ export default function App() {
         )}
         {KeyboardShortcutsModal && showShortcuts && (
           <Suspense fallback={null}><KeyboardShortcutsModal onClose={() => setShowShortcuts(false)} /></Suspense>
+        )}
+        {WatchParty && (
+          <Suspense fallback={null}>
+            <WatchParty
+              page={page}
+              onOpenTitle={(m) =>
+                navigate(m.type === "tv" ? "tv" : "movie", {
+                  id: m.tmdbId,
+                  media_type: m.type === "tv" ? "tv" : "movie",
+                  title: m.type === "tv" ? undefined : m.title,
+                  name: m.type === "tv" ? m.title : undefined,
+                  poster_path: m.poster || null,
+                })
+              }
+            />
+          </Suspense>
         )}
       </div>
     </ErrorBoundary>

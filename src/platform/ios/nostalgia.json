@@ -517,31 +517,36 @@
    "title": "Hannah Montana",
    "year": 2006,
    "tmdb_id": 4610,
-   "network": "Disney"
+   "network": "Disney",
+   "teen": true
   },
   {
    "title": "Drake & Josh",
    "year": 2004,
    "tmdb_id": 2038,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "iCarly",
    "year": 2007,
    "tmdb_id": 5371,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "The Suite Life of Zack & Cody",
    "year": 2005,
    "tmdb_id": 4605,
-   "network": "Disney"
+   "network": "Disney",
+   "teen": true
   },
   {
    "title": "That's So Raven",
    "year": 2003,
    "tmdb_id": 4602,
-   "network": "Disney"
+   "network": "Disney",
+   "teen": true
   },
   {
    "title": "Phineas and Ferb",
@@ -565,7 +570,8 @@
    "title": "Wizards of Waverly Place",
    "year": 2007,
    "tmdb_id": 3498,
-   "network": "Disney"
+   "network": "Disney",
+   "teen": true
   },
   {
    "title": "Kim Possible",
@@ -607,7 +613,8 @@
    "title": "Lizzie McGuire",
    "year": 2001,
    "tmdb_id": 4575,
-   "network": "Disney"
+   "network": "Disney",
+   "teen": true
   },
   {
    "title": "Hey Arnold!",
@@ -631,13 +638,15 @@
    "title": "Zoey 101",
    "year": 2005,
    "tmdb_id": 1778,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "Victorious",
    "year": 2010,
    "tmdb_id": 31251,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "Adventure Time",
@@ -667,7 +676,8 @@
    "title": "Ned's Declassified School Survival Guide",
    "year": 2004,
    "tmdb_id": 1600,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "The Adventures of Jimmy Neutron: Boy Genius",
@@ -697,7 +707,8 @@
    "title": "Even Stevens",
    "year": 2000,
    "tmdb_id": 3200,
-   "network": "Disney"
+   "network": "Disney",
+   "teen": true
   },
   {
    "title": "Johnny Bravo",
@@ -721,7 +732,8 @@
    "title": "Big Time Rush",
    "year": 2009,
    "tmdb_id": 31356,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "The Amazing World of Gumball",
@@ -733,25 +745,29 @@
    "title": "Good Luck Charlie",
    "year": 2010,
    "tmdb_id": 21641,
-   "network": "Disney"
+   "network": "Disney",
+   "teen": true
   },
   {
    "title": "Kenan & Kel",
    "year": 1996,
    "tmdb_id": 1835,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "All That",
    "year": 1994,
    "tmdb_id": 3814,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "The Amanda Show",
    "year": 1999,
    "tmdb_id": 376,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "CatDog",
@@ -787,43 +803,50 @@
    "title": "Boy Meets World",
    "year": 1993,
    "tmdb_id": 1777,
-   "network": "Other"
+   "network": "Other",
+   "teen": true
   },
   {
    "title": "Sonny with a Chance",
    "year": 2009,
    "tmdb_id": 33873,
-   "network": "Disney"
+   "network": "Disney",
+   "teen": true
   },
   {
    "title": "Jessie",
    "year": 2011,
    "tmdb_id": 38974,
-   "network": "Disney"
+   "network": "Disney",
+   "teen": true
   },
   {
    "title": "Austin & Ally",
    "year": 2011,
    "tmdb_id": 35279,
-   "network": "Disney"
+   "network": "Disney",
+   "teen": true
   },
   {
    "title": "Henry Danger",
    "year": 2014,
    "tmdb_id": 61852,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "Sam & Cat",
    "year": 2013,
    "tmdb_id": 45666,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "Degrassi: The Next Generation",
    "year": 2001,
    "tmdb_id": 1948,
-   "network": "Other"
+   "network": "Other",
+   "teen": true
   },
   {
    "title": "Steven Universe",
@@ -961,19 +984,22 @@
    "title": "Lab Rats",
    "year": 2012,
    "tmdb_id": 38867,
-   "network": "Disney"
+   "network": "Disney",
+   "teen": true
   },
   {
    "title": "Unfabulous",
    "year": 2004,
    "tmdb_id": 2967,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "True Jackson, VP",
    "year": 2008,
    "tmdb_id": 7714,
-   "network": "Nickelodeon"
+   "network": "Nickelodeon",
+   "teen": true
   },
   {
    "title": "Xiaolin Showdown",
@@ -1034,6 +1060,547 @@
    "year": 1996,
    "tmdb_id": 2153,
    "network": "Other"
+  },
+  {
+   "title": "El Tigre: The Adventures of Manny Rivera",
+   "year": 2007,
+   "tmdb_id": 6046,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "The Mighty B!",
+   "year": 2008,
+   "tmdb_id": 15641,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Back at the Barnyard",
+   "year": 2007,
+   "tmdb_id": 9921,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "The Penguins of Madagascar",
+   "year": 2008,
+   "tmdb_id": 7869,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "My Life as a Teenage Robot",
+   "year": 2002,
+   "tmdb_id": 178,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "ChalkZone",
+   "year": 2002,
+   "tmdb_id": 4413,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Catscratch",
+   "year": 2005,
+   "tmdb_id": 3805,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Tak and the Power of Juju",
+   "year": 2007,
+   "tmdb_id": 5340,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Wayside",
+   "year": 2007,
+   "tmdb_id": 3412,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Planet Sheen",
+   "year": 2010,
+   "tmdb_id": 18848,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "The X's",
+   "year": 2005,
+   "tmdb_id": 4511,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Making Fiends",
+   "year": 2008,
+   "tmdb_id": 14526,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Oh Yeah! Cartoons",
+   "year": 1998,
+   "tmdb_id": 1498,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "The Legend of Korra",
+   "year": 2012,
+   "tmdb_id": 33880,
+   "network": "Nickelodeon"
+  },
+  {
+   "title": "Romeo!",
+   "year": 2003,
+   "tmdb_id": 4000,
+   "network": "Nickelodeon",
+   "teen": true
+  },
+  {
+   "title": "Just Jordan",
+   "year": 2007,
+   "tmdb_id": 898,
+   "network": "Nickelodeon",
+   "teen": true
+  },
+  {
+   "title": "The Naked Brothers Band",
+   "year": 2007,
+   "tmdb_id": 3878,
+   "network": "Nickelodeon",
+   "teen": true
+  },
+  {
+   "title": "Cousin Skeeter",
+   "year": 1998,
+   "tmdb_id": 6510,
+   "network": "Nickelodeon",
+   "teen": true
+  },
+  {
+   "title": "Taina",
+   "year": 2001,
+   "tmdb_id": 1190,
+   "network": "Nickelodeon",
+   "teen": true
+  },
+  {
+   "title": "The Troop",
+   "year": 2009,
+   "tmdb_id": 19169,
+   "network": "Nickelodeon",
+   "teen": true
+  },
+  {
+   "title": "How to Rock",
+   "year": 2012,
+   "tmdb_id": 39034,
+   "network": "Nickelodeon",
+   "teen": true
+  },
+  {
+   "title": "Supah Ninjas",
+   "year": 2011,
+   "tmdb_id": 35299,
+   "network": "Nickelodeon",
+   "teen": true
+  },
+  {
+   "title": "The Brothers García",
+   "year": 2000,
+   "tmdb_id": 1360,
+   "network": "Nickelodeon",
+   "teen": true
+  },
+  {
+   "title": "Camp Lazlo",
+   "year": 2005,
+   "tmdb_id": 557,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "The Life and Times of Juniper Lee",
+   "year": 2005,
+   "tmdb_id": 446,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "My Gym Partner's a Monkey",
+   "year": 2005,
+   "tmdb_id": 234,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Class of 3000",
+   "year": 2006,
+   "tmdb_id": 2094,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Megas XLR",
+   "year": 2004,
+   "tmdb_id": 472,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Squirrel Boy",
+   "year": 2006,
+   "tmdb_id": 262,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Robotboy",
+   "year": 2005,
+   "tmdb_id": 1534,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Hi Hi Puffy AmiYumi",
+   "year": 2004,
+   "tmdb_id": 255,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Time Squad",
+   "year": 2001,
+   "tmdb_id": 4314,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Sheep in the Big City",
+   "year": 2000,
+   "tmdb_id": 1477,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Evil Con Carne",
+   "year": 2003,
+   "tmdb_id": 4246,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Mike, Lu & Og",
+   "year": 1999,
+   "tmdb_id": 4350,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Cow and Chicken",
+   "year": 1997,
+   "tmdb_id": 3611,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "I Am Weasel",
+   "year": 1997,
+   "tmdb_id": 177,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Ben 10: Alien Force",
+   "year": 2008,
+   "tmdb_id": 6040,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Ben 10: Ultimate Alien",
+   "year": 2010,
+   "tmdb_id": 31109,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Generator Rex",
+   "year": 2010,
+   "tmdb_id": 32118,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Total Drama Island",
+   "year": 2007,
+   "tmdb_id": 6618,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Star Wars: Clone Wars",
+   "year": 2003,
+   "tmdb_id": 3122,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Justice League",
+   "year": 2001,
+   "tmdb_id": 1618,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Out of Jimmy's Head",
+   "year": 2007,
+   "tmdb_id": 14241,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "The Secret Saturdays",
+   "year": 2008,
+   "tmdb_id": 14636,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Batman: The Brave and the Bold",
+   "year": 2008,
+   "tmdb_id": 15804,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Hero: 108",
+   "year": 2010,
+   "tmdb_id": 32246,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "Sym-Bionic Titan",
+   "year": 2010,
+   "tmdb_id": 32315,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "IGPX: Immortal Grand Prix",
+   "year": 2005,
+   "tmdb_id": 23475,
+   "network": "Cartoon Network"
+  },
+  {
+   "title": "The Emperor's New School",
+   "year": 2006,
+   "tmdb_id": 4623,
+   "network": "Disney"
+  },
+  {
+   "title": "Brandy & Mr. Whiskers",
+   "year": 2004,
+   "tmdb_id": 618,
+   "network": "Disney"
+  },
+  {
+   "title": "Dave the Barbarian",
+   "year": 2004,
+   "tmdb_id": 1960,
+   "network": "Disney"
+  },
+  {
+   "title": "The Replacements",
+   "year": 2006,
+   "tmdb_id": 4627,
+   "network": "Disney"
+  },
+  {
+   "title": "Fillmore!",
+   "year": 2002,
+   "tmdb_id": 1547,
+   "network": "Disney"
+  },
+  {
+   "title": "Teamo Supremo",
+   "year": 2002,
+   "tmdb_id": 9793,
+   "network": "Disney"
+  },
+  {
+   "title": "Lloyd in Space",
+   "year": 2001,
+   "tmdb_id": 3085,
+   "network": "Disney"
+  },
+  {
+   "title": "Buzz Lightyear of Star Command",
+   "year": 2000,
+   "tmdb_id": 3744,
+   "network": "Disney"
+  },
+  {
+   "title": "Disney's House of Mouse",
+   "year": 2001,
+   "tmdb_id": 2467,
+   "network": "Disney"
+  },
+  {
+   "title": "The Buzz on Maggie",
+   "year": 2005,
+   "tmdb_id": 426,
+   "network": "Disney"
+  },
+  {
+   "title": "Yin Yang Yo!",
+   "year": 2006,
+   "tmdb_id": 3809,
+   "network": "Disney"
+  },
+  {
+   "title": "Jimmy Two-Shoes",
+   "year": 2009,
+   "tmdb_id": 17436,
+   "network": "Disney"
+  },
+  {
+   "title": "Fish Hooks",
+   "year": 2010,
+   "tmdb_id": 31499,
+   "network": "Disney"
+  },
+  {
+   "title": "Cory in the House",
+   "year": 2007,
+   "tmdb_id": 119,
+   "network": "Disney",
+   "teen": true
+  },
+  {
+   "title": "Phil of the Future",
+   "year": 2004,
+   "tmdb_id": 1528,
+   "network": "Disney",
+   "teen": true
+  },
+  {
+   "title": "JONAS",
+   "year": 2009,
+   "tmdb_id": 12712,
+   "network": "Disney",
+   "teen": true
+  },
+  {
+   "title": "The Famous Jett Jackson",
+   "year": 1998,
+   "tmdb_id": 92,
+   "network": "Disney",
+   "teen": true
+  },
+  {
+   "title": "The Suite Life on Deck",
+   "year": 2008,
+   "tmdb_id": 15079,
+   "network": "Disney",
+   "teen": true
+  },
+  {
+   "title": "Shake It Up",
+   "year": 2010,
+   "tmdb_id": 33213,
+   "network": "Disney",
+   "teen": true
+  },
+  {
+   "title": "A.N.T. Farm",
+   "year": 2011,
+   "tmdb_id": 34573,
+   "network": "Disney",
+   "teen": true
+  },
+  {
+   "title": "Pair of Kings",
+   "year": 2010,
+   "tmdb_id": 31628,
+   "network": "Disney",
+   "teen": true
+  },
+  {
+   "title": "Zeke and Luther",
+   "year": 2009,
+   "tmdb_id": 17519,
+   "network": "Disney",
+   "teen": true
+  },
+  {
+   "title": "Kickin' It",
+   "year": 2011,
+   "tmdb_id": 32716,
+   "network": "Disney",
+   "teen": true
+  },
+  {
+   "title": "What's New, Scooby-Doo?",
+   "year": 2002,
+   "tmdb_id": 652,
+   "network": "Boomerang"
+  },
+  {
+   "title": "Tom and Jerry Tales",
+   "year": 2006,
+   "tmdb_id": 676,
+   "network": "Boomerang"
+  },
+  {
+   "title": "The Pink Panther",
+   "year": 1993,
+   "tmdb_id": 14693,
+   "network": "Boomerang"
+  },
+  {
+   "title": "Wacky Races",
+   "year": 1968,
+   "tmdb_id": 985,
+   "network": "Boomerang"
+  },
+  {
+   "title": "The Smurfs",
+   "year": 1981,
+   "tmdb_id": 5687,
+   "network": "Boomerang"
+  },
+  {
+   "title": "A Pup Named Scooby-Doo",
+   "year": 1988,
+   "tmdb_id": 418,
+   "network": "Boomerang"
+  },
+  {
+   "title": "Tom & Jerry Kids Show",
+   "year": 1990,
+   "tmdb_id": 4274,
+   "network": "Boomerang"
+  },
+  {
+   "title": "Garfield and Friends",
+   "year": 1988,
+   "tmdb_id": 4606,
+   "network": "Boomerang"
+  },
+  {
+   "title": "Baby Looney Tunes",
+   "year": 2002,
+   "tmdb_id": 670,
+   "network": "Boomerang"
+  },
+  {
+   "title": "Krypto the Superdog",
+   "year": 2005,
+   "tmdb_id": 1453,
+   "network": "Boomerang"
+  },
+  {
+   "title": "Duck Dodgers",
+   "year": 2003,
+   "tmdb_id": 216,
+   "network": "Boomerang"
+  },
+  {
+   "title": "Loonatics Unleashed",
+   "year": 2005,
+   "tmdb_id": 1977,
+   "network": "Boomerang"
+  },
+  {
+   "title": "Captain Planet and the Planeteers",
+   "year": 1990,
+   "tmdb_id": 478,
+   "network": "Boomerang"
+  },
+  {
+   "title": "Josie and the Pussycats",
+   "year": 1970,
+   "tmdb_id": 4489,
+   "network": "Boomerang"
+  },
+  {
+   "title": "Dastardly and Muttley in Their Flying Machines",
+   "year": 1969,
+   "tmdb_id": 10097,
+   "network": "Boomerang"
   }
  ],
  "anime": [
@@ -1216,6 +1783,96 @@
    "year": 1998,
    "tmdb_id": 10228,
    "type": "movie"
+  },
+  {
+   "title": "Zatch Bell!",
+   "year": 2003,
+   "tmdb_id": 35894,
+   "type": "tv"
+  },
+  {
+   "title": ".hack//Sign",
+   "year": 2002,
+   "tmdb_id": 8864,
+   "type": "tv"
+  },
+  {
+   "title": "Yu-Gi-Oh! GX",
+   "year": 2004,
+   "tmdb_id": 12536,
+   "type": "tv"
+  },
+  {
+   "title": "Shaman King",
+   "year": 2001,
+   "tmdb_id": 40143,
+   "type": "tv"
+  },
+  {
+   "title": "Bakugan Battle Brawlers",
+   "year": 2007,
+   "tmdb_id": 34109,
+   "type": "tv"
+  },
+  {
+   "title": "Rave Master",
+   "year": 2001,
+   "tmdb_id": 37473,
+   "type": "tv"
+  },
+  {
+   "title": "Mega Man NT Warrior",
+   "year": 2002,
+   "tmdb_id": 5653,
+   "type": "tv"
+  },
+  {
+   "title": "Sonic X",
+   "year": 2003,
+   "tmdb_id": 10926,
+   "type": "tv"
+  },
+  {
+   "title": "Kirby: Right Back at Ya!",
+   "year": 2001,
+   "tmdb_id": 14891,
+   "type": "tv"
+  },
+  {
+   "title": "Medabots",
+   "year": 1999,
+   "tmdb_id": 11235,
+   "type": "tv"
+  },
+  {
+   "title": "Monster Rancher",
+   "year": 1999,
+   "tmdb_id": 15130,
+   "type": "tv"
+  },
+  {
+   "title": "Zoids: Chaotic Century",
+   "year": 1999,
+   "tmdb_id": 37419,
+   "type": "tv"
+  },
+  {
+   "title": "Tenchi Muyo! GXP",
+   "year": 2002,
+   "tmdb_id": 42881,
+   "type": "tv"
+  },
+  {
+   "title": "Dragon Ball Z Kai",
+   "year": 2009,
+   "tmdb_id": 61709,
+   "type": "tv"
+  },
+  {
+   "title": "Transformers: Armada",
+   "year": 2003,
+   "tmdb_id": 982,
+   "type": "tv"
   }
  ],
  "tmdb_network_ids": {

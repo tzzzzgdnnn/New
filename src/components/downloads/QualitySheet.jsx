@@ -22,6 +22,7 @@ export default function QualitySheet({
   dub = false,
   preferredLang = "en",
   onClose,
+  extra = null, // optional block under the title (iOS: the server choice)
 }) {
   const [probe, setProbe] = useState(null);
   const [error, setError] = useState(null);
@@ -81,6 +82,7 @@ export default function QualitySheet({
           </button>
         </div>
         <div className="pd-sheet__name">{title}</div>
+        {extra}
 
         {!probe && !error && (
           <div className="pd-sheet__status" role="status">

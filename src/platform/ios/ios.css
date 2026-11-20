@@ -506,6 +506,25 @@ html.sb-ios .sb-horror-sub { font-size: 13px; color: #c9b4b4; margin-top: 4px; }
   html.sb-ios .sb-horror-title { font-size: 48px; }
 }
 
+/* ── Girls Night section (HomeSections.jsx) ──────────────────────────────── */
+html.sb-ios .sb-gn { margin-top: 18px; padding-bottom: 6px;
+  background: linear-gradient(to bottom, rgba(255,64,150,.14), rgba(120,0,80,.06) 320px, transparent 640px); }
+html.sb-ios .sb-gn-head { position: relative; height: 210px; margin: 0 24px 12px; border-radius: 16px; overflow: hidden;
+  background: #1a0610; box-shadow: 0 18px 48px rgba(255,40,140,.22), inset 0 0 0 1px rgba(255,120,190,.16); }
+html.sb-ios .sb-gn-head img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: saturate(1.15) brightness(.75); }
+html.sb-ios .sb-gn-shade { position: absolute; inset: 0;
+  background: linear-gradient(to top, rgba(20,0,12,.95), rgba(120,10,70,.35) 60%, rgba(0,0,0,.2)); }
+html.sb-ios .sb-gn-body { position: absolute; left: 22px; right: 22px; bottom: 18px; }
+html.sb-ios .sb-gn-kicker { font-size: 11px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; color: #ff7ab8; }
+html.sb-ios .sb-gn-title { font-family: "Bebas Neue", sans-serif; font-size: 58px; line-height: .95; letter-spacing: 3px; color: #fff0f7;
+  text-shadow: 0 0 12px rgba(255,80,170,.7), 0 0 30px rgba(200,0,120,.5); }
+html.sb-ios .sb-gn-sub { font-size: 13px; color: #f3c9dc; margin-top: 4px; }
+html.sb-ios .sb-gn-chip.on { background: #ff4fa0; border-color: #ffd0e6; color: #fff; }
+@media (max-width: 600px) {
+  html.sb-ios .sb-gn-head { margin: 0 16px 10px; height: 180px; }
+  html.sb-ios .sb-gn-title { font-size: 48px; }
+}
+
 /* ── Native player placeholder (webview.js) ─────────────────────────────── */
 html.sb-ios .sb-native-card { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: #000; color: #d4d4d4; font: 500 14px -apple-system, system-ui, sans-serif; text-align: center; padding: 16px; }
 html.sb-ios .sb-native-play { min-height: 44px; min-width: 120px; padding: 0 22px; border: 0; border-radius: 22px; background: #e50914; color: #fff; font: 600 16px -apple-system, system-ui, sans-serif; }
@@ -585,3 +604,68 @@ html.sb-ios .episode-info { position: relative; }
 html.sb-ios .episode-info:has(> .ep-dl-btn) .episode-name { padding-right: 44px; }
 html.sb-ios .ep-dl-btn { position: absolute; top: -6px; right: -6px; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 22px; background: transparent; color: var(--text2, #ccc); }
 html.sb-ios .ep-dl-btn:active { background: rgba(255, 255, 255, 0.12); color: var(--text, #fff); }
+
+/* ── Info sheet (episode synopsis) ─────────────────────────────────────── */
+html.sp-scroll-locked,
+html.sp-scroll-locked body,
+html.sp-scroll-locked .main {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+html.sb-ios .sp-info-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, .5);
+  touch-action: none;
+  animation: sbFadeIn .2s ease-out both;
+}
+html.sb-ios .sp-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 560px;
+  max-height: calc(100dvh - env(safe-area-inset-top) - 48px);
+  box-sizing: border-box;
+  padding: 8px max(20px, env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  border-radius: 16px 16px 0 0;
+  background: rgba(28, 28, 30, .96);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  backdrop-filter: blur(30px) saturate(180%);
+  color: #fff;
+  touch-action: none;
+  transition: transform .25s var(--sp-ease-out, ease-out);
+  /* backwards, not both: a held end state would override the drag offset. */
+  animation: spAsUp .32s var(--sp-ease-out, ease-out) backwards;
+}
+html.sb-ios .sp-info.is-dragging { transition: none; }
+html.sb-ios .sp-info-grabber { flex: 0 0 auto; width: 36px; height: 5px; margin: 0 auto 4px; border-radius: 3px; background: rgba(255, 255, 255, .25); }
+html.sb-ios .sp-info-title { font-size: clamp(17px, 4.6vw, 20px); font-weight: 700; line-height: 1.3; }
+html.sb-ios .sp-info-text {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  font-size: 15px;
+  line-height: 1.55;
+  color: rgba(235, 235, 245, .78);
+}
+html.sb-ios .sp-info-close {
+  flex: 0 0 auto;
+  min-height: 48px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(118, 118, 128, .24);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+}
+html.sb-ios .sp-info-close:active { background: rgba(118, 118, 128, .4); }
+@media (prefers-reduced-motion: reduce) {
+  html.sb-ios .sp-info, html.sb-ios .sp-info-scrim { animation: none; }
+}
+body.no-anim .sp-info, body.no-anim .sp-info-scrim { animation: none !important; transition: none !important; }

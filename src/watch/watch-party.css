@@ -1,0 +1,75 @@
+/* Watch Party (WatchParty.jsx): drawn above the player, chat on top of the movie. */
+.wp-root { position: fixed; inset: 0; pointer-events: none; z-index: 2147483000; font: 500 14px -apple-system, system-ui, "DM Sans", sans-serif; color: #fff; }
+.wp-root > * { pointer-events: auto; }
+.wp-fab { position: fixed; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 84px); padding: 12px 18px; border-radius: 24px; border: 0;
+  background: linear-gradient(135deg, #e50914, #ff4fa0); color: #fff; font-weight: 700; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+.wp-bar { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 8px); left: 8px; right: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px; border-radius: 14px; background: rgba(12,12,16,.78); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.wp-code-pill { font-weight: 800; letter-spacing: 2px; padding: 4px 10px; border-radius: 10px; background: rgba(255,255,255,.12); user-select: all; -webkit-user-select: all; }
+.wp-count { font-weight: 700; color: #ffd0e6; }
+.wp-dim { color: #bbb; font-size: 12px; }
+.wp-spacer { flex: 1; }
+.wp-btn { min-height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.08); color: #fff; font: inherit; font-weight: 600; }
+.wp-btn:disabled { opacity: .45; }
+.wp-btn.on { background: #1db954; border-color: #1db954; }
+.wp-btn-primary { background: #e50914; border-color: #e50914; }
+.wp-btn-danger { background: #8a1020; border-color: #c0162c; }
+.wp-now { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 66px); left: 50%; transform: translateX(-50%); padding: 10px 16px; border-radius: 20px; border: 0; background: #ff4fa0; color: #fff; font-weight: 700; }
+.wp-chat { position: fixed; left: 10px; bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); width: min(360px, calc(100vw - 20px)); display: flex; flex-direction: column; gap: 6px; transition: opacity .4s; }
+.wp-chat.faded { opacity: .35; }
+.wp-chat-list { max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.wp-chat-msg { align-self: flex-start; max-width: 100%; padding: 6px 10px; border-radius: 12px; background: rgba(0,0,0,.6); text-shadow: 0 1px 2px #000; word-wrap: break-word; overflow-wrap: anywhere; }
+.wp-chat-msg.mine { background: rgba(229,9,20,.55); }
+.wp-chat-name { font-weight: 800; color: #ffd0e6; }
+.wp-chat-compose { display: flex; gap: 6px; }
+.wp-chat-compose .wp-input { flex: 1; margin: 0; }
+.wp-chat-toggle { align-self: flex-start; position: relative; width: 44px; height: 44px; border-radius: 22px; border: 0; background: rgba(0,0,0,.65); font-size: 20px; }
+.wp-badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #e50914; color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; }
+.wp-sheet-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: flex-end; justify-content: center; }
+.wp-sheet { width: min(480px, 100vw); padding: 20px 18px calc(env(safe-area-inset-bottom, 0px) + 20px); border-radius: 18px 18px 0 0; background: #16161c; display: flex; flex-direction: column; gap: 10px; }
+.wp-sheet-title { font-size: 22px; font-weight: 800; }
+.wp-sheet-sub { color: #aaa; font-size: 13px; }
+.wp-input { width: 100%; box-sizing: border-box; min-height: 42px; padding: 0 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06); color: #fff; font: inherit; font-size: 16px; }
+.wp-code { letter-spacing: 3px; font-weight: 800; text-transform: uppercase; }
+.wp-or { text-align: center; color: #888; font-size: 12px; }
+.wp-join-row { display: flex; gap: 8px; }
+.wp-notice { color: #ffb4b4; font-size: 13px; }
+.wp-toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 90px); transform: translateX(-50%); padding: 10px 16px; border-radius: 14px; background: rgba(20,20,24,.95); }
+
+/* Chat sits beside / below the picture, never on it.
+   Portrait: a panel under the video. Landscape / wide: the video shrinks to
+   the left and the chat takes a column on the right. */
+.wp-chat { left: auto; right: 0; bottom: 0; top: auto; width: 100vw; max-height: 40vh; padding: 8px 10px calc(env(safe-area-inset-bottom, 0px) + 8px);
+  box-sizing: border-box; background: #0c0c10; border-top: 1px solid rgba(255,255,255,.08); }
+.wp-chat:not(.open) { width: auto; background: transparent; border: 0; padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); right: 10px; }
+.wp-chat:not(.open) .wp-chat-list { display: none; }
+.wp-chat.faded { opacity: 1; }
+.wp-chat .wp-chat-toggle { align-self: flex-end; }
+@media (orientation: landscape), (min-width: 900px) {
+  .wp-chat.open { top: 0; bottom: 0; width: min(34vw, 360px); max-height: none; border-top: 0; border-left: 1px solid rgba(255,255,255,.08);
+    padding-top: calc(env(safe-area-inset-top, 0px) + 64px); }
+  .wp-chat.open .wp-chat-list { flex: 1; max-height: none; }
+  /* Keep the party controls (Pick / Pause / Leave / End) clear of the chat column. */
+  html.wp-chat-open .wp-bar { right: calc(min(34vw, 360px) + 8px); }
+  html.wp-chat-open .sb-direct-video { width: calc(100% - min(34vw, 360px)) !important; right: auto !important; }
+  html.wp-chat-open :fullscreen { right: min(34vw, 360px) !important; width: auto !important; }
+}
+@media (orientation: portrait) and (max-width: 899px) {
+  html.wp-chat-open .sb-direct-video { height: 60% !important; bottom: auto !important; }
+}
+
+/* Picker: anything in the app (movies, shows, anime). */
+.wp-pick { max-height: 80vh; display: flex; flex-direction: column; }
+.wp-pick-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-top: 8px; min-height: 120px; }
+.wp-pick-row { display: flex; align-items: center; gap: 10px; background: rgba(255,255,255,.05); border: 0; border-radius: 10px; padding: 6px; color: inherit; text-align: left; cursor: pointer; }
+.wp-pick-row img, .wp-pick-noimg { width: 40px; height: 60px; border-radius: 6px; object-fit: cover; background: #222; flex: none; }
+.wp-pick-text { display: flex; flex-direction: column; min-width: 0; }
+.wp-pick-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp-pick-meta { font-size: 12px; opacity: .65; }
+.wp-se { display: flex; flex-direction: column; font-size: 12px; opacity: .85; flex: 1; }
+
+/* Live counter (Home). */
+.wp-live { position: fixed; left: 12px; bottom: calc(env(safe-area-inset-bottom, 0px) + 78px); z-index: 9998; display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 999px; background: rgba(12,12,16,.82); color: #fff; font-size: 12px; font-weight: 600; backdrop-filter: blur(8px); pointer-events: none; }
+.wp-live-dot { width: 8px; height: 8px; border-radius: 50%; background: #2fd36b; box-shadow: 0 0 0 0 rgba(47,211,107,.6); animation: wp-pulse 2s infinite; }
+@keyframes wp-pulse { 0% { box-shadow: 0 0 0 0 rgba(47,211,107,.6); } 70% { box-shadow: 0 0 0 8px rgba(47,211,107,0); } 100% { box-shadow: 0 0 0 0 rgba(47,211,107,0); } }

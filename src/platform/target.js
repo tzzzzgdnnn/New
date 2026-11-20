@@ -4,3 +4,4 @@ export const IS_IOS = import.meta.env.VITE_TARGET === "ios";
 
 // Display name of the iOS build.
 export const IOS_APP_NAME = "Super Player";
+export const CAN_DOWNLOAD = IS_IOS && !import.meta.env.VITE_WEB;

@@ -1,4 +1,4 @@
-import { IS_IOS } from "../platform/target";
+import { IS_IOS, CAN_DOWNLOAD } from "../platform/target";
 import AnimeDubPrompt, { shouldAskAnimeDub } from "../platform/ios/AnimeDubPrompt";
 import {
   getAnimeDubMode,
@@ -39,7 +39,7 @@ import {
   sourceIsAsync,
   sourceSupportsAnime,
   sourceIsAnimeCapable,
-  sourcesForContent,
+  sourcesForTitle,
   getAnimeSourceUrl,
   fetchAnilistData,
   ANILIST_MOVIE_FORMATS,
@@ -1093,7 +1093,7 @@ export default function MoviePage({
                     )}
                   </>
                 ))}
-              {IS_IOS && (
+              {CAN_DOWNLOAD && (
                 <button
                   className="btn btn-ghost"
                   onClick={() =>
@@ -1395,7 +1395,7 @@ export default function MoviePage({
                 style={{ top: menuPos.top, left: menuPos.left }}
                 onClick={(e) => e.stopPropagation()}
               >
-                {(IS_IOS ? sourcesForContent(isAnime) : PLAYER_SOURCES).map((src) => (
+                {(IS_IOS ? sourcesForTitle(isAnime, "movie") : PLAYER_SOURCES).map((src) => (
                   <button
                     key={src.id}
                     className={

@@ -39,18 +39,36 @@ check("playlist stats: byte-range playlists give the exact size") {
     return DLMath.playlistStats(p).exactBytes == 4000
 }
 
-check("estimate: exact beats samples beats bandwidth") {
-    var s = DLMath.PlaylistStats(durationSec: 4500, segments: 1586, exactBytes: nil)
-    // The bug: BANDWIDTH said ~1.1 Mbit/s (~637 MB) but segments are ~2.1 MB each.
-    let byBandwidth = DLMath.estimateBytes(s, sampledSegmentBytes: [], bandwidth: 1_132_000)
-    let bySamples = DLMath.estimateBytes(s, sampledSegmentBytes: [2 * MB, 2 * MB + MB / 2, 0, 2 * MB - MB / 2], bandwidth: 1_132_000)
+check("size: byte ranges are exact; AVERAGE-BANDWIDTH beats BANDWIDTH; × the playlist's own duration") {
+    var s = DLMath.PlaylistStats(durationSec: 2700, segments: 450, exactBytes: nil)
+    // 45-minute episode: 5 Mbit/s mean, 8 Mbit/s peak -> 5e6 × 2700 / 8 bytes.
+    let avg = DLMath.variantSize(video: s, averageBandwidth: 5_000_000, bandwidth: 8_000_000)
+    let peakOnly = DLMath.variantSize(video: s, averageBandwidth: 0, bandwidth: 8_000_000)
     s.exactBytes = 42
-    let exact = DLMath.estimateBytes(s, sampledSegmentBytes: [2 * MB], bandwidth: 1)
-    return byBandwidth == 636_750_000 && bySamples == 1586 * 2 * MB && exact == 42
+    let exact = DLMath.variantSize(video: s, averageBandwidth: 5_000_000, bandwidth: 8_000_000)
+    return avg == DLMath.SizeEstimate(bytes: 1_687_500_000, method: .bandwidth)
+        && peakOnly == DLMath.SizeEstimate(bytes: 2_700_000_000, method: .bandwidth)
+        && exact == DLMath.SizeEstimate(bytes: 42, method: .exact)
 }
 
-check("estimate: nothing known is 0, never a guess") {
-    DLMath.estimateBytes(DLMath.PlaylistStats(), sampledSegmentBytes: [], bandwidth: 5_000_000) == 0
+check("size: separate audio adds only to an exact total; a bitrate already covers it") {
+    let v = DLMath.PlaylistStats(durationSec: 600, segments: 100, exactBytes: 900)
+    let a = DLMath.PlaylistStats(durationSec: 600, segments: 100, exactBytes: 100)
+    let aUnknown = DLMath.PlaylistStats(durationSec: 600, segments: 100, exactBytes: nil)
+    return DLMath.variantSize(video: v, audio: a, averageBandwidth: 0, bandwidth: 0)?.bytes == 1000
+        && DLMath.variantSize(video: v, audio: aUnknown, averageBandwidth: 0, bandwidth: 800_000)
+            == DLMath.SizeEstimate(bytes: 60_000_000, method: .bandwidth)
+}
+
+check("size: no bitrate falls back to sampled segments; nothing known is unknown, never a guess") {
+    let s = DLMath.PlaylistStats(durationSec: 4500, segments: 1586, exactBytes: nil)
+    let sampled = DLMath.sampledSize(s, sampledSegmentBytes: [2 * MB, 2 * MB + MB / 2, 0, 2 * MB - MB / 2])
+    let none = DLMath.sampledSize(s, sampledSegmentBytes: [])
+    return DLMath.variantSize(video: s, averageBandwidth: 0, bandwidth: 0) == nil
+        && DLMath.variantSize(video: DLMath.PlaylistStats(), averageBandwidth: 0, bandwidth: 5_000_000) == nil
+        && sampled == DLMath.SizeEstimate(bytes: 1586 * 2 * MB, method: .sampled)
+        && none.bytes == 0 && none.method == .unknown && none.reason != nil
+        && DLMath.bandwidthBytes(bitsPerSecond: 8, durationSec: .infinity) == 0
 }
 
 check("sample indices are spread over the whole stream") {
@@ -155,11 +173,50 @@ check("in-flight requests: never above 8, refilled as fragments finish") {
     return peak == 8 && stayedFull && DLMath.requestsToStart(inFlight: 8, limit: 12, waiting: 50) == 0
 }
 
-check("speed: bytes received in the window, not bytes on disk") {
-    var m = DLMath.SpeedMeter()
-    m.add(t: 0, received: 0); m.add(t: 1, received: 4 * MB); m.add(t: 2, received: 8 * MB)
-    m.add(t: 5, received: 20 * MB)   // older samples fall out of the 3 s window
-    return m.bytesPerSecond == Double(12 * MB) / 3
+check("time left: estimating during warm-up, then rate × remaining bytes") {
+    var m = DLMath.Throughput()
+    m.add(t: 0, received: 0)
+    m.add(t: 1, received: 4 * MB)
+    let early = m.secondsLeft(remainingBytes: 100 * MB)        // 1 s seen: still estimating
+    for k in 2...5 { m.add(t: Double(k), received: Int64(k) * 4 * MB) }
+    let settled = m.secondsLeft(remainingBytes: 40 * MB)        // 4 MB/s steady -> 10 s
+    return early == nil && m.isSettled && abs((settled ?? 0) - 10) < 0.001
+}
+
+check("time left: one burst or stall moves the rate a little, not to the instant value") {
+    var m = DLMath.Throughput()
+    for k in 0...10 { m.add(t: Double(k), received: Int64(k) * 4 * MB) }   // 4 MB/s
+    m.add(t: 11, received: 10 * 4 * MB + 40 * MB)                         // 1 s burst at 40 MB/s
+    let afterBurst = m.bytesPerSecond
+    var s = m
+    s.add(t: 12, received: 10 * 4 * MB + 40 * MB)                         // 1 s stall
+    let fourMB = Double(4 * MB)
+    return afterBurst > fourMB && afterBurst < 2.2 * fourMB
+        && s.bytesPerSecond < afterBurst && s.bytesPerSecond > fourMB
+}
+
+check("time left: a full stall stops the estimate instead of showing a huge number") {
+    var m = DLMath.Throughput()
+    for k in 0...6 { m.add(t: Double(k), received: 0) }
+    return !m.isSettled && m.secondsLeft(remainingBytes: MB) == nil
+}
+
+check("pause: resume data only for whole-file units that are not done or refetching") {
+    DLMath.keepsResumeData(unitDone: false, hasByteRange: false, unitInFlight: false)
+        && !DLMath.keepsResumeData(unitDone: true, hasByteRange: false, unitInFlight: false)
+        && !DLMath.keepsResumeData(unitDone: false, hasByteRange: true, unitInFlight: false)
+        && !DLMath.keepsResumeData(unitDone: false, hasByteRange: false, unitInFlight: true)
+}
+
+check("pause/resume targets: one episode, a show, or all; wrong states left alone") {
+    let jobs: [(id: String, state: DLMath.JobState)] = [
+        ("e1", .downloading), ("e2", .queued), ("e3", .completed), ("m1", .paused), ("m2", .error),
+    ]
+    return DLMath.targets(jobs, ids: ["e1"], pausing: true) == ["e1"]
+        && DLMath.targets(jobs, ids: ["e1", "e2", "e3"], pausing: true) == ["e1", "e2"]
+        && DLMath.targets(jobs, ids: nil, pausing: true) == ["e1", "e2"]
+        && DLMath.targets(jobs, ids: nil, pausing: false) == ["m1", "m2"]
+        && DLMath.targets(jobs, ids: ["e1", "zz"], pausing: false).isEmpty
 }
 
 check("duplicate on retry: a cut-short or whole-file answer is refused, not appended") {

@@ -50,7 +50,7 @@ const TMDB_CACHE_TTL = 5 * 60 * 1000; // fresh window
 const TMDB_STALE_MAX = 24 * 60 * 60 * 1000; // oldest copy still served
 const TMDB_MEM_MAX = 200;
 const TMDB_DISK_PREFIX = "sb_tmdb:";
-const TMDB_DISK_MAX = 80;
+const TMDB_DISK_MAX = 40;
 
 const _diskKey = (key) => TMDB_DISK_PREFIX + key.slice(key.indexOf("|") + 1);
 
@@ -69,7 +69,7 @@ function _readDisk(key) {
 // 150 of those overran WebKit's ~5 MB localStorage quota, after which the
 // app's own writes (progress, history, profiles) failed silently. Large
 // responses stay in memory only.
-const TMDB_DISK_ENTRY_MAX = 48 * 1024;
+const TMDB_DISK_ENTRY_MAX = 24 * 1024;
 
 function _writeDisk(key, entry) {
   try {
@@ -310,17 +310,22 @@ const TRENDING_CACHE_TTL = 30 * 60 * 1000;
 
 /**
  * Trending lists saved for this language and kind of profile, or null.
+ * With `allowStale` (web app) an older copy is returned too, marked `stale`,
+ * so Home shows at once and the caller refreshes it quietly.
  * @param {string} lang TMDB metadata language the lists were fetched in
- * @returns {{movies: object[], tv: object[]} | null}
+ * @param {{allowStale?: boolean}} [opts]
+ * @returns {{movies: object[], tv: object[], stale: boolean} | null}
  */
-export function readTrendingCache(lang) {
+export function readTrendingCache(lang, { allowStale = false } = {}) {
   const c = storage.get(TRENDING_CACHE_KEY);
-  const usable =
+  const matches =
     c?.lang === lang &&
     c.kids === isKidsProfileActive() &&
-    (!c.kids || c.kv === KIDS_FILTER_VERSION) &&
-    Date.now() - c.ts < TRENDING_CACHE_TTL;
-  return usable ? { movies: c.movies || [], tv: c.tv || [] } : null;
+    (!c.kids || c.kv === KIDS_FILTER_VERSION);
+  if (!matches) return null;
+  const stale = !(Date.now() - c.ts < TRENDING_CACHE_TTL);
+  if (stale && !allowStale) return null;
+  return { movies: c.movies || [], tv: c.tv || [], stale };
 }
 
 /** Save trending lists fetched in `lang` for the active profile. */
@@ -442,9 +447,30 @@ const WEB_DIRECT_SOURCES = [
     tvUrl: (id, season, ep) => `https://cinejoy.invalid/tv/${id}/${season}/${ep}`,
   },
 ];
+// iPhone app only: 7Movies' Vidrift servers (direct streams through native
+// HTTP; the URL is only a key, sevenmovies.js resolves the stream).
+const IOS_DIRECT_SOURCES = [
+  { id: "7movies-orion", label: "7Movies Orion", tag: null, note: "Direct, no ads", supportsAnime: false,
+    movieUrl: (id) => `https://7movies-orion.invalid/movie/${id}`,
+    tvUrl: (id, season, ep) => `https://7movies-orion.invalid/tv/${id}/${season}/${ep}` },
+  { id: "7movies-evion", label: "7Movies Evion", tag: null, note: "Direct, no ads", supportsAnime: false,
+    movieUrl: (id) => `https://7movies-evion.invalid/movie/${id}`,
+    tvUrl: (id, season, ep) => `https://7movies-evion.invalid/tv/${id}/${season}/${ep}` },
+  // Flixer (flixer.js): direct stream through native HTTP.
+  { id: "flixer-direct", label: "Flixer", tag: null, note: "Direct, no ads", supportsAnime: false,
+    movieUrl: (id) => `https://flixer.invalid/movie/${id}`,
+    tvUrl: (id, season, ep) => `https://flixer.invalid/tv/${id}/${season}/${ep}` },
+  // Rivestream (rivestream.js): each verified server is a direct stream through native HTTP.
+  { id: "rive-citadel", label: "Rive Citadel", tag: null, note: "Direct, no ads", supportsAnime: false,
+    movieUrl: (id) => `https://rive-citadel.invalid/movie/${id}`,
+    tvUrl: (id, season, ep) => `https://rive-citadel.invalid/tv/${id}/${season}/${ep}` },
+  { id: "rive-primevids", label: "Rive PrimeVids", tag: null, note: "Direct, no ads", supportsAnime: false,
+    movieUrl: (id) => `https://rive-primevids.invalid/movie/${id}`,
+    tvUrl: (id, season, ep) => `https://rive-primevids.invalid/tv/${id}/${season}/${ep}` },
+];
 export const PLAYER_SOURCES = import.meta.env?.VITE_WEB
   ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id) && !["vidnest", "hexa"].includes(s.id)).sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"))]
-  : ALL_PLAYER_SOURCES;
+  : [...WEB_DIRECT_SOURCES, ...IOS_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES]; // iPhone app: Cinejoy, then 7Movies, direct and listed first
 
 // Sources that require a transparent webRequest intercept to load properly
 export const NEEDS_INTERCEPT = [];
@@ -1057,8 +1083,8 @@ export const fetchEpisodeGroup = async (groupId, apiKey) => {
 // Native player server list: every server for this kind of content. Anime
 // lists all of them under Sub and every anime-route server under Dub, each
 // labelled with its group ("Vidnest · Dub").
-export const nativeServerList = (isAnime) =>
-  serverCatalog(sourcesForContent(isAnime).filter((s) => !s.async), isAnime).map((e) => ({
+export const nativeServerList = (isAnime, type = null) =>
+  serverCatalog(sourcesForTitle(isAnime, type).filter((s) => !s.async), isAnime).map((e) => ({
     id: e.key,
     label: groupedLabel(e),
   }));
@@ -1066,8 +1092,21 @@ export const nativeServerList = (isAnime) =>
 // Server list split by content type: anime titles get anime servers only,
 // movies/series get the regular servers only (anime-only ones hidden).
 // Falls back to everything if a type would end up with no servers.
+// Custom servers (iOS Settings) carry `customFits` ({ anime, movie, tv }):
+// they show only in the lists the viewer picked for them.
 export const sourcesForContent = (isAnime, list = PLAYER_SOURCES) => {
-  const animeOk = (s) => !!(s.tag || s.supportsAnime || s.animeTmdb);
-  const out = isAnime ? list.filter(animeOk) : list.filter((s) => !s.tag);
-  return out.length ? out : list;
+  const animeOk = (s) => (s.custom ? !!s.customFits?.anime : !!(s.tag || s.supportsAnime || s.animeTmdb));
+  const regularOk = (s) => (s.custom ? !!(s.customFits?.movie || s.customFits?.tv) : !s.tag);
+  const out = list.filter(isAnime ? animeOk : regularOk);
+  return out.length ? out : list.filter((s) => !s.custom);
 };
+
+/**
+ * Servers for one title: sourcesForContent, minus custom servers that
+ * didn't join this kind's list (a TV-only site on a movie). `type` null
+ * keeps every kind.
+ */
+export const sourcesForTitle = (isAnime, type = null, list = PLAYER_SOURCES) =>
+  sourcesForContent(isAnime, list).filter(
+    (s) => !s.custom || isAnime || !type || !!s.customFits?.[type === "tv" ? "tv" : "movie"],
+  );

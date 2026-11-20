@@ -60,20 +60,64 @@ enum DLMath {
         return (0..<n).map { k in min(segments - 1, (segments * (2 * k + 1)) / (2 * n)) }
     }
 
-    /// Size of a stream from the stream itself: the exact byte-range total
-    /// when there is one, else the average of the sampled segment sizes times
-    /// the segment count, else BANDWIDTH × duration. 0 when nothing is known.
-    static func estimateBytes(_ s: PlaylistStats, sampledSegmentBytes: [Int64], bandwidth: Int) -> Int64 {
-        if let exact = s.exactBytes, exact > 0 { return exact }
+    // MARK: Size per quality
+
+    /// How a quality's size was worked out, best first.
+    enum SizeMethod: String, Equatable {
+        /// Byte ranges / Content-Length: the server's own byte count.
+        case exact
+        /// The master playlist's AVERAGE-BANDWIDTH (else BANDWIDTH) × the
+        /// variant playlist's duration (sum of its #EXTINF).
+        case bandwidth
+        /// No bitrate in the master: measured sizes of a few segments × count.
+        case sampled
+        /// Nothing to compute it from; the page shows "Size unknown".
+        case unknown
+    }
+
+    struct SizeEstimate: Equatable {
+        var bytes: Int64
+        var method: SizeMethod
+        /// Why the size is unknown, for the diagnostics log.
+        var reason: String?
+
+        static func unknown(_ reason: String) -> SizeEstimate { SizeEstimate(bytes: 0, method: .unknown, reason: reason) }
+    }
+
+    /// Bitrate (bits per second) × seconds, in bytes. 0 when either is missing.
+    static func bandwidthBytes(bitsPerSecond: Int, durationSec: Double) -> Int64 {
+        guard bitsPerSecond > 0, durationSec > 0, durationSec.isFinite else { return 0 }
+        return Int64((Double(bitsPerSecond) * durationSec / 8).rounded())
+    }
+
+    /// Size of one HLS quality, from what its playlists say:
+    /// 1. exact: every segment is a byte range (video, and audio when separate);
+    /// 2. bandwidth: AVERAGE-BANDWIDTH (the real mean rate; BANDWIDTH is the
+    ///    peak) × the variant's own duration. A variant's bitrate covers all of
+    ///    its renditions, so separate audio is not added on top.
+    /// Returns nil when neither applies; the caller then samples segments
+    /// (`sampledSize`). Never a made-up number.
+    static func variantSize(video: PlaylistStats, audio: PlaylistStats? = nil,
+                            averageBandwidth: Int, bandwidth: Int) -> SizeEstimate? {
+        if let v = video.exactBytes, v > 0 {
+            if audio == nil { return SizeEstimate(bytes: v, method: .exact) }
+            if let a = audio?.exactBytes, a > 0 { return SizeEstimate(bytes: v + a, method: .exact) }
+        }
+        let rate = averageBandwidth > 0 ? averageBandwidth : bandwidth
+        let bytes = bandwidthBytes(bitsPerSecond: rate, durationSec: video.durationSec)
+        return bytes > 0 ? SizeEstimate(bytes: bytes, method: .bandwidth) : nil
+    }
+
+    /// Fallback when the master gives no bitrate: the mean of the sampled
+    /// segment sizes × the segment count.
+    static func sampledSize(_ s: PlaylistStats, sampledSegmentBytes: [Int64]) -> SizeEstimate {
         let samples = sampledSegmentBytes.filter { $0 > 0 }
-        if !samples.isEmpty, s.segments > 0 {
-            let avg = Double(samples.reduce(0, +)) / Double(samples.count)
-            return Int64((avg * Double(s.segments)).rounded())
+        guard s.segments > 0 else { return .unknown("the playlist lists no segments") }
+        guard !samples.isEmpty else {
+            return .unknown("no bitrate in the master playlist and the server gave no segment sizes")
         }
-        if bandwidth > 0, s.durationSec > 0 {
-            return Int64((Double(bandwidth) * s.durationSec / 8).rounded())
-        }
-        return 0
+        let avg = Double(samples.reduce(0, +)) / Double(samples.count)
+        return SizeEstimate(bytes: Int64((avg * Double(s.segments)).rounded()), method: .sampled)
     }
 
     /// Expected size of the whole download.
@@ -184,26 +228,85 @@ enum DLMath {
         max(0, min(min(limit, Concurrency.maximum) - inFlight, waiting))
     }
 
-    // MARK: Speed
+    // MARK: Speed and time left
 
-    /// Live speed: bytes received inside a sliding window (default 3 s) of
-    /// (time, total bytes received) samples. Counting received bytes, not
-    /// bytes on disk, keeps it right when fragments finish or restart.
-    struct SpeedMeter {
-        var window: Double = 3
-        private(set) var samples: [(t: Double, bytes: Int64)] = []
+    /// Download speed as an exponential moving average of measured
+    /// throughput, so the speed and time left move smoothly instead of
+    /// jumping with every burst or stall.
+    /// - Until `warmUp` seconds have been observed the rate is the plain
+    ///   average since the start (no single instant decides it) and no time
+    ///   left is given: the page shows "Estimating…".
+    /// - After that each sample moves the rate by 1 − e^(−Δt/τ), τ =
+    ///   `timeConstant`, i.e. roughly the last 10 s count.
+    /// Samples are (time, total bytes received); received bytes, not bytes
+    /// on disk, so fragments finishing or restarting don't skew it.
+    struct Throughput {
+        static let timeConstant: Double = 10
+        static let warmUp: Double = 5
+        /// Below this (bytes/s) the transfer counts as stalled: no time left.
+        static let stalledBelow: Double = 1024
+
+        private(set) var bytesPerSecond: Double = 0
+        private(set) var observedSeconds: Double = 0
+        private var startBytes: Int64?
+        private var last: (t: Double, received: Int64)?
 
         mutating func add(t: Double, received: Int64) {
-            samples.append((t, received))
-            while let first = samples.first, t - first.t > window, samples.count > 2 { samples.removeFirst() }
+            guard let prev = last else {
+                last = (t, received)
+                startBytes = received
+                return
+            }
+            let dt = t - prev.t
+            guard dt > 0 else { return }
+            observedSeconds += dt
+            last = (t, received)
+            if observedSeconds <= Self.warmUp {
+                bytesPerSecond = Double(max(0, received - (startBytes ?? received))) / observedSeconds
+            } else {
+                let rate = Double(max(0, received - prev.received)) / dt
+                bytesPerSecond += (1 - exp(-dt / Self.timeConstant)) * (rate - bytesPerSecond)
+            }
         }
 
-        var bytesPerSecond: Double {
-            guard let a = samples.first, let b = samples.last, b.t - a.t >= 0.25 else { return 0 }
-            return max(0, Double(b.bytes - a.bytes) / (b.t - a.t))
+        /// Enough data for a time left.
+        var isSettled: Bool { observedSeconds >= Self.warmUp && bytesPerSecond >= Self.stalledBelow }
+
+        /// Seconds to fetch `remainingBytes` at the smoothed rate; nil while
+        /// estimating or stalled.
+        func secondsLeft(remainingBytes: Int64) -> Double? {
+            guard isSettled, remainingBytes > 0 else { return nil }
+            return Double(remainingBytes) / bytesPerSecond
         }
 
-        mutating func reset() { samples = [] }
+        mutating func reset() { self = Throughput() }
+    }
+
+    // MARK: Pause and resume
+
+    /// Whether resume data a cancelled or interrupted task produced is kept
+    /// for its unit. Only whole-file requests: URLSession resumes with an
+    /// open-ended Range, which would turn a byte-range part into the rest of
+    /// the file. A unit already written, or already being fetched again, has
+    /// no use for it.
+    static func keepsResumeData(unitDone: Bool, hasByteRange: Bool, unitInFlight: Bool) -> Bool {
+        !unitDone && !hasByteRange && !unitInFlight
+    }
+
+    /// Download states, as persisted (raw values) and sent to the page.
+    enum JobState: String, Codable {
+        case queued, downloading, paused, completed, error
+
+        var canPause: Bool { self == .queued || self == .downloading }
+        var canResume: Bool { self == .paused || self == .error }
+    }
+
+    /// The jobs a Pause (or Resume) for `ids` acts on; nil `ids` means all.
+    /// Unknown ids and jobs in the wrong state are left out.
+    static func targets(_ jobs: [(id: String, state: JobState)], ids: Set<String>?, pausing: Bool) -> [String] {
+        jobs.filter { ids?.contains($0.id) ?? true }
+            .filter { pausing ? $0.state.canPause : $0.state.canResume }
+            .map { $0.id }
     }
 
     // MARK: In-order MP4 assembly

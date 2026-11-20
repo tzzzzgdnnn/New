@@ -70,7 +70,10 @@ function photoToAvatar(file) {
       c.width = c.height = 256;
       c.getContext("2d").drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, 256, 256);
       URL.revokeObjectURL(url);
-      resolve(c.toDataURL("image/jpeg", 0.85));
+      // Stay well under ~200 KB so it always fits beside the rest of the data.
+      let out = c.toDataURL("image/jpeg", 0.85);
+      for (const q of [0.7, 0.55, 0.4]) if (out.length > 200 * 1024) out = c.toDataURL("image/jpeg", q);
+      resolve(out);
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That photo couldn't be opened.")); };
     img.src = url;

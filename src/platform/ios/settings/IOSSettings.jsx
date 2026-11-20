@@ -3,6 +3,7 @@
 // Every value is read from and written to the same storage keys the desktop
 // Settings page uses, so the rest of the app behaves exactly as before.
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import "./settings.css";
 import { Group, Row, SwitchRow, ChoiceList, Stepper } from "./cells";
 import ActionSheet from "../ActionSheet";
@@ -23,6 +24,8 @@ import { version as APP_VERSION } from "../../../../package.json";
 import { getLoadTimes } from "../playerPrefs";
 import { readDiag, clearDiag, diag } from "../../../utils/diag";
 import { registerBackHandler, reloadApp } from "../../../utils/navHistory";
+import CustomServersPage from "./CustomServers";
+import { listCustomServers } from "../customServers";
 
 // Tile colors: one accent family plus iOS system hues so rows scan quickly.
 const C = {
@@ -74,18 +77,18 @@ const SECTION_TO_PAGE = {
 };
 
 /** A sticky nav bar whose centered title fades in once the large title scrolls away. */
-const NavBar = forwardRef(function NavBar({ title, backLabel, onBack, collapsed }, ref) {
+const NavBar = forwardRef(function NavBar({ title, backLabel, onBack, collapsed, fixed }, ref) {
   return (
-    <div ref={ref} className={"sps-nav" + (collapsed ? " is-collapsed" : "")}>
+    <div ref={ref} className={"sps-nav" + (collapsed ? " is-collapsed" : "") + (fixed ? " is-fixed" : "")}>
       {onBack ? (
-        <button type="button" className="sps-back" onClick={onBack}>
+        <button type="button" className="sps-back" onClick={onBack} aria-label={`Back to ${backLabel}`}>
           <span className="sps-back-chev" aria-hidden="true" />
           {backLabel}
         </button>
       ) : (
         <span />
       )}
-      <div className="sps-nav-title" aria-hidden={!collapsed}>
+      <div className="sps-nav-title" aria-hidden={!collapsed} role={fixed ? "heading" : undefined} aria-level={fixed ? 1 : undefined}>
         {title}
       </div>
       <span />
@@ -110,7 +113,64 @@ function useCollapsed(titleRef, navRef) {
   return collapsed;
 }
 
-function Page({ title, backLabel, onBack, children, dir }) {
+/**
+ * One fixed nav bar ("‹ Settings" + title, no large title) pinned directly
+ * under the app header, and page padding measured from where the bar really
+ * ends, so the first card is never behind it. The bar is rendered into
+ * <body> so a transformed page (push animation) can't move it; its top is
+ * measured from the header itself instead of trusting CSS (var/:has/env),
+ * which put the bar too low over Add Site on the phone.
+ */
+function FixedNavPage({ title, backLabel, onBack, children, dir }) {
+  const pageRef = useRef(null);
+  const navRef = useRef(null);
+  useLayoutEffect(() => {
+    const page = pageRef.current;
+    const nav = navRef.current;
+    if (!page || !nav) return undefined;
+    const place = () => {
+      const header = document.querySelector(".sp-topbar");
+      // Header bottom already includes the safe-area inset; without a header
+      // the CSS top (env(safe-area-inset-top)) stays in charge.
+      if (header) nav.style.top = `${Math.round(header.getBoundingClientRect().bottom)}px`;
+      else nav.style.removeProperty("top");
+      const navBottom = nav.getBoundingClientRect().bottom;
+      const scroller = page.closest(".main");
+      const scrolled = (scroller?.scrollTop || 0) + (document.scrollingElement?.scrollTop || 0);
+      // Where the page's box starts when scrolled to the top (padding excluded).
+      const pageTop = page.getBoundingClientRect().top + scrolled;
+      const pad = Math.max(navBottom - pageTop, nav.offsetHeight) + 16;
+      page.style.paddingTop = `${Math.round(pad)}px`;
+    };
+    place();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(place) : null;
+    const header = document.querySelector(".sp-topbar");
+    if (ro) {
+      ro.observe(nav);
+      if (header) ro.observe(header);
+    }
+    window.addEventListener("resize", place);
+    window.addEventListener("orientationchange", place);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", place);
+      window.removeEventListener("orientationchange", place);
+    };
+  }, []);
+  return (
+    <div ref={pageRef} className={"sps-page has-fixed-nav" + (dir ? ` is-${dir}` : "")}>
+      {createPortal(<NavBar ref={navRef} title={title} backLabel={backLabel} onBack={onBack} collapsed fixed />, document.body)}
+      {children}
+    </div>
+  );
+}
+
+function Page({ title, backLabel, onBack, children, dir, sticky }) {
+  if (sticky) return <FixedNavPage title={title} backLabel={backLabel} onBack={onBack} dir={dir}>{children}</FixedNavPage>;
+  return <LargeTitlePage title={title} backLabel={backLabel} onBack={onBack} dir={dir}>{children}</LargeTitlePage>;
+}
+
+function LargeTitlePage({ title, backLabel, onBack, children, dir }) {
   const titleRef = useRef(null);
   const navRef = useRef(null);
   const collapsed = useCollapsed(titleRef, navRef);
@@ -168,6 +228,13 @@ function Root({ push }) {
           label="Subtitles"
           value={labelOf(SUBTITLE_LANGUAGES.map((l) => ({ value: l.code, label: l.label })), subLang, subLang)}
           onClick={() => push("subtitles")}
+        />
+        <Row
+          icon="globe"
+          iconColor={C.teal}
+          label="Custom Servers"
+          value={String(listCustomServers().length || "")}
+          onClick={() => push("customServers")}
         />
         <Row
           icon="shield"
@@ -885,6 +952,8 @@ function AboutPage({ apiKey, onChangeApiKey }) {
 
 const PAGES = {
   playback: { title: "Playback", C: PlaybackPage },
+  // Sticky nav: the site list can be long, and Back must stay in reach.
+  customServers: { title: "Custom Servers", C: CustomServersPage, stickyNav: true },
   anime: { title: "Anime Audio", C: AnimePage },
   subtitles: { title: "Subtitles", C: SubtitlesPage },
   parental: { title: "Parental Controls", C: ParentalPage },
@@ -938,7 +1007,7 @@ export default function IOSSettings({ apiKey, onChangeApiKey, initialSection }) 
   return (
     <div className="sps">
       {page ? (
-        <Page key={route.id} title={page.title} backLabel="Settings" onBack={pop} dir={route.dir}>
+        <Page key={route.id} title={page.title} backLabel="Settings" onBack={pop} dir={route.dir} sticky={!!page.stickyNav}>
           <page.C apiKey={apiKey} onChangeApiKey={onChangeApiKey} />
         </Page>
       ) : (

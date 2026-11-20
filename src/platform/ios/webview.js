@@ -18,9 +18,13 @@ import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
 import { anipmCandidates, ANIPM_ID, cachedAnipm, prefetchAnipm, anipmWebReady } from "./anipm";
 import { movyCandidates, MOVY_ID } from "./movy";
 import { cinejoyCandidates, cachedCinejoy, prefetchCinejoy, CINEJOY_ID } from "./cinejoy";
+import { sevenMoviesCandidates, SEVENMOVIES_IDS } from "./sevenmovies";
+import { flixerCandidates, FLIXER_ID } from "./flixer";
+import { riveCandidates, RIVE_IDS } from "./rivestream";
 import { playDirect, forceFullscreen } from "../web/directPlayer";
 import { parseServerKey } from "../../utils/servers/catalog";
 import { diag } from "../../utils/diag";
+import { customCandidates, withCustom, pickedCustomId, isCustomPlaceholder } from "./customServers";
 
 const LOAD_TIMEOUT_MS = 8000;
 const MAX_CANDIDATES = 10;
@@ -40,13 +44,44 @@ function readStored(key, fallback = null) {
 }
 
 const currentCtx = () => window.__sbCtx || {};
+
+// Web app: the browser's own player reports where you are, the same way the
+// iPhone's native player does, so Continue Watching and Resume work on web
+// (before, web saved nothing and every movie restarted from the top).
+function webProgress(ctx) {
+  const key = ctx?.progressKey;
+  let last = { t: 0, d: 0 }, sentAt = 0;
+  const send = () => {
+    if (!key || !(last.d > 0) || !(last.t > 0)) return;
+    window.dispatchEvent(new CustomEvent("sb-native-progress", { detail: { key, time: last.t, duration: last.d } }));
+    sentAt = Date.now();
+  };
+  const onHide = () => send();
+  const onVis = () => document.visibilityState === "hidden" && send();
+  window.addEventListener("pagehide", onHide);
+  document.addEventListener("visibilitychange", onVis);
+  return {
+    startAt: key ? getResumeSeconds(key) : 0,
+    onTime(t, d) {
+      if (!(t >= 0) || !(d > 0) || !isFinite(d)) return;
+      last = { t, d };
+      if (Date.now() - sentAt >= 5000) send();
+    },
+    flush() {
+      send();
+      window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onVis);
+    },
+  };
+}
+
 const dubModeOf = (ctx) => (ctx.dubMode === "dub" ? "dub" : "sub");
 const isBlank = (url) => !url || url === "about:blank";
 const nativeAvailable = () => !!window.webkit?.messageHandlers?.sbResolve;
 
 /** Server list for the native server menu, built from the latest context. */
 function serverListFor(ctx) {
-  const list = nativeServerList(!!ctx.isAnime);
+  const list = nativeServerList(!!ctx.isAnime, ctx.type === "tv" ? "tv" : "movie");
   if (!ctx.isAnime) return list;
   // ani.pm leads the native menu for anime (Sub and Dub entries).
   return [
@@ -188,16 +223,29 @@ export function withAnipm(ranked, anipm) {
  * Movy's direct stream leads for movies and series (it is the stream itself,
  * no page to load), unless the viewer picked another server by hand.
  */
-/** Direct-stream servers (Movy, Cinejoy) for a movie or episode, both looked up at once. */
+/** Direct-stream servers (Movy, Cinejoy, 7Movies, Flixer, Rivestream) for a movie or episode, all looked up at once. */
 export async function directCandidates(ctx, opts = {}) {
-  const [m, c] = await Promise.all([movyCandidates(ctx, opts).catch(() => []), cinejoyCandidates(ctx, opts).catch(() => [])]);
-  return [...m, ...c];
+  const [m, c, s, f, r] = await Promise.all([
+    movyCandidates(ctx, opts).catch(() => []),
+    cinejoyCandidates(ctx, opts).catch(() => []),
+    sevenMoviesCandidates(ctx, opts).catch(() => []),
+    import.meta.env?.VITE_WEB ? [] : flixerCandidates(ctx, opts).catch(() => []),
+    import.meta.env?.VITE_WEB ? [] : riveCandidates(ctx, opts).catch(() => []),
+  ]);
+  return [...m, ...c, ...s, ...f, ...r];
 }
+const DIRECT_IDS = new Set([MOVY_ID, CINEJOY_ID, FLIXER_ID, ...RIVE_IDS]);
 
 export function withMovy(ranked, movy) {
   if (!movy?.length) return ranked;
   const ids = new Set(movy.map((c) => c.id));
-  const rest = ranked.filter((c) => !ids.has(c.id) && c.id !== MOVY_ID && c.id !== CINEJOY_ID);
+  const rest = ranked.filter((c) => !ids.has(c.id) && !DIRECT_IDS.has(c.id) && !SEVENMOVIES_IDS.includes(c.id));
+  // A direct server picked by hand (Cinejoy, 7Movies Orion / Evion, Flixer): its stream plays first.
+  const pickedDirect = readStored("playerSource");
+  if (!isAutoPick() && (DIRECT_IDS.has(pickedDirect) || SEVENMOVIES_IDS.includes(pickedDirect))) {
+    const cj = movy.filter((c) => c.id === pickedDirect);
+    if (cj.length) return [...cj, ...movy.filter((c) => c.id !== pickedDirect), ...rest].slice(0, MAX_CANDIDATES + movy.length);
+  }
   if (!isAutoPick() && rest.length && readStored("playerSource")) {
     return [rest[0], ...movy, ...rest.slice(1)].slice(0, MAX_CANDIDATES + movy.length);
   }
@@ -212,7 +260,7 @@ function buildCandidateList(url, ctx) {
   const list = [];
   const seen = new Set();
   const add = (src, u) => {
-    if (!u || !/^https?:/.test(u) || seen.has(u) || list.length >= MAX_CANDIDATES) return;
+    if (!u || !/^https?:/.test(u) || /\.invalid\//.test(u) || seen.has(u) || list.length >= MAX_CANDIDATES) return;
     seen.add(u);
     const id = src ? menuId(src.id, ctx) : "current";
     const label = (src?.label || "Server") + (isAnime && src ? suffix : "");
@@ -291,7 +339,6 @@ export const downloadCandidates = (ctx, opts) => rankedCandidates(null, ctx, opt
 
 // Web app: where to start (the saved Resume point) and progress reports in
 // the same shape the native player sends, so Continue Watching works.
-const webStartAt = (ctx) => (ctx?.progressKey ? getResumeSeconds(ctx.progressKey) : 0);
 const webProgress = (ctx) => (time, duration) => {
   if (!ctx?.progressKey || !(duration > 0)) return;
   window.__sbNativeProgress?.({ key: ctx.progressKey, time, duration });
@@ -329,6 +376,23 @@ function upgrade(wv) {
   if (wv.__sbUpgraded) return;
   wv.__sbUpgraded = true;
   const iframe = document.createElement("iframe");
+  // Web app, embed servers: many embed players post their position to the
+  // page (currentTime / duration, sometimes inside a JSON string). Save it
+  // like any other progress so the movie resumes instead of restarting.
+  let embedProg = null;
+  window.addEventListener("message", (e) => {
+    if (e.source !== iframe.contentWindow) return;
+    let d = e.data;
+    if (typeof d === "string") { try { d = JSON.parse(d); } catch { return; } }
+    const x = d?.data && typeof d.data === "object" ? d.data : d;
+    const t = Number(x?.currentTime ?? x?.time ?? x?.position);
+    const dur = Number(x?.duration);
+    if (!(t > 0) || !(dur > 60) || !isFinite(dur) || t > dur + 5) return;
+    const ctx = currentCtx();
+    if (!ctx.progressKey) return;
+    if (!embedProg || embedProg.key !== ctx.progressKey) { embedProg?.p.flush(); embedProg = { key: ctx.progressKey, p: webProgress(ctx) }; }
+    embedProg.p.onTime(t, dur);
+  });
   // Ad blocking: no allow-popups / allow-top-navigation, so embeds can't open
   // pop-ups, new tabs, or redirect the app. Servers that refuse a sandbox are
   // dropped from the web build (NEEDS_UNSANDBOXED in api.js).
@@ -425,16 +489,20 @@ function upgrade(wv) {
       // Start on the fastest server: untested providers are probed at once,
       // within a short budget, while the Keychain read finishes.
       const tRank = Date.now();
-      const [subCtx, ranked, anipm, movy] = await Promise.all([
+      const [subCtx, ranked, anipm, movy, custom] = await Promise.all([
         subCtxReady,
         // A direct stream already in hand plays first, so the embed probes
         // (only backups then) get a tiny budget instead of holding Play up.
         rankedCandidates(url, ctx, { signal: probing.signal, budgetMs: haveDirect ? 150 : undefined }),
         ctx.isAnime ? anipmCandidates(ctx) : [],
         ctx.isAnime ? [] : directCandidates(ctx),
+        customCandidates(ctx).catch((e) => {
+          diag("player", `custom servers: ${e?.message || e}`);
+          return [];
+        }),
       ]);
       if (nativeToken !== token) return;
-      const candidates = withMovy(withAnipm(playerOrder(ranked, ctx), anipm), movy);
+      const candidates = withCustom(withMovy(withAnipm(playerOrder(ranked, ctx), anipm), movy), custom, pickedCustomId());
       diag(
         "player",
         `play: candidates in ${Date.now() - tRank} ms (tap→send ${Date.now() - lastNativeAt} ms): ` +
@@ -504,9 +572,10 @@ function upgrade(wv) {
       hideCard();
       log("playing", `ani.pm (${r.lang})`);
       fire("did-finish-load");
-      stopDirect = playDirect(wv, r.source, {
-        startAt: webStartAt(ctx),
-        onTime: webProgress(ctx),
+      const prog = webProgress(ctx);
+      const stop = playDirect(wv, r.source, {
+        startAt: ctx.startAt || prog.startAt,
+        onTime: prog.onTime,
         nativeOnly: true,
         referer: "https://ani.pm/",
         onFail: (why) => {
@@ -516,6 +585,7 @@ function upgrade(wv) {
           fallback();
         },
       });
+      stopDirect = () => { prog.flush(); stop?.(); };
     };
     const hit = cachedAnipm(ctx);
     if (hit && hit.lang === wanted) {
@@ -551,9 +621,10 @@ function upgrade(wv) {
       fire("did-finish-load");
       // Called synchronously from the Play tap when the stream is already
       // known, so iPhone opens its own full-screen player right away.
-      stopDirect = playDirect(wv, src, {
-        startAt: webStartAt(ctx),
-        onTime: webProgress(ctx),
+      const prog = webProgress(ctx);
+      const stop = playDirect(wv, src, {
+        startAt: ctx.startAt || prog.startAt,
+        onTime: prog.onTime,
         onFail: (why) => {
           if (directFor !== url) return;
           diag("player", `web direct failed: ${why}`);
@@ -561,6 +632,7 @@ function upgrade(wv) {
           loadUrl(embedFor(url), { webOnly: true });
         },
       });
+      stopDirect = () => { prog.flush(); stop?.(); };
     };
     const hit = cachedCinejoy(ctx);
     if (hit) {
@@ -605,15 +677,16 @@ function upgrade(wv) {
       log("playing", "auto-opened stream");
       diag("player", `android sniffed stream: ${s.url.slice(0, 120)} (try ${sniff.fails + 1})`);
       let blanked = false;
-      stopDirect = playDirect(wv, s.url, {
-        startAt: webStartAt(ctx),
+      const prog = webProgress(ctx);
+      const stop = playDirect(wv, s.url, {
+        startAt: ctx.startAt || prog.startAt,
         // The embed page itself as the fallback Referer/Origin.
         referer: embed,
         headers: s.headers || {},
         onTime: (pos, dur) => {
           // Our player is running: drop the embed page (stops its audio/ads).
           if (!blanked && pos > 0) { blanked = true; iframe.src = "about:blank"; }
-          webProgress(ctx)?.(pos, dur);
+          prog.onTime(pos, dur);
         },
         onFail: (why) => {
           stopDirect = null;
@@ -634,6 +707,7 @@ function upgrade(wv) {
           }, SPARE_WAIT_MS);
         },
       });
+      stopDirect = () => { prog.flush(); stop?.(); };
     };
     // The page's server failed: say why and move to the next server.
     const failedServers = new Map(); // title key -> Set of servers that failed
@@ -694,6 +768,13 @@ function upgrade(wv) {
     // only the embed fallback puts the web view itself full screen.
     if (import.meta.env.VITE_WEB && !/iPhone|iPod/.test(navigator.userAgent) && (import.meta.env.VITE_ANDROID ? webOnly : !webOnly)) forceFullscreen(wv);
     if (import.meta.env.VITE_WEB && !webOnly && tryWebDirect(url)) return;
+    // A custom site never loads in the visible web view: its ads and pop-ups
+    // are only blocked in the native stream finder.
+    if (isCustomPlaceholder(url)) {
+      iframe.src = "about:blank";
+      showCard("No stream found on this server. Pick another server.", false);
+      return;
+    }
     // No load event in time: the next mirror takes over, else the page hears
     // did-fail-load and fails over to another server.
     webFallback = createFallback([url, ...mirrorsFor(url)], {

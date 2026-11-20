@@ -1,0 +1,1062 @@
+{
+  "tabs": [
+    {
+      "id": "movies",
+      "label": "Movies",
+      "rows": [
+        {
+          "id": "gn-m-picks",
+          "title": "Girls Night Classics",
+          "sub": "Mean Girls, Clueless, Legally Blonde and more",
+          "items": [
+            {
+              "title": "Mean Girls",
+              "year": 2004,
+              "tmdb_id": 10625,
+              "type": "movie"
+            },
+            {
+              "title": "Bridesmaids",
+              "year": 2011,
+              "tmdb_id": 55721,
+              "type": "movie"
+            },
+            {
+              "title": "Clueless",
+              "year": 1995,
+              "tmdb_id": 9603,
+              "type": "movie"
+            },
+            {
+              "title": "Legally Blonde",
+              "year": 2001,
+              "tmdb_id": 8835,
+              "type": "movie"
+            },
+            {
+              "title": "Pitch Perfect",
+              "year": 2012,
+              "tmdb_id": 114150,
+              "type": "movie"
+            },
+            {
+              "title": "Crazy Rich Asians",
+              "year": 2018,
+              "tmdb_id": 455207,
+              "type": "movie"
+            },
+            {
+              "title": "The Notebook",
+              "year": 2004,
+              "tmdb_id": 11036,
+              "type": "movie"
+            },
+            {
+              "title": "10 Things I Hate About You",
+              "year": 1999,
+              "tmdb_id": 4951,
+              "type": "movie"
+            },
+            {
+              "title": "13 Going on 30",
+              "year": 2004,
+              "tmdb_id": 10096,
+              "type": "movie"
+            },
+            {
+              "title": "The Devil Wears Prada",
+              "year": 2006,
+              "tmdb_id": 350,
+              "type": "movie"
+            },
+            {
+              "title": "How to Lose a Guy in 10 Days",
+              "year": 2003,
+              "tmdb_id": 9919,
+              "type": "movie"
+            },
+            {
+              "title": "She's the Man",
+              "year": 2006,
+              "tmdb_id": 9655,
+              "type": "movie"
+            },
+            {
+              "title": "John Tucker Must Die",
+              "year": 2006,
+              "tmdb_id": 9293,
+              "type": "movie"
+            },
+            {
+              "title": "The Princess Diaries",
+              "year": 2001,
+              "tmdb_id": 9880,
+              "type": "movie"
+            },
+            {
+              "title": "Freaky Friday",
+              "year": 2003,
+              "tmdb_id": 10330,
+              "type": "movie"
+            },
+            {
+              "title": "A Cinderella Story",
+              "year": 2004,
+              "tmdb_id": 11247,
+              "type": "movie"
+            },
+            {
+              "title": "Easy A",
+              "year": 2010,
+              "tmdb_id": 37735,
+              "type": "movie"
+            },
+            {
+              "title": "Bring It On",
+              "year": 2000,
+              "tmdb_id": 1588,
+              "type": "movie"
+            },
+            {
+              "title": "Sex and the City",
+              "year": 2008,
+              "tmdb_id": 4564,
+              "type": "movie"
+            },
+            {
+              "title": "Mamma Mia!",
+              "year": 2008,
+              "tmdb_id": 11631,
+              "type": "movie"
+            },
+            {
+              "title": "The Proposal",
+              "year": 2009,
+              "tmdb_id": 18240,
+              "type": "movie"
+            },
+            {
+              "title": "27 Dresses",
+              "year": 2008,
+              "tmdb_id": 6557,
+              "type": "movie"
+            },
+            {
+              "title": "Pretty Woman",
+              "year": 1990,
+              "tmdb_id": 114,
+              "type": "movie"
+            },
+            {
+              "title": "Dirty Dancing",
+              "year": 1987,
+              "tmdb_id": 88,
+              "type": "movie"
+            },
+            {
+              "title": "Crazy, Stupid, Love.",
+              "year": 2011,
+              "tmdb_id": 50646,
+              "type": "movie"
+            },
+            {
+              "title": "Aquamarine",
+              "year": 2006,
+              "tmdb_id": 14191,
+              "type": "movie"
+            },
+            {
+              "title": "The Sisterhood of the Traveling Pants",
+              "year": 2005,
+              "tmdb_id": 9779,
+              "type": "movie"
+            },
+            {
+              "title": "To All the Boys I've Loved Before",
+              "year": 2018,
+              "tmdb_id": 466282,
+              "type": "movie"
+            },
+            {
+              "title": "Confessions of a Shopaholic",
+              "year": 2009,
+              "tmdb_id": 20048,
+              "type": "movie"
+            },
+            {
+              "title": "Bride Wars",
+              "year": 2009,
+              "tmdb_id": 10521,
+              "type": "movie"
+            },
+            {
+              "title": "The Holiday",
+              "year": 2006,
+              "tmdb_id": 1581,
+              "type": "movie"
+            },
+            {
+              "title": "Love Actually",
+              "year": 2003,
+              "tmdb_id": 508,
+              "type": "movie"
+            },
+            {
+              "title": "Notting Hill",
+              "year": 1999,
+              "tmdb_id": 509,
+              "type": "movie"
+            },
+            {
+              "title": "Pride & Prejudice",
+              "year": 2005,
+              "tmdb_id": 4348,
+              "type": "movie"
+            },
+            {
+              "title": "Little Women",
+              "year": 2019,
+              "tmdb_id": 331482,
+              "type": "movie"
+            },
+            {
+              "title": "Barbie",
+              "year": 2023,
+              "tmdb_id": 346698,
+              "type": "movie"
+            },
+            {
+              "title": "Girls Trip",
+              "year": 2017,
+              "tmdb_id": 417870,
+              "type": "movie"
+            },
+            {
+              "title": "Magic Mike",
+              "year": 2012,
+              "tmdb_id": 77930,
+              "type": "movie"
+            },
+            {
+              "title": "Something Borrowed",
+              "year": 2011,
+              "tmdb_id": 49022,
+              "type": "movie"
+            },
+            {
+              "title": "Just Go with It",
+              "year": 2011,
+              "tmdb_id": 50546,
+              "type": "movie"
+            },
+            {
+              "title": "Never Been Kissed",
+              "year": 1999,
+              "tmdb_id": 11355,
+              "type": "movie"
+            },
+            {
+              "title": "She's All That",
+              "year": 1999,
+              "tmdb_id": 10314,
+              "type": "movie"
+            },
+            {
+              "title": "Romy and Michele's High School Reunion",
+              "year": 1997,
+              "tmdb_id": 9611,
+              "type": "movie"
+            },
+            {
+              "title": "Center Stage",
+              "year": 2000,
+              "tmdb_id": 10560,
+              "type": "movie"
+            },
+            {
+              "title": "Step Up",
+              "year": 2006,
+              "tmdb_id": 9762,
+              "type": "movie"
+            },
+            {
+              "title": "Mamma Mia! Here We Go Again",
+              "year": 2018,
+              "tmdb_id": 458423,
+              "type": "movie"
+            },
+            {
+              "title": "The Lucky One",
+              "year": 2012,
+              "tmdb_id": 77877,
+              "type": "movie"
+            },
+            {
+              "title": "Dear John",
+              "year": 2010,
+              "tmdb_id": 22971,
+              "type": "movie"
+            },
+            {
+              "title": "A Walk to Remember",
+              "year": 2002,
+              "tmdb_id": 10229,
+              "type": "movie"
+            },
+            {
+              "title": "P.S. I Love You",
+              "year": 2007,
+              "tmdb_id": 6023,
+              "type": "movie"
+            },
+            {
+              "title": "Me Before You",
+              "year": 2016,
+              "tmdb_id": 296096,
+              "type": "movie"
+            },
+            {
+              "title": "The Fault in Our Stars",
+              "year": 2014,
+              "tmdb_id": 222935,
+              "type": "movie"
+            },
+            {
+              "title": "Thelma & Louise",
+              "year": 1991,
+              "tmdb_id": 1541,
+              "type": "movie"
+            },
+            {
+              "title": "Miss Congeniality",
+              "year": 2000,
+              "tmdb_id": 1493,
+              "type": "movie"
+            },
+            {
+              "title": "Hairspray",
+              "year": 2007,
+              "tmdb_id": 2976,
+              "type": "movie"
+            },
+            {
+              "title": "Beaches",
+              "year": 1988,
+              "tmdb_id": 15592,
+              "type": "movie"
+            },
+            {
+              "title": "Steel Magnolias",
+              "year": 1989,
+              "tmdb_id": 10860,
+              "type": "movie"
+            },
+            {
+              "title": "Bad Moms",
+              "year": 2016,
+              "tmdb_id": 376659,
+              "type": "movie"
+            },
+            {
+              "title": "The Other Woman",
+              "year": 2014,
+              "tmdb_id": 193610,
+              "type": "movie"
+            },
+            {
+              "title": "Isn't It Romantic",
+              "year": 2019,
+              "tmdb_id": 449563,
+              "type": "movie"
+            },
+            {
+              "title": "Set It Up",
+              "year": 2018,
+              "tmdb_id": 384677,
+              "type": "movie"
+            },
+            {
+              "title": "Anyone but You",
+              "year": 2023,
+              "tmdb_id": 1072790,
+              "type": "movie"
+            },
+            {
+              "title": "He's Just Not That Into You",
+              "year": 2009,
+              "tmdb_id": 10184,
+              "type": "movie"
+            },
+            {
+              "title": "Valentine's Day",
+              "year": 2010,
+              "tmdb_id": 32856,
+              "type": "movie"
+            },
+            {
+              "title": "What Women Want",
+              "year": 2000,
+              "tmdb_id": 3981,
+              "type": "movie"
+            },
+            {
+              "title": "Material Girls",
+              "year": 2006,
+              "tmdb_id": 10118,
+              "type": "movie"
+            },
+            {
+              "title": "Wild Child",
+              "year": 2008,
+              "tmdb_id": 13971,
+              "type": "movie"
+            },
+            {
+              "title": "Monte Carlo",
+              "year": 2011,
+              "tmdb_id": 59860,
+              "type": "movie"
+            }
+          ]
+        },
+        {
+          "id": "gn-m-romcom",
+          "title": "Rom-Coms",
+          "sub": "Meet-cutes and happy endings",
+          "discover": "/discover/movie?with_genres=10749,35&without_genres=16,10751,14,878,28,80&sort_by=vote_count.desc&vote_count.gte=500"
+        },
+        {
+          "id": "gn-m-chick",
+          "title": "Chick Flicks",
+          "sub": "Besties, bachelorettes and big nights out",
+          "discover": "/discover/movie?with_keywords=340707|351769|305505|221475|5248&without_genres=27,28,16,53,80,878,14&sort_by=vote_count.desc&vote_count.gte=100"
+        },
+        {
+          "id": "gn-m-cry",
+          "title": "Grab the Tissues",
+          "sub": "Love stories that hit hard",
+          "discover": "/discover/movie?with_genres=10749,18&without_genres=35,14,878,80,10752,27&sort_by=vote_count.desc&vote_count.gte=1000"
+        }
+      ]
+    },
+    {
+      "id": "shows",
+      "label": "Shows",
+      "rows": [
+        {
+          "id": "gn-s-baddies",
+          "title": "Baddies",
+          "sub": "Every Baddies season, Zeus and South Central",
+          "items": [
+            {
+              "title": "Baddies USA: Chapter 3",
+              "year": 2026,
+              "tmdb_id": 337395,
+              "type": "tv"
+            },
+            {
+              "title": "Baddies USA",
+              "year": 2025,
+              "tmdb_id": 306499,
+              "type": "tv"
+            },
+            {
+              "title": "Baddies Africa",
+              "year": 2025,
+              "tmdb_id": 291017,
+              "type": "tv"
+            },
+            {
+              "title": "Baddies Gone Wild",
+              "year": 2025,
+              "tmdb_id": 291018,
+              "type": "tv"
+            },
+            {
+              "title": "Baddies Midwest Reunion",
+              "year": 2025,
+              "tmdb_id": 288715,
+              "type": "tv"
+            },
+            {
+              "title": "Baddies Midwest",
+              "year": 2024,
+              "tmdb_id": 275096,
+              "type": "tv"
+            },
+            {
+              "title": "Baddies Caribbean",
+              "year": 2024,
+              "tmdb_id": 253092,
+              "type": "tv"
+            },
+            {
+              "title": "Baddies Caribbean Auditions",
+              "year": 2024,
+              "tmdb_id": 246811,
+              "type": "tv"
+            },
+            {
+              "title": "Baddies Caribbean Reunion",
+              "year": 2024,
+              "tmdb_id": 273647,
+              "type": "tv"
+            },
+            {
+              "title": "South Central Baddies 5",
+              "year": 2024,
+              "tmdb_id": 286264,
+              "type": "tv"
+            },
+            {
+              "title": "South Central Baddies “First 48” [Reunion]",
+              "year": 2024,
+              "tmdb_id": 286261,
+              "type": "tv"
+            },
+            {
+              "title": "Baddies East",
+              "year": 2023,
+              "tmdb_id": 234927,
+              "type": "tv"
+            },
+            {
+              "title": "Baddies West",
+              "year": 2023,
+              "tmdb_id": 218537,
+              "type": "tv"
+            },
+            {
+              "title": "Baddies South",
+              "year": 2022,
+              "tmdb_id": 204410,
+              "type": "tv"
+            },
+            {
+              "title": "South Central Baddies",
+              "year": 2022,
+              "tmdb_id": 206457,
+              "type": "tv"
+            },
+            {
+              "title": "Baddies ATL",
+              "year": 2021,
+              "tmdb_id": 206329,
+              "type": "tv"
+            }
+          ]
+        },
+        {
+          "id": "gn-s-zeus",
+          "title": "Zeus Network",
+          "sub": "Joseline's Cabaret, Bad Boys, Blac Chyna and more",
+          "items": [
+            {
+              "title": "Joseline's Cabaret California",
+              "year": 2025,
+              "tmdb_id": 297403,
+              "type": "tv"
+            },
+            {
+              "title": "Joseline's Cabaret Texas",
+              "year": 2024,
+              "tmdb_id": 271079,
+              "type": "tv"
+            },
+            {
+              "title": "Joseline's Cabaret: New York",
+              "year": 2023,
+              "tmdb_id": 230451,
+              "type": "tv"
+            },
+            {
+              "title": "Joseline's Cabaret: Las Vegas",
+              "year": 2022,
+              "tmdb_id": 194822,
+              "type": "tv"
+            },
+            {
+              "title": "Joseline's Cabaret: Atlanta",
+              "year": 2021,
+              "tmdb_id": 132881,
+              "type": "tv"
+            },
+            {
+              "title": "Joseline's Cabaret: Miami",
+              "year": 2020,
+              "tmdb_id": 100048,
+              "type": "tv"
+            },
+            {
+              "title": "The Real Blac Chyna",
+              "year": 2019,
+              "tmdb_id": 91421,
+              "type": "tv"
+            },
+            {
+              "title": "One Mo' Chance",
+              "year": 2020,
+              "tmdb_id": 156307,
+              "type": "tv"
+            },
+            {
+              "title": "Bad Girls Club",
+              "year": 2006,
+              "tmdb_id": 4940,
+              "type": "tv"
+            },
+            {
+              "title": "Caught",
+              "year": null,
+              "tmdb_id": 113656,
+              "type": "tv"
+            },
+            {
+              "title": "Bad Boys Texas",
+              "year": 2023,
+              "tmdb_id": 225538,
+              "type": "tv"
+            },
+            {
+              "title": "Bad Escorts",
+              "year": 2018,
+              "tmdb_id": 316648,
+              "type": "tv"
+            },
+            {
+              "title": "Bad Boys: Los Angeles",
+              "year": 2022,
+              "tmdb_id": 206316,
+              "type": "tv"
+            },
+            {
+              "title": "Bad Boys Cancun",
+              "year": null,
+              "tmdb_id": 334304,
+              "type": "tv"
+            },
+            {
+              "title": "Tokyo Toni’s Finding Love ASAP",
+              "year": 2019,
+              "tmdb_id": 96528,
+              "type": "tv"
+            },
+            {
+              "title": "Sober Coach",
+              "year": 2019,
+              "tmdb_id": 90249,
+              "type": "tv"
+            },
+            {
+              "title": "Bad Vs. Wild",
+              "year": null,
+              "tmdb_id": 247025,
+              "type": "tv"
+            },
+            {
+              "title": "TiTi Do You Love Me?",
+              "year": null,
+              "tmdb_id": 328826,
+              "type": "tv"
+            },
+            {
+              "title": "Life With Lil Tay",
+              "year": null,
+              "tmdb_id": 314499,
+              "type": "tv"
+            }
+          ]
+        },
+        {
+          "id": "gn-s-nttv",
+          "title": "Now That's TV",
+          "sub": "South Central Baddies, Young and Reckless, DejaVu and more",
+          "items": [
+            {
+              "title": "South Central Baddies",
+              "year": 2022,
+              "tmdb_id": 206457,
+              "type": "tv"
+            },
+            {
+              "title": "Mean Girlz",
+              "year": 2024,
+              "tmdb_id": 244391,
+              "type": "tv"
+            },
+            {
+              "title": "Pink Conversations with GiGi Maguire",
+              "tmdb_id": 339659,
+              "type": "tv"
+            },
+            {
+              "title": "Greek Life",
+              "year": 2024,
+              "tmdb_id": 257840,
+              "type": "tv"
+            },
+            {
+              "title": "South Central Baddies 5",
+              "year": 2024,
+              "tmdb_id": 286264,
+              "type": "tv"
+            },
+            {
+              "title": "South Central Baddies “First 48” [Reunion]",
+              "year": 2024,
+              "tmdb_id": 286261,
+              "type": "tv"
+            },
+            {
+              "title": "South Central PlayBoys",
+              "year": 2023,
+              "tmdb_id": 230404,
+              "type": "tv"
+            },
+            {
+              "title": "Young and Reckless",
+              "tmdb_id": 244390,
+              "type": "tv"
+            },
+            {
+              "title": "Young And Reckless All Stars",
+              "tmdb_id": 299656,
+              "type": "tv"
+            },
+            {
+              "title": "DejaVu: Las Vegas [Season 2]",
+              "year": 2024,
+              "tmdb_id": 274824,
+              "type": "tv"
+            },
+            {
+              "title": "Dejavu Season 3",
+              "year": 2024,
+              "tmdb_id": 286185,
+              "type": "tv"
+            }
+          ]
+        },
+        {
+          "id": "gn-s-picks",
+          "title": "Girls Night Shows",
+          "sub": "Sex and the City, Gossip Girl, Bridgerton and more",
+          "items": [
+            {
+              "title": "Sex and the City",
+              "year": 1998,
+              "tmdb_id": 105,
+              "type": "tv"
+            },
+            {
+              "title": "Gossip Girl",
+              "year": 2007,
+              "tmdb_id": 1395,
+              "type": "tv"
+            },
+            {
+              "title": "Grey's Anatomy",
+              "year": 2005,
+              "tmdb_id": 1416,
+              "type": "tv"
+            },
+            {
+              "title": "Pretty Little Liars",
+              "year": 2010,
+              "tmdb_id": 31917,
+              "type": "tv"
+            },
+            {
+              "title": "Bridgerton",
+              "year": 2020,
+              "tmdb_id": 91239,
+              "type": "tv"
+            },
+            {
+              "title": "The Real Housewives of Beverly Hills",
+              "year": 2010,
+              "tmdb_id": 32390,
+              "type": "tv"
+            },
+            {
+              "title": "Love Island",
+              "year": 2015,
+              "tmdb_id": 66636,
+              "type": "tv"
+            },
+            {
+              "title": "Emily in Paris",
+              "year": 2020,
+              "tmdb_id": 82596,
+              "type": "tv"
+            },
+            {
+              "title": "Gilmore Girls",
+              "year": 2000,
+              "tmdb_id": 4586,
+              "type": "tv"
+            },
+            {
+              "title": "Desperate Housewives",
+              "year": 2004,
+              "tmdb_id": 693,
+              "type": "tv"
+            },
+            {
+              "title": "Girls",
+              "year": 2012,
+              "tmdb_id": 42282,
+              "type": "tv"
+            },
+            {
+              "title": "The Vampire Diaries",
+              "year": 2009,
+              "tmdb_id": 18165,
+              "type": "tv"
+            },
+            {
+              "title": "One Tree Hill",
+              "year": 2003,
+              "tmdb_id": 269,
+              "type": "tv"
+            },
+            {
+              "title": "The O.C.",
+              "year": 2003,
+              "tmdb_id": 2673,
+              "type": "tv"
+            },
+            {
+              "title": "Jane the Virgin",
+              "year": 2014,
+              "tmdb_id": 61418,
+              "type": "tv"
+            },
+            {
+              "title": "Sweet Magnolias",
+              "year": 2020,
+              "tmdb_id": 102904,
+              "type": "tv"
+            },
+            {
+              "title": "Virgin River",
+              "year": 2019,
+              "tmdb_id": 88324,
+              "type": "tv"
+            },
+            {
+              "title": "Ginny & Georgia",
+              "year": 2021,
+              "tmdb_id": 117581,
+              "type": "tv"
+            },
+            {
+              "title": "Never Have I Ever",
+              "year": 2020,
+              "tmdb_id": 100883,
+              "type": "tv"
+            },
+            {
+              "title": "The Summer I Turned Pretty",
+              "year": 2022,
+              "tmdb_id": 194766,
+              "type": "tv"
+            },
+            {
+              "title": "Insecure",
+              "year": 2016,
+              "tmdb_id": 67883,
+              "type": "tv"
+            },
+            {
+              "title": "Scandal",
+              "year": 2012,
+              "tmdb_id": 39269,
+              "type": "tv"
+            },
+            {
+              "title": "Selling Sunset",
+              "year": 2019,
+              "tmdb_id": 87826,
+              "type": "tv"
+            },
+            {
+              "title": "Keeping Up with the Kardashians",
+              "year": 2007,
+              "tmdb_id": 14814,
+              "type": "tv"
+            },
+            {
+              "title": "The Bachelor",
+              "year": 2002,
+              "tmdb_id": 355,
+              "type": "tv"
+            },
+            {
+              "title": "Love Is Blind",
+              "year": 2020,
+              "tmdb_id": 99353,
+              "type": "tv"
+            },
+            {
+              "title": "Too Hot to Handle",
+              "year": 2020,
+              "tmdb_id": 102085,
+              "type": "tv"
+            },
+            {
+              "title": "Hart of Dixie",
+              "year": 2011,
+              "tmdb_id": 39279,
+              "type": "tv"
+            },
+            {
+              "title": "Gossip Girl",
+              "year": 2021,
+              "tmdb_id": 95249,
+              "type": "tv"
+            },
+            {
+              "title": "The Mindy Project",
+              "year": 2012,
+              "tmdb_id": 44857,
+              "type": "tv"
+            },
+            {
+              "title": "New Girl",
+              "year": 2011,
+              "tmdb_id": 1420,
+              "type": "tv"
+            },
+            {
+              "title": "Big Little Lies",
+              "year": 2017,
+              "tmdb_id": 66292,
+              "type": "tv"
+            },
+            {
+              "title": "And Just Like That…",
+              "year": 2021,
+              "tmdb_id": 116450,
+              "type": "tv"
+            },
+            {
+              "title": "Dawson's Creek",
+              "year": 1998,
+              "tmdb_id": 2327,
+              "type": "tv"
+            },
+            {
+              "title": "90210",
+              "year": 2008,
+              "tmdb_id": 5917,
+              "type": "tv"
+            },
+            {
+              "title": "Charmed",
+              "year": 1998,
+              "tmdb_id": 1981,
+              "type": "tv"
+            },
+            {
+              "title": "The Bold Type",
+              "year": 2017,
+              "tmdb_id": 69630,
+              "type": "tv"
+            },
+            {
+              "title": "Younger",
+              "year": 2015,
+              "tmdb_id": 62117,
+              "type": "tv"
+            },
+            {
+              "title": "Ugly Betty",
+              "year": 2006,
+              "tmdb_id": 4626,
+              "type": "tv"
+            },
+            {
+              "title": "Glee",
+              "year": 2009,
+              "tmdb_id": 1417,
+              "type": "tv"
+            },
+            {
+              "title": "The Real Housewives of Atlanta",
+              "year": 2008,
+              "tmdb_id": 17380,
+              "type": "tv"
+            },
+            {
+              "title": "Vanderpump Rules",
+              "year": 2013,
+              "tmdb_id": 61581,
+              "type": "tv"
+            },
+            {
+              "title": "Laguna Beach",
+              "year": 2004,
+              "tmdb_id": 3605,
+              "type": "tv"
+            },
+            {
+              "title": "The Hills",
+              "year": 2006,
+              "tmdb_id": 4466,
+              "type": "tv"
+            },
+            {
+              "title": "Riverdale",
+              "year": 2017,
+              "tmdb_id": 69050,
+              "type": "tv"
+            },
+            {
+              "title": "XO, Kitty",
+              "year": 2023,
+              "tmdb_id": 195670,
+              "type": "tv"
+            },
+            {
+              "title": "Firefly Lane",
+              "year": 2021,
+              "tmdb_id": 87049,
+              "type": "tv"
+            },
+            {
+              "title": "Outer Banks",
+              "year": 2020,
+              "tmdb_id": 100757,
+              "type": "tv"
+            },
+            {
+              "title": "Euphoria",
+              "year": 2019,
+              "tmdb_id": 85552,
+              "type": "tv"
+            },
+            {
+              "title": "Queen Charlotte: A Bridgerton Story",
+              "year": 2023,
+              "tmdb_id": 196454,
+              "type": "tv"
+            }
+          ]
+        },
+        {
+          "id": "gn-s-reality",
+          "title": "Reality & Dating",
+          "sub": "Housewives, villas and drama",
+          "discover": "/discover/tv?with_genres=10764&with_keywords=215119|210281|5248&sort_by=vote_count.desc"
+        },
+        {
+          "id": "gn-s-drama",
+          "title": "Romance & Drama Series",
+          "sub": "Binge-worthy love triangles",
+          "discover": "/discover/tv?with_genres=18&without_genres=80,10759,10765,16&with_keywords=368947|5248|210281|9840&sort_by=vote_count.desc&vote_count.gte=200"
+        }
+      ]
+    }
+  ]
+}

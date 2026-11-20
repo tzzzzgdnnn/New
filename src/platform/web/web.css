@@ -35,3 +35,6 @@ html.sb-web .player-wrap iframe {
   }
   html.sb-web body:has(.player-wrap webview) .sp-tabbar { display: none; }
 }
+
+/* Web app: downloads need the iPhone or Android app. */
+.sb-download-btn { display: none !important; }

@@ -1,8 +1,14 @@
-// Add or edit a profile: name, avatar, Kids, PIN, and delete with confirm.
+// Add or edit a profile: name, avatar, Kids, gender, PIN, and delete with confirm.
 import { useState } from "react";
 import ProfileAvatar from "./ProfileAvatar";
 import AvatarPicker from "./AvatarPicker";
 import { MAX_NAME_LENGTH, PIN_LENGTH, isValidPin } from "./profileStore";
+
+const GENDER_OPTIONS = [
+  { value: "girl", label: "Girl" },
+  { value: "guy", label: "Guy" },
+  { value: null, label: "Not set" },
+];
 
 /**
  * @param {{
@@ -14,6 +20,7 @@ export default function ProfileEditor({ profile, defaultAvatar, canDelete, onSav
   const [name, setName] = useState(profile?.name || "");
   const [avatar, setAvatar] = useState(profile?.avatar || defaultAvatar);
   const [kids, setKids] = useState(!!profile?.kids);
+  const [gender, setGender] = useState(profile?.gender ?? null);
   const [pin, setPin] = useState(profile?.pin || "");
   const [picking, setPicking] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -21,7 +28,7 @@ export default function ProfileEditor({ profile, defaultAvatar, canDelete, onSav
   const trimmed = name.trim();
   const pinOk = pin === "" || isValidPin(pin);
   const canSave = trimmed.length > 0 && pinOk;
-  const save = () => canSave && onSave({ name: trimmed, avatar, kids, pin: pin || null });
+  const save = () => canSave && onSave({ name: trimmed, avatar, kids, gender, pin: pin || null });
 
   if (picking) {
     return (
@@ -69,6 +76,26 @@ export default function ProfileEditor({ profile, defaultAvatar, canDelete, onSav
             </span>
             <input type="checkbox" className="sp-switch" checked={kids} onChange={(e) => setKids(e.target.checked)} />
           </label>
+          <div className="sp-cell">
+            <span className="sp-cell-text">
+              <span className="sp-cell-label">Gender</span>
+              <span className="sp-cell-sub">Girl adds Girls Night to Home</span>
+            </span>
+            <div className="sp-seg" role="radiogroup" aria-label="Gender">
+              {GENDER_OPTIONS.map((o) => (
+                <button
+                  key={o.label}
+                  type="button"
+                  role="radio"
+                  aria-checked={gender === o.value}
+                  className={"sp-seg-btn" + (gender === o.value ? " is-on" : "")}
+                  onClick={() => setGender(o.value)}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <label className="sp-cell">
             <span className="sp-cell-text">
               <span className="sp-cell-label">Profile Lock</span>

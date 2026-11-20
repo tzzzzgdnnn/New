@@ -348,6 +348,31 @@ body.no-anim .sps-page { animation: none !important; }
 .sps-nav.is-collapsed::after { opacity: 0; }
 .sps-nav.is-collapsed .sps-nav-title, .sps-nav-title { opacity: 0 !important; }
 
+/* Fixed nav (Custom Servers): one iOS bar, "‹ Settings" + title, pinned
+   under the profile top bar (or the status bar without it). The page is
+   padded by its height so the first row is never behind it. */
+.sps-nav.is-fixed {
+  position: fixed;
+  top: env(safe-area-inset-top);
+  left: 0;
+  right: 0;
+  z-index: 8000; /* under the top bar (9001) and the status-bar shield (9000) */
+  height: var(--sps-fixed-nav-h, 44px);
+  margin: 0;
+  padding: 0 max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+  background: var(--sp-chrome-bg, rgba(12, 12, 14, .72));
+  -webkit-backdrop-filter: var(--sp-chrome-blur, saturate(180%) blur(28px));
+  backdrop-filter: var(--sp-chrome-blur, saturate(180%) blur(28px));
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  color: var(--sp-label, #fff);
+}
+body:has(.sp-topbar) .sps-nav.is-fixed { top: calc(var(--sp-topbar-h, 52px) + env(safe-area-inset-top)); }
+.sps-nav.is-fixed::after { opacity: 1; }
+.sps-nav.is-fixed .sps-nav-title { opacity: 1 !important; transform: none; max-width: 56vw; overflow: hidden; text-overflow: ellipsis; }
+/* Fallback before JS measures it (FixedNavPage sets the exact padding):
+   .main is already padded for the top bar and safe area; add the bar + a gap. */
+.sps-page.has-fixed-nav { padding-top: calc(var(--sps-fixed-nav-h, 44px) + 16px); }
+
 /* Diagnostics log viewer (About): newest first, selectable */
 .sps-diag-log {
   margin: 0;

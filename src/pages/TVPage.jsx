@@ -1,5 +1,5 @@
-import { IS_IOS } from "../platform/target";
-import { ActionSheet, contextMenuProps } from "../platform/ui";
+import { IS_IOS, CAN_DOWNLOAD } from "../platform/target";
+import { ActionSheet, InfoSheet, contextMenuProps } from "../platform/ui";
 import AnimeDubPrompt, { shouldAskAnimeDub } from "../platform/ios/AnimeDubPrompt";
 import {
   getAnimeDubMode,
@@ -51,7 +51,7 @@ import {
   sourceIsAsync,
   sourceSupportsAnime,
   sourceIsAnimeCapable,
-  sourcesForContent,
+  sourcesForTitle,
   sourceIsMovieOnly,
   getAnimeSourceUrl,
   fetchAnilistData,
@@ -269,7 +269,10 @@ function EpisodeDesc({ overview, episodeName }) {
         </button>
       </div>
 
-      {open && (
+      {open && InfoSheet && (
+        <InfoSheet title={episodeName} text={overview} onClose={() => setOpen(false)} />
+      )}
+      {open && !InfoSheet && (
         <div
           className="ep-desc-overlay"
           onClick={(e) => {
@@ -2339,7 +2342,7 @@ export default function TVPage({
                     {isSaved ? <BookmarkFillIcon /> : <BookmarkIcon />}
                     {isSaved ? "Saved" : "Save"}
                   </button>
-                  {IS_IOS && resumePlan && (
+                  {CAN_DOWNLOAD && resumePlan && (
                     <button
                       className="btn btn-ghost"
                       onClick={() =>
@@ -2851,7 +2854,7 @@ export default function TVPage({
                     style={{ top: menuPos.top, left: menuPos.left }}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {(IS_IOS ? sourcesForContent(isAnime) : PLAYER_SOURCES).filter((src) => !src.movieOnly).map(
+                    {(IS_IOS ? sourcesForTitle(isAnime, "tv") : PLAYER_SOURCES).filter((src) => !src.movieOnly).map(
                       (src) => (
                         <button
                           key={src.id}
@@ -3076,7 +3079,7 @@ export default function TVPage({
 
           <div className="section">
             <div className="section-title">Episodes</div>
-            {IS_IOS && seasons.length > 0 && !restricted && (
+            {CAN_DOWNLOAD && seasons.length > 0 && !restricted && (
               <button
                 type="button"
                 className="btn btn-ghost sb-episodes-download"
@@ -3177,7 +3180,7 @@ export default function TVPage({
                         onPlay={playEpisode}
                         onContextMenu={setEpMenu}
                         onGoToDownloads={onGoToDownloads}
-                        onDownload={EpisodePicker ? downloadOneEpisode : null}
+                        onDownload={CAN_DOWNLOAD && EpisodePicker ? downloadOneEpisode : null}
                       />
                     );
                   })}
