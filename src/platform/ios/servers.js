@@ -2,7 +2,7 @@
 // Edit servers.json on the ios-app branch to fix a dead/moved server without
 // rebuilding the app.
 import bundled from "../../../servers.json";
-import { PLAYER_SOURCES } from "../../utils/api";
+import { PLAYER_SOURCES, WEB_UNFRAMEABLE, webEmbedRank } from "../../utils/api";
 import { customPlayerSources, listCustomServers, serverFits, setCustomServersApplyHook } from "./customServers";
 
 export const SERVERS_BRANCH =
@@ -16,7 +16,10 @@ const FETCH_TIMEOUT_MS = 2500;
 const BUILTIN = PLAYER_SOURCES.slice();
 // Web app only: Hexa shows a "Verification Required" captcha; Vidrift refuses
 // to play sandboxed.
-const WEB_BLOCKED = new Set(["hexa", "vidnest"]); // both show a captcha wall
+// Hexa / Vidnest show a captcha wall; Aether (X-Frame-Options: DENY) and
+// 7Movies (X-Frame-Options: SAMEORIGIN) can't be shown inside another site, so
+// in a browser they were a black box.
+const WEB_BLOCKED = WEB_UNFRAMEABLE;
 let _mirrorMap = []; // [{ origin, mirrors: [origin...] }]
 
 const fill = (tpl, v) =>
@@ -96,17 +99,18 @@ export function applyServers(cfg) {
     .filter((s) => s && s.movie && Array.isArray(s.mirrors) && s.mirrors.length)
     .map((s) => ({ origin: originOf(s.movie), mirrors: s.mirrors.map(originOf).filter(Boolean) }));
   // Mutate in place: every module imported PLAYER_SOURCES by reference.
-  if (import.meta.env?.VITE_WEB) {
-    // Web app: Cinejoy direct always first; servers that show a "verify you're
+  if (import.meta.env?.VITE_WEB && !import.meta.env?.VITE_ANDROID) {
+    // Web app (browser only; the Android app takes the iPhone list): Cinejoy direct always first; servers that show a "verify you're
     // human" wall or refuse to run sandboxed never appear.
     // Cinejoy direct first (ad-free); embed servers back as fallbacks, minus
     // any that show a captcha wall. Vidrift first for anime.
-    const ok = added.filter((s) => !WEB_BLOCKED.has(s.id));
+    // Embeds in the order they really play in a browser (webEmbedRank):
+    // Cinezo, Vidfast, Flixer, then Vidrift last.
     const direct = builtins.filter((s) => /\.invalid\//.test(s.movieUrl?.("1") || ""));
-    const rest = builtins
-      .filter((s) => !direct.includes(s) && !WEB_BLOCKED.has(s.id))
-      .sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"));
-    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct, ...rest, ...ok, ...custom);
+    const embeds = [...builtins.filter((s) => !direct.includes(s)), ...added]
+      .filter((s) => !WEB_BLOCKED.has(s.id))
+      .sort((a, b) => webEmbedRank(a.id) - webEmbedRank(b.id));
+    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct, ...embeds, ...custom);
   } else {
     // iPhone app: Cinejoy (direct stream) stays listed first.
     const direct = builtins.filter((s) => /\.invalid\//.test(s.movieUrl?.("1") || ""));

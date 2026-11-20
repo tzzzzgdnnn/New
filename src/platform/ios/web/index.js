@@ -28,7 +28,7 @@ export async function prepareWebLaunch() {
  * (iOS profile or Android Private DNS) unless the viewer closed it.
  */
 export function offerAdBlockSheet(delayMs = 2500) {
-  if (isNativeApp() || isAdBlockInstalled()) return;
+  if ((isNativeApp() && !window.SbDns) || isAdBlockInstalled()) return;
   const platform = adBlockPlatform();
   const probed = detectAdBlock();
   if (!platform) return;

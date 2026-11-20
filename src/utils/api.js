@@ -471,9 +471,20 @@ const IOS_DIRECT_SOURCES = [
     movieUrl: (id) => `https://rive-primevids.invalid/movie/${id}`,
     tvUrl: (id, season, ep) => `https://rive-primevids.invalid/tv/${id}/${season}/${ep}` },
 ];
-export const PLAYER_SOURCES = import.meta.env?.VITE_WEB
-  ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id) && !["vidnest", "hexa"].includes(s.id)).sort((a, b) => (b.id === "vidrift") - (a.id === "vidrift"))] // vidrift first of the embeds (Auto for anime off-party; it plays unsandboxed, webview.js). Movies / TV: the direct sources above come first
-  : [...WEB_DIRECT_SOURCES, ...IOS_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES]; // iPhone app: Cinejoy, then 7Movies, direct and listed first
+// Browser-only build (web app, not the Android app). Android is native like
+// the iPhone app (native HTTP, its own player, stream sniffing), so it gets the
+// iPhone's full server list in the same order.
+const BROWSER_ONLY = !!(import.meta.env?.VITE_WEB && !import.meta.env?.VITE_ANDROID);
+// Web order for the embeds: the ones verified to play in a browser frame first
+// (vidfast plays unsandboxed), vidrift last (on iPhone Safari it shows "Remove
+// sandboxing" even unsandboxed: its pop-up check fails under Safari's pop-up
+// blocker). Aether (X-Frame-Options: DENY) can't be framed by any other site.
+export const WEB_EMBED_ORDER = ["cinezo", "vidfast", "flixer", "vidrift"];
+export const WEB_UNFRAMEABLE = new Set(["aether", "7movies", "hexa", "vidnest"]);
+export const webEmbedRank = (id) => { const i = WEB_EMBED_ORDER.indexOf(id); return i < 0 ? WEB_EMBED_ORDER.length - 1.5 : i; };
+export const PLAYER_SOURCES = BROWSER_ONLY
+  ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id) && !WEB_UNFRAMEABLE.has(s.id)).sort((a, b) => webEmbedRank(a.id) - webEmbedRank(b.id))]
+  : [...WEB_DIRECT_SOURCES, ...IOS_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES]; // iPhone and Android apps: Cinejoy, then 7Movies, direct and listed first
 
 // Sources that require a transparent webRequest intercept to load properly
 export const NEEDS_INTERCEPT = [];

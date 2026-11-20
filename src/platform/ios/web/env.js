@@ -42,7 +42,8 @@ export function isAndroidBrowser(ua = navigator.userAgent) {
  * or null (native app, desktop, other iOS browsers).
  */
 export function adBlockPlatform() {
-  if (isNativeApp()) return null;
+  // Android app: the same Private DNS steps, with a button that opens Settings.
+  if (isNativeApp()) return typeof window !== "undefined" && window.SbDns ? "android" : null;
   if (isAppleMobile()) return !isStandalone() && isSafari() ? "ios" : null;
   return isAndroidBrowser() ? "android" : null;
 }
