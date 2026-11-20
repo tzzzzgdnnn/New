@@ -369,8 +369,9 @@ body.no-anim .sps-page { animation: none !important; }
 body:has(.sp-topbar) .sps-nav.is-fixed { top: calc(var(--sp-topbar-h, 52px) + env(safe-area-inset-top)); }
 .sps-nav.is-fixed::after { opacity: 1; }
 .sps-nav.is-fixed .sps-nav-title { opacity: 1 !important; transform: none; max-width: 56vw; overflow: hidden; text-overflow: ellipsis; }
-/* .main is already padded for the top bar and safe area: add the bar plus a gap. */
-.sps-page.has-fixed-nav { padding-top: calc(var(--sps-fixed-nav-h, 44px) + 20px); }
+/* Fallback before JS measures it (FixedNavPage sets the exact padding):
+   .main is already padded for the top bar and safe area; add the bar + a gap. */
+.sps-page.has-fixed-nav { padding-top: calc(var(--sps-fixed-nav-h, 44px) + 16px); }
 
 /* Diagnostics log viewer (About): newest first, selectable */
 .sps-diag-log {

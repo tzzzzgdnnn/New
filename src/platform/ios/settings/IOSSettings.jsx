@@ -113,21 +113,67 @@ function useCollapsed(titleRef, navRef) {
   return collapsed;
 }
 
+/**
+ * One fixed nav bar ("‹ Settings" + title, no large title) pinned directly
+ * under the app header, and page padding measured from where the bar really
+ * ends, so the first card is never behind it. The bar is rendered into
+ * <body> so a transformed page (push animation) can't move it; its top is
+ * measured from the header itself instead of trusting CSS (var/:has/env),
+ * which put the bar too low over Add Site on the phone.
+ */
+function FixedNavPage({ title, backLabel, onBack, children, dir }) {
+  const pageRef = useRef(null);
+  const navRef = useRef(null);
+  useLayoutEffect(() => {
+    const page = pageRef.current;
+    const nav = navRef.current;
+    if (!page || !nav) return undefined;
+    const place = () => {
+      const header = document.querySelector(".sp-topbar");
+      // Header bottom already includes the safe-area inset; without a header
+      // the CSS top (env(safe-area-inset-top)) stays in charge.
+      if (header) nav.style.top = `${Math.round(header.getBoundingClientRect().bottom)}px`;
+      else nav.style.removeProperty("top");
+      const navBottom = nav.getBoundingClientRect().bottom;
+      const scroller = page.closest(".main");
+      const scrolled = (scroller?.scrollTop || 0) + (document.scrollingElement?.scrollTop || 0);
+      // Where the page's box starts when scrolled to the top (padding excluded).
+      const pageTop = page.getBoundingClientRect().top + scrolled;
+      const pad = Math.max(navBottom - pageTop, nav.offsetHeight) + 16;
+      page.style.paddingTop = `${Math.round(pad)}px`;
+    };
+    place();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(place) : null;
+    const header = document.querySelector(".sp-topbar");
+    if (ro) {
+      ro.observe(nav);
+      if (header) ro.observe(header);
+    }
+    window.addEventListener("resize", place);
+    window.addEventListener("orientationchange", place);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", place);
+      window.removeEventListener("orientationchange", place);
+    };
+  }, []);
+  return (
+    <div ref={pageRef} className={"sps-page has-fixed-nav" + (dir ? ` is-${dir}` : "")}>
+      {createPortal(<NavBar ref={navRef} title={title} backLabel={backLabel} onBack={onBack} collapsed fixed />, document.body)}
+      {children}
+    </div>
+  );
+}
+
 function Page({ title, backLabel, onBack, children, dir, sticky }) {
+  if (sticky) return <FixedNavPage title={title} backLabel={backLabel} onBack={onBack} dir={dir}>{children}</FixedNavPage>;
+  return <LargeTitlePage title={title} backLabel={backLabel} onBack={onBack} dir={dir}>{children}</LargeTitlePage>;
+}
+
+function LargeTitlePage({ title, backLabel, onBack, children, dir }) {
   const titleRef = useRef(null);
   const navRef = useRef(null);
   const collapsed = useCollapsed(titleRef, navRef);
-  // Fixed nav (Custom Servers): one bar with "‹ Settings" and the title,
-  // pinned under the app's top bar, no large title. Rendered into <body> so
-  // a transformed page (push animation) or the padded scroller can't move it.
-  if (sticky) {
-    return (
-      <div className={"sps-page has-fixed-nav" + (dir ? ` is-${dir}` : "")}>
-        {createPortal(<NavBar title={title} backLabel={backLabel} onBack={onBack} collapsed fixed />, document.body)}
-        {children}
-      </div>
-    );
-  }
   return (
     <div className={"sps-page" + (dir ? ` is-${dir}` : "")}>
       <NavBar ref={navRef} title={title} backLabel={backLabel} onBack={onBack} collapsed={collapsed} />
