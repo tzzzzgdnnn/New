@@ -23,6 +23,8 @@ import { version as APP_VERSION } from "../../../../package.json";
 import { getLoadTimes } from "../playerPrefs";
 import { readDiag, clearDiag, diag } from "../../../utils/diag";
 import { registerBackHandler, reloadApp } from "../../../utils/navHistory";
+import CustomServersPage from "./CustomServers";
+import { listCustomServers } from "../customServers";
 
 // Tile colors: one accent family plus iOS system hues so rows scan quickly.
 const C = {
@@ -168,6 +170,13 @@ function Root({ push }) {
           label="Subtitles"
           value={labelOf(SUBTITLE_LANGUAGES.map((l) => ({ value: l.code, label: l.label })), subLang, subLang)}
           onClick={() => push("subtitles")}
+        />
+        <Row
+          icon="globe"
+          iconColor={C.teal}
+          label="Custom Servers"
+          value={String(listCustomServers().length || "")}
+          onClick={() => push("customServers")}
         />
         <Row
           icon="shield"
@@ -885,6 +894,7 @@ function AboutPage({ apiKey, onChangeApiKey }) {
 
 const PAGES = {
   playback: { title: "Playback", C: PlaybackPage },
+  customServers: { title: "Custom Servers", C: CustomServersPage },
   anime: { title: "Anime Audio", C: AnimePage },
   subtitles: { title: "Subtitles", C: SubtitlesPage },
   parental: { title: "Parental Controls", C: ParentalPage },
