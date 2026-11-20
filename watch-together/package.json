@@ -2,5 +2,5 @@
   "name": "superplayer-watch",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node --test test.mjs" }
+  "scripts": { "test": "node --test test.mjs party.test.mjs" }
 }

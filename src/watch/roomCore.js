@@ -20,20 +20,32 @@
 import {
   START_LEAD_MS,
   RECONNECT_GRACE_MS,
-  MAX_MEMBERS,
   PLATFORMS,
   cleanMedia,
   expectedPosition,
+  MAX_MEMBERS,
+  fullMessage,
 } from "./protocol.js";
 
 const finite = (n) => typeof n === "number" && Number.isFinite(n);
+
+export const CHAT_MAX_LEN = 280;
+export const CHAT_HISTORY = 50;
+export const CHAT_PER_10S = 5;
+export const RATE_BURST = 20;
+export const RATE_PER_S = 10;
+export function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
 
 export class RoomCore {
   /**
    * @param {{code: string, now?: () => number, send: (id: string, msg: object) => void}} o
    */
-  constructor({ code, now = () => Date.now(), send }) {
+  constructor({ code, now = () => Date.now(), send, sendMany = null }) {
     this.code = code;
+    this.sendMany = sendMany; // (ids, serialized) => void: fan out one serialized frame
+    this.hostId = null;
     this.now = now;
     this.send = send;
     this.members = new Map();
@@ -56,6 +68,9 @@ export class RoomCore {
       intent: this.intent,
       playback: this.playback,
       createdAt: this.createdAt,
+      hostId: this.hostId,
+      chatLog: this.chatLog || [],
+      chatSeq: this.chatSeq || 0,
       members: [...this.members.values()].map((m) => ({ ...m, connected: false, droppedAt: this.now() })),
     };
   }
@@ -69,6 +84,9 @@ export class RoomCore {
       intent: s.intent ?? "pause",
       playback: s.playback ?? this.playback,
       createdAt: s.createdAt ?? this.createdAt,
+      hostId: s.hostId ?? null,
+      chatLog: s.chatLog || [],
+      chatSeq: s.chatSeq || 0,
     });
     // After an eviction everyone has to reconnect: hold where we were.
     if (!this.playback.paused) this.hold(expectedPosition(this.playback, this.now()));
@@ -86,7 +104,8 @@ export class RoomCore {
   // ── Members ─────────────────────────────────────────────────────────────
   join(id, { platform, name } = {}) {
     const known = this.members.get(id);
-    if (!known && this.members.size >= MAX_MEMBERS) return { ok: false, error: "room-full" };
+    // Up to MAX_MEMBERS seats; a dropped member keeps theirs until prune() (grace) frees it.
+    if (!known && this.members.size >= MAX_MEMBERS) return { ok: false, error: "room-full", message: fullMessage() };
     const m = known || { id, joinedAt: this.now() };
     Object.assign(m, {
       platform: PLATFORMS.includes(platform) ? platform : "web",
@@ -98,11 +117,17 @@ export class RoomCore {
       rev: -1,
       epoch: -1,
       pos: null,
+      cseq: 0,
+      synced: false, // becomes true once it has been ready at the room's current position
     });
     this.members.set(id, m);
-    // Someone (re)joining has to load and buffer first: hold for them.
-    if (!this.playback.paused) this.hold(expectedPosition(this.playback, this.now()), "joining");
+    if (!this.hostId || !this.members.get(this.hostId)?.connected) this.hostId = id;
+    // A late joiner (or a reconnect) never disturbs the others: playback carries
+    // on, and the joiner's engine loads, seeks to the latency-adjusted position
+    // and starts on its own. It is not waited on and cannot trigger a stall hold
+    // until it has caught up (synced).
     this.broadcast();
+    this.sendChatHistory(id);
     return { ok: true };
   }
 
@@ -113,13 +138,17 @@ export class RoomCore {
     m.connected = false;
     m.droppedAt = this.now();
     m.ready = false;
-    if (!this.playback.paused && this.connected.length > 0) this.hold(expectedPosition(this.playback, this.now()), "reconnecting");
+    m.synced = false;
+    // A drop never pauses, seeks or ends anything for the others.
+    this.handoff(id);
+    this.evaluate();
     this.broadcast();
   }
 
   /** Left on purpose (Leave button): gone at once, the others carry on. */
   leave(id) {
     if (!this.members.delete(id)) return;
+    this.handoff(id);
     this.evaluate();
     this.broadcast();
   }
@@ -144,7 +173,14 @@ export class RoomCore {
   // ── Messages ────────────────────────────────────────────────────────────
   handle(id, msg) {
     const m = this.members.get(id);
-    if (!m || !msg || typeof msg !== "object") return;
+    if (!m || !msg || typeof msg !== "object" || typeof msg.type !== "string") return;
+    // Per-member ordering: a command older than one already applied is stale.
+    if (msg.type !== "ping" && Number.isInteger(msg.cseq)) {
+      if (msg.cseq <= (m.cseq || 0)) return;
+      m.cseq = msg.cseq;
+    }
+    // Rate limit: a token bucket per member (pings exempt; 20 burst, 10/s).
+    if (msg.type !== "ping" && msg.type !== "status" && !this.allow(m)) return; // status is an idempotent overwrite (sent every tick)
     switch (msg.type) {
       case "ping":
         this.send(id, { type: "pong", t0: msg.t0, ts: this.now() });
@@ -165,6 +201,19 @@ export class RoomCore {
         return this.setRate(msg.rate);
       case "leave":
         return this.leave(id);
+      case "chat":
+        return this.chat(m, msg.text);
+      case "end":
+        return this.end(id);
+      case "rtc": // voice: WebRTC offer/answer/ICE relayed to one member, never inspected
+        if (typeof msg.to === "string" && this.members.get(msg.to)?.connected && msg.data && typeof msg.data === "object" && JSON.stringify(msg.data).length < 16_000)
+          this.send(msg.to, { type: "rtc", from: id, data: msg.data });
+        return;
+      case "voice": // mic state + speaking indicator, fanned out to everyone
+        m.mic = !!msg.mic;
+        m.speaking = !!msg.speaking && m.mic;
+        this.fanout({ type: "voice", id, mic: m.mic, speaking: m.speaking });
+        return;
       default:
     }
   }
@@ -206,6 +255,7 @@ export class RoomCore {
     m.rev = finite(s.rev) ? s.rev : -1;
     m.epoch = finite(s.epoch) ? s.epoch : -1;
     m.pos = finite(s.pos) ? s.pos : null;
+    if (m.ready && !m.buffering && this.media && m.rev === this.media.rev && m.epoch === this.epoch) m.synced = true;
     m.lastStatus = this.now();
     if (this.evaluate()) this.broadcast();
     else this.broadcastMembersIfChanged();
@@ -244,6 +294,52 @@ export class RoomCore {
     this.broadcast();
   }
 
+  /** If `id` held the host role, pass it to the longest-standing connected member. */
+  handoff(id) {
+    if (this.hostId !== id) return;
+    const next = this.connected.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0))[0];
+    this.hostId = next ? next.id : null;
+  }
+
+  /** Host only: ends the party for everyone. Returns true if it ended. */
+  end(id) {
+    if (id !== this.hostId) return false;
+    this.ended = true;
+    this.fanout({ type: "ended", reason: "host", by: id });
+    return true;
+  }
+
+  allow(m) {
+    const now = this.now();
+    const b = m.bucket || (m.bucket = { tokens: RATE_BURST, at: now });
+    b.tokens = Math.min(RATE_BURST, b.tokens + ((now - b.at) / 1000) * RATE_PER_S);
+    b.at = now;
+    if (b.tokens < 1) return false;
+    b.tokens -= 1;
+    return true;
+  }
+
+  // ── Chat ────────────────────────────────────────────────────────────────
+  chat(m, text) {
+    if (typeof text !== "string") return;
+    const clean = escapeHtml(text.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, CHAT_MAX_LEN));
+    if (!clean) return;
+    const now = this.now();
+    // Separate, stricter chat limit: CHAT_PER_10S messages per 10 s per member.
+    m.chatTimes = (m.chatTimes || []).filter((t) => now - t < 10_000);
+    if (m.chatTimes.length >= CHAT_PER_10S) return;
+    m.chatTimes.push(now);
+    this.chatSeq = (this.chatSeq || 0) + 1;
+    const entry = { id: this.chatSeq, from: m.id, name: escapeHtml(m.name), text: clean, ts: now };
+    this.chatLog = [...(this.chatLog || []), entry].slice(-CHAT_HISTORY);
+    this.fanout({ type: "chat", ...entry });
+  }
+
+  /** Recent chat for someone (re)joining. */
+  sendChatHistory(id) {
+    if (this.chatLog?.length) this.send(id, { type: "chat-history", messages: this.chatLog });
+  }
+
   // ── State machine ───────────────────────────────────────────────────────
   /** Freeze at `pos` (new epoch: everyone must be ready there again). */
   hold(pos, reason = null) {
@@ -257,10 +353,8 @@ export class RoomCore {
     if (!this.media) return [];
     const out = [];
     for (const m of this.members.values()) {
-      if (!m.connected) {
-        out.push(m.id); // dropped, still in grace
-        continue;
-      }
+      if (!m.connected) continue; // dropped members are never waited on
+      if (!this.playback.paused && !m.synced) continue; // late joiner catching up on its own
       const current = m.rev === this.media.rev && m.epoch === this.epoch;
       if (!current || !m.ready || m.buffering) out.push(m.id);
     }
@@ -273,7 +367,7 @@ export class RoomCore {
     const now = this.now();
     if (!this.playback.paused) {
       // Someone stalled: everyone stops on the stalled phone's frame.
-      const stalled = this.connected.filter((m) => m.buffering && m.rev === this.media.rev && m.epoch === this.epoch);
+      const stalled = this.connected.filter((m) => m.synced && m.buffering && m.rev === this.media.rev && m.epoch === this.epoch);
       if (stalled.length) {
         const expected = expectedPosition(this.playback, now);
         const at = stalled
@@ -304,6 +398,9 @@ export class RoomCore {
       intent: this.intent,
       playback: this.playback,
       holdReason: this.holdReason || null,
+      host: this.hostId || null,
+      count: this.members.size,
+      max: MAX_MEMBERS,
       waiting: this.waitingOn(),
       members: [...this.members.values()].map(({ id, platform, name, connected, ready, buffering }) => ({
         id,
@@ -320,8 +417,15 @@ export class RoomCore {
   broadcast() {
     this.seq += 1;
     this.lastMembersSig = this.membersSig();
-    const v = this.view();
-    for (const m of this.members.values()) if (m.connected) this.send(m.id, { ...v, you: m.id });
+    this.fanout(this.view());
+  }
+
+  /** One message to every connected member, serialized once when the host supports it. */
+  fanout(msg) {
+    const ids = [];
+    for (const m of this.members.values()) if (m.connected) ids.push(m.id);
+    if (this.sendMany) return this.sendMany(ids, JSON.stringify(msg));
+    for (const id of ids) this.send(id, msg);
   }
 
   membersSig() {

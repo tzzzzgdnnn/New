@@ -209,15 +209,23 @@ export class SimNet {
       }
       send(data) {
         if (!this.open) return;
-        net.vt.setTimeout(() => this.open && net.core.handle(this.id, JSON.parse(data)), this.lat.up + this.j());
+        if (this.lat.loss && JSON.parse(data).type === "ping" && Math.random() < this.lat.loss) return; // lost clock probes (test-only; real WS would retransmit)
+        const at = Math.max(net.vt.now() + this.lat.up + this.j(), this.upAt || 0);
+        this.upAt = at;
+        net.vt.setTimeout(() => this.open && net.core.handle(this.id, JSON.parse(data)), at - net.vt.now());
       }
       down(msg) {
         if (!this.open) return;
         const s = JSON.stringify(msg);
-        net.vt.setTimeout(() => this.open && this.onmessage?.({ data: s }), this.lat.down + this.j());
+        if (this.lat.loss && msg.type === "pong" && Math.random() < this.lat.loss) return;
+        const at = Math.max(net.vt.now() + this.lat.down + this.j(), this.downAt || 0);
+        this.downAt = at;
+        net.vt.setTimeout(() => this.open && this.onmessage?.({ data: s }), at - net.vt.now());
       }
       close() {
-        this.drop(true);
+        // Like a real close handshake: frames already sent are delivered first.
+        const wait = Math.max(0, (this.upAt || 0) - net.vt.now()) + 1;
+        net.vt.setTimeout(() => this.drop(true), wait);
       }
       drop(left = false) {
         if (!this.open) return;

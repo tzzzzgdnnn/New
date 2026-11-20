@@ -200,7 +200,7 @@ test("room: anyone can pick the next title; everyone switches with server + lang
   assert.equal(r.core.media.rev, rev);
 });
 
-test("room: a dropped phone holds the room; reconnect or grace timeout releases it", () => {
+test("room: a drop never pauses the others; reconnect keeps the seat; grace timeout frees it", () => {
   const r = room();
   r.core.join("a", {});
   r.core.join("b", {});
@@ -208,21 +208,16 @@ test("room: a dropped phone holds the room; reconnect or grace timeout releases 
   ready(r, "a");
   ready(r, "b");
   r.adv(START_LEAD_MS + 3000);
+  const epoch = r.core.epoch;
   r.core.drop("b");
-  assert.ok(r.core.playback.paused);
-  assert.equal(r.core.holdReason, "reconnecting");
+  assert.equal(r.core.playback.paused, false, "still playing for a");
+  assert.equal(r.core.epoch, epoch, "no hold, no seek");
   r.core.join("b", {});
-  ready(r, "a");
-  ready(r, "b");
-  assert.equal(r.core.playback.paused, false, "back together after reconnect");
-  r.adv(START_LEAD_MS + 1000);
+  assert.equal(r.core.playback.paused, false, "reconnect does not disturb a");
   r.core.drop("b");
-  ready(r, "a");
-  assert.ok(r.core.playback.paused);
   r.adv(RECONNECT_GRACE_MS);
   r.core.prune();
   assert.equal(r.core.members.has("b"), false);
-  ready(r, "a");
   assert.equal(r.core.playback.paused, false, "the one left carries on");
 });
 
@@ -416,18 +411,20 @@ test("mixed room: the guest picks the next episode, everyone switches and starts
   assert.ok(R.gap() < 0.1);
 });
 
-test("mixed room: a dropped connection holds both; reconnect resumes in sync", () => {
+test("mixed room: a dropped connection never pauses the other; reconnect resumes in sync", () => {
   const R = mixedRoom();
   R.vt.run(1000, R.step);
   R.cIos.pickMedia(MOVIE);
   R.vt.run(10_000, R.step);
+  const before = R.ios.t;
   R.net.links.get("browser").drop();
   R.vt.run(200, R.step);
-  assert.ok(R.net.core.playback.paused);
+  assert.equal(R.net.core.playback.paused, false);
   R.vt.run(8000, R.step); // client reconnects with backoff
+  assert.ok(R.ios.t > before + 7.5, "iPhone kept playing");
   assert.equal(R.net.core.connected.length, 2);
   assert.equal(R.net.core.playback.paused, false);
-  R.vt.run(3000, R.step);
+  R.vt.run(4000, R.step);
   assert.ok(R.gap() < 0.1, `gap ${(R.gap() * 1000).toFixed(1)} ms`);
 });
 

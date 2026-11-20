@@ -33,7 +33,7 @@ jobs:
           node-version: 22
 
       - name: Test sync engine, room and worker
-        run: node --test watch-together/test.mjs
+        run: node --test watch-together/test.mjs watch-together/party.test.mjs
 
       - name: Check Cloudflare secrets
         id: secrets

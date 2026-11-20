@@ -8,7 +8,7 @@
 //
 // Rooms are deleted EMPTY_ROOM_TTL_MS after the last person leaves.
 import { RoomCore } from "../src/watch/roomCore.js";
-import { makeCode, isValidCode, normalizeCode, EMPTY_ROOM_TTL_MS, RECONNECT_GRACE_MS, MAX_MEMBERS } from "../src/watch/protocol.js";
+import { makeCode, isValidCode, normalizeCode, EMPTY_ROOM_TTL_MS, RECONNECT_GRACE_MS, MAX_MEMBERS, fullMessage } from "../src/watch/protocol.js";
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -71,7 +71,19 @@ export class Room {
   }
 
   makeCore(code) {
-    return new RoomCore({ code, now: this.now, send: (id, msg) => this.sendTo(id, msg) });
+    return new RoomCore({
+      code,
+      now: this.now,
+      send: (id, msg) => this.sendTo(id, msg),
+      // Serialize once, fan out the same frame to every socket.
+      sendMany: (ids, frame) => {
+        for (const id of ids) {
+          try {
+            this.sockets.get(id)?.send(frame);
+          } catch {}
+        }
+      },
+    });
   }
 
   sendTo(id, msg) {
@@ -116,9 +128,8 @@ export class Room {
       server.close(4400, "missing id");
       return new Response(null, { status: 101, webSocket: client });
     }
-    const known = this.core.members.has(id);
-    if (!known && this.core.members.size >= MAX_MEMBERS) {
-      server.close(4409, "room full");
+    if (!this.core.members.has(id) && this.core.members.size >= MAX_MEMBERS) {
+      server.close(4409, fullMessage()); // "Party is full (9/9)"
       return new Response(null, { status: 101, webSocket: client });
     }
     // Same device reconnecting: the new socket replaces the old one.
@@ -142,6 +153,7 @@ export class Room {
       this.core.handle(id, msg);
       if (msg.type !== "ping" && msg.type !== "status") this.save();
       if (msg.type === "leave") this.gone(id, server, true);
+      if (this.core?.ended) this.endRoom();
     });
     const onClose = () => this.gone(id, server, false);
     server.addEventListener("close", onClose);
@@ -166,6 +178,18 @@ export class Room {
   async afterChange() {
     await this.save();
     if (this.core?.empty) await this.state.storage.setAlarm(this.now() + EMPTY_ROOM_TTL_MS);
+  }
+
+  /** Host pressed End: close every socket (4410) and delete the room. */
+  async endRoom() {
+    for (const ws of this.sockets.values()) {
+      try {
+        ws.close(4410, "ended by host");
+      } catch {}
+    }
+    this.sockets.clear();
+    this.core = null;
+    await this.state.storage.deleteAll();
   }
 
   async alarm() {
