@@ -1,5 +1,7 @@
 // iOS entry (vite build --mode ios swaps this in for main.jsx).
 // The shim must install window.electron before App's modules evaluate.
+// First: keep localStorage room for the viewer's data (see storageGuard).
+import "./utils/storageGuard";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import "./styles/global.css";

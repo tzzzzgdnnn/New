@@ -6,6 +6,7 @@
 
 export const MAX_LINES = 2000;
 const MIRROR_KEY = "sb_diag_log";
+const MIRROR_MAX_CHARS = 120 * 1024;
 const WEB_OPEN_KEY = "sb_diag_web_open";
 const MAX_MSG = 600;
 
@@ -68,8 +69,15 @@ export function diag(type, ...parts) {
     const lines = loadMirror();
     lines.push(line);
     if (lines.length > MAX_LINES) lines.splice(0, lines.length - MAX_LINES);
+    // The localStorage mirror stays small (WebKit's ~5 MB quota is shared
+    // with the viewer's profiles, history and settings).
+    let text = lines.join("\n");
+    if (text.length > MIRROR_MAX_CHARS) {
+      text = text.slice(text.length - MIRROR_MAX_CHARS);
+      text = text.slice(text.indexOf("\n") + 1);
+    }
     try {
-      localStorage.setItem(MIRROR_KEY, lines.join("\n"));
+      localStorage.setItem(MIRROR_KEY, text);
     } catch {
       // Storage full: keep the newest half so logging itself never fails.
       try {
