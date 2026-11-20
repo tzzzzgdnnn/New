@@ -57,7 +57,10 @@ public class MainActivity extends BridgeActivity {
     private static final Pattern NOT_STREAM =
             Pattern.compile("\\.(ts|m4s|aac|jpg|png|webp|gif|css|js|woff2?)(\\?|#|$)|vast|preroll|/ads?/|doubleclick|googlesyndication|thumb|sprite|preview",
                     Pattern.CASE_INSENSITIVE);
-    private final Set<String> seen = Collections.synchronizedSet(new HashSet<>());
+    // Stream URL -> when it was last reported, so one page's repeated
+    // requests are sent once but the same title can be played again later.
+    private final java.util.Map<String, Long> seen = Collections.synchronizedMap(new java.util.HashMap<>());
+    private static final long SEEN_FOR_MS = 15_000;
     private static final int VOICE_REQ = 4711;
     private static final int MIC_PERM_REQ = 4712;
     private SpeechRecognizer recognizer;
@@ -91,12 +94,32 @@ public class MainActivity extends BridgeActivity {
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
                 String u = req.getUrl().toString();
                 if (!req.isForMainFrame() && u.startsWith("http") && !u.contains("://localhost")
-                        && STREAM.matcher(u).find() && !NOT_STREAM.matcher(u).find() && seen.add(u)) {
+                        && STREAM.matcher(u).find() && !NOT_STREAM.matcher(u).find() && fresh(u)) {
+                    // The headers the embed used for it: without its Referer /
+                    // Origin many hosts answer 403 to the player (black screen).
+                    JSONObject h = new JSONObject();
+                    try {
+                        for (java.util.Map.Entry<String, String> e : StreamSniffer.carry(req.getRequestHeaders(), null).entrySet())
+                            h.put(e.getKey(), e.getValue());
+                    } catch (Exception ignored) {}
                     String js = "window.dispatchEvent(new CustomEvent('sb-android-stream',{detail:{url:"
-                            + JSONObject.quote(u) + "}}))";
+                            + JSONObject.quote(u) + ",headers:" + h + "}}))";
+                    android.util.Log.i("SuperPlayer", "sniffed stream " + u + " headers=" + h.names());
                     view.post(() -> view.evaluateJavascript(js, null));
                 }
                 return super.shouldInterceptRequest(view, req);
+            }
+
+            // The web view's renderer died (killed for memory while the player
+            // was in front, or crashed). Unhandled, Android kills the whole app:
+            // the player went black and the app shrank away. Rebuild instead.
+            @Override
+            public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
+                boolean crashed = android.os.Build.VERSION.SDK_INT >= 26 && detail != null && detail.didCrash();
+                android.util.Log.e("SuperPlayer", "web view renderer gone (" + (crashed ? "crashed" : "killed for memory") + "); reloading the app view");
+                super.onRenderProcessGone(view, detail);
+                runOnUiThread(MainActivity.this::recreate);
+                return true;
             }
         });
 
@@ -130,6 +153,13 @@ public class MainActivity extends BridgeActivity {
                         handled -> { if (!"true".equals(handled)) moveTaskToBack(true); });
             }
         });
+    }
+
+    private boolean fresh(String u) {
+        long now = System.currentTimeMillis();
+        Long at = seen.put(u, now);
+        if (seen.size() > 200) seen.clear();
+        return at == null || now - at > SEEN_FOR_MS;
     }
 
     // ── Fire TV / Android TV ───────────────────────────────────────────────
@@ -296,7 +326,10 @@ public class MainActivity extends BridgeActivity {
         WebView wv = getBridge() == null ? null : getBridge().getWebView();
         if (wv != null) {
             wv.onPause();
-            if (android.os.Build.VERSION.SDK_INT >= 26)
+            // Behind our own player the page must survive: it holds the title,
+            // the server list and the fallback. Only waive it when the app
+            // itself is in the background.
+            if (android.os.Build.VERSION.SDK_INT >= 26 && PlayerActivity.current == null)
                 wv.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_WAIVED, true);
         }
     }

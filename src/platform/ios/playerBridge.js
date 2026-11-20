@@ -87,7 +87,9 @@ export function useNativeServerSelect(handler) {
         return;
       }
       if (!PLAYER_SOURCES.some((s) => s.id === sourceId)) return;
-      setServerChoice(sourceId);
+      // Android's automatic move to the next server after a failure keeps
+      // the viewer's own choice (Auto or a pinned server) as it was.
+      if (!e.sbAuto) setServerChoice(sourceId);
       ref.current?.({ sourceId, dubMode: mode });
     };
     window.addEventListener("sb-select-server", onSelect);

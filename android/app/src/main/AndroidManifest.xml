@@ -18,6 +18,7 @@
             android:banner="@drawable/tv_banner"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
             android:name=".MainActivity"
+            android:supportsPictureInPicture="false"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
@@ -37,6 +38,8 @@
 
         <activity
             android:name=".PlayerActivity"
+            android:supportsPictureInPicture="false"
+            android:resizeableActivity="true"
             android:theme="@style/AppTheme.NoActionBar"
             android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|navigation|density"

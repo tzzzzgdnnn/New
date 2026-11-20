@@ -586,30 +586,92 @@ function upgrade(wv) {
   // full-screen player (no embed page, no ads). If it won't play, the embed
   // simply keeps going.
   if (import.meta.env.VITE_ANDROID) {
-    let sniffedFor = null;
-    window.addEventListener("sb-android-stream", (e) => {
-      const u = String(e?.detail?.url || "");
-      if (!u || !wv.isConnected || stopDirect || directFor) return;
-      const embed = iframe.getAttribute("src") || "";
-      if (!embed || isBlank(embed) || sniffedFor === embed) return;
-      sniffedFor = embed;
+    // Per embed page: streams it requested (first is played; the others are
+    // spares if it fails) and how many failed. After MAX_TRIES failures, or no
+    // spare within SPARE_WAIT_MS, the next server is tried automatically and
+    // the reason is shown, never a black screen.
+    const MAX_TRIES = 3;
+    const SPARE_WAIT_MS = 3000;
+    let sniff = { embed: null, queue: [], tried: new Set(), fails: 0, playing: false, waitTimer: null };
+    const resetSniff = (embed) => {
+      clearTimeout(sniff.waitTimer);
+      sniff = { embed, queue: [], tried: new Set(), fails: 0, playing: false, waitTimer: null };
+    };
+    const playSniffed = (s) => {
       const ctx = currentCtx();
+      const embed = sniff.embed;
+      sniff.playing = true;
+      sniff.tried.add(s.url);
       log("playing", "auto-opened stream");
-      diag("player", `android sniffed stream: ${u.slice(0, 120)}`);
+      diag("player", `android sniffed stream: ${s.url.slice(0, 120)} (try ${sniff.fails + 1})`);
       let blanked = false;
-      stopDirect = playDirect(wv, u, {
+      stopDirect = playDirect(wv, s.url, {
         startAt: webStartAt(ctx),
+        // The embed page itself as the fallback Referer/Origin.
+        referer: embed,
+        headers: s.headers || {},
         onTime: (pos, dur) => {
           // Our player is running: drop the embed page (stops its audio/ads).
           if (!blanked && pos > 0) { blanked = true; iframe.src = "about:blank"; }
           webProgress(ctx)?.(pos, dur);
         },
         onFail: (why) => {
-          diag("player", `android auto-open failed: ${why}; keeping embed`);
           stopDirect = null;
+          if (sniff.embed !== embed) return;
+          sniff.playing = false;
+          sniff.fails += 1;
+          diag("player", `android player failed (${why}) on ${s.url.slice(0, 120)}`);
           if (blanked) loadUrl(embed, { webOnly: true });
+          const spare = sniff.queue.shift();
+          if (spare && sniff.fails < MAX_TRIES) return playSniffed(spare);
+          if (sniff.fails >= MAX_TRIES) return nextServer(why);
+          // Give the page a moment to request another stream.
+          sniff.waitTimer = setTimeout(() => {
+            if (sniff.embed !== embed || sniff.playing) return;
+            const later = sniff.queue.shift();
+            if (later) playSniffed(later);
+            else nextServer(why);
+          }, SPARE_WAIT_MS);
         },
       });
+    };
+    // The page's server failed: say why and move to the next server.
+    const failedServers = new Map(); // title key -> Set of servers that failed
+    const nextServer = (why) => {
+      const ctx = currentCtx();
+      const key = `${ctx.type}:${ctx.tmdbId}:${ctx.season ?? ""}:${ctx.episode ?? ""}`;
+      const current = menuId(readStored("playerSource"), ctx);
+      const failed = failedServers.get(key) || new Set();
+      failed.add(current);
+      failedServers.set(key, failed);
+      const list = serverListFor(ctx).filter((s) => PLAYER_SOURCES.some((p) => p.id === parseServerKey(s.id).sourceId));
+      const next = list.find((s) => !failed.has(s.id));
+      const label = list.find((s) => s.id === current)?.label || "This server";
+      diag("player", `android: ${label} failed (${why}); next: ${next ? next.label : "none"}`);
+      if (!next) {
+        showCard(`${label} couldn't play this (${why}). No other server worked — pick one in Server or try again later.`, false);
+        return;
+      }
+      showCard(`${label} couldn't play this (${why}). Trying ${next.label}…`, false);
+      setTimeout(hideCard, 4000);
+      const ev = new CustomEvent("sb-select-server", { detail: next.id });
+      ev.sbAuto = true; // an automatic switch: the viewer's own choice stays as it was
+      window.dispatchEvent(ev);
+    };
+    window.addEventListener("sb-android-stream", (e) => {
+      const u = String(e?.detail?.url || "");
+      if (!u || !wv.isConnected || directFor) return;
+      const embed = iframe.getAttribute("src") || "";
+      if (!embed || isBlank(embed)) return;
+      if (sniff.embed !== embed) resetSniff(embed);
+      if (sniff.tried.has(u) || sniff.queue.some((q) => q.url === u)) return;
+      const s = { url: u, headers: e?.detail?.headers || {} };
+      if (stopDirect || sniff.playing) {
+        if (sniff.queue.length < 5) sniff.queue.push(s); // a spare for when this one fails
+        return;
+      }
+      clearTimeout(sniff.waitTimer);
+      playSniffed(s);
     });
   }
 
