@@ -1,5 +1,5 @@
 import { IS_IOS, CAN_DOWNLOAD } from "../platform/target";
-import { ActionSheet, contextMenuProps } from "../platform/ui";
+import { ActionSheet, InfoSheet, contextMenuProps } from "../platform/ui";
 import AnimeDubPrompt, { shouldAskAnimeDub } from "../platform/ios/AnimeDubPrompt";
 import {
   getAnimeDubMode,
@@ -269,7 +269,10 @@ function EpisodeDesc({ overview, episodeName }) {
         </button>
       </div>
 
-      {open && (
+      {open && InfoSheet && (
+        <InfoSheet title={episodeName} text={overview} onClose={() => setOpen(false)} />
+      )}
+      {open && !InfoSheet && (
         <div
           className="ep-desc-overlay"
           onClick={(e) => {
