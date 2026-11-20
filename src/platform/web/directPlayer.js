@@ -58,6 +58,12 @@ const canBoxFullscreen = (box) => !IS_IPHONE && !!(box.requestFullscreen || box.
  * sound, and full screen carries over.
  */
 export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 12000, nativeOnly = false } = {}) {
+  // Web Watch Party: the party player is this <video>, inline beside the chat
+  // (iPhone Safari too: Apple's full-screen player would hide the chat), and
+  // the party (src/watch/adapters/web.js) starts / pauses it, never this file.
+  const party = !!window.__sbWatchParty;
+  // The party picks the start frame for everyone (the engine seeks there), not this phone's resume point.
+  if (party) startAt = 0;
   const ac = new AbortController();
   const on = (el, ev, fn, opts = {}) => el.addEventListener(ev, fn, { ...opts, signal: ac.signal });
   let video = box.querySelector(":scope > video.sb-direct-video");
@@ -71,10 +77,11 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   video.controls = true;
   // iPhone: no playsinline, so play() opens Apple's own full-screen player.
   const nativeHls = !!video.canPlayType("application/vnd.apple.mpegurl");
-  video.playsInline = !IS_IPHONE;
-  if (IS_IPHONE) video.removeAttribute("playsinline");
+  video.playsInline = party || !IS_IPHONE;
+  if (IS_IPHONE && !party) video.removeAttribute("playsinline");
   else video.setAttribute("playsinline", "");
-  video.autoplay = true;
+  if (party) video.setAttribute("webkit-playsinline", "");
+  video.autoplay = !party;
   video.preload = "auto";
   // Required for ManagedMediaSource (hls.js on iPhone, iOS 17.1+).
   video.disableRemotePlayback = true;
@@ -88,7 +95,9 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     stop();
     onFail?.(why);
   };
-  const timer = setTimeout(() => (IS_IPHONE ? video.readyState < 1 && !(video.currentTime > 0) : !(video.currentTime > 0)) && fail("timeout"), timeoutMs);
+  // Party: held paused on the start frame until everyone is buffered, so
+  // "loaded" (metadata in) is what counts, not "moving".
+  const timer = setTimeout(() => (party ? video.readyState < 1 : IS_IPHONE ? video.readyState < 1 && !(video.currentTime > 0) : !(video.currentTime > 0)) && fail("timeout"), timeoutMs);
 
   // Big centre button: Play (when the browser wants a tap) or Full screen.
   const bigBtn = document.createElement("button");
@@ -107,7 +116,7 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   // Everything else: the player box in full screen, turned to landscape.
   const isFull = () => (IS_IPHONE ? !!video.webkitDisplayingFullscreen : !!fsElement());
   const goFull = () => {
-    if (done || isFull()) return;
+    if (party || done || isFull()) return;
     try {
       if (IS_IPHONE) {
         if (video.webkitEnterFullscreen && video.readyState >= 1) video.webkitEnterFullscreen();
@@ -147,7 +156,7 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   // iPhone: Apple's own player only opens from a tap made once the video has
   // loaded, so (unless Apple's player is already up from the last episode)
   // it waits on one big Play button; that tap opens Apple's player and plays.
-  const iphoneWait = IS_IPHONE && !video.webkitDisplayingFullscreen;
+  const iphoneWait = !party && IS_IPHONE && !video.webkitDisplayingFullscreen;
   if (iphoneWait) {
     video.autoplay = false;
     showBtn("▶  Play");
@@ -157,10 +166,10 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     }
   }
   // Any play on iPhone (the inline controls too) goes to Apple's player.
-  if (IS_IPHONE) on(video, "play", () => { if (!video.webkitDisplayingFullscreen && video.readyState >= 1) try { video.webkitEnterFullscreen(); } catch {} });
+  if (IS_IPHONE && !party) on(video, "play", () => { if (!video.webkitDisplayingFullscreen && video.readyState >= 1) try { video.webkitEnterFullscreen(); } catch {} });
   // Elsewhere: start now and go full screen in the same tap.
   if (!IS_IPHONE && (!canBoxFullscreen(box) || !fsElement())) goFull();
-  const tapPlay = iphoneWait ? null : video.play();
+  const tapPlay = iphoneWait || party ? null : video.play();
   tapPlay?.catch?.(() => {
     if (done || !video.paused) return;
     showBtn("▶  Play");
@@ -168,7 +177,7 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   });
   if (!iphoneWait) on(video, "loadedmetadata", goFull, { once: true });
   on(video, "canplay", () => {
-    if (iphoneWait && video.paused) return;
+    if (party || (iphoneWait && video.paused)) return;
     if (!video.paused) return goFull();
     video.play().then(goFull).catch(() => showBtn("▶  Play"));
   }, { once: true });
@@ -177,7 +186,7 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   on(video, "playing", () => {
     bigBtn.style.display = "none";
     goFull();
-    setTimeout(() => !done && !isFull() && !video.paused && showBtn("⛶  Full screen"), 600);
+    if (!party) setTimeout(() => !done && !isFull() && !video.paused && showBtn("⛶  Full screen"), 600);
   });
   bigBtn.onclick = () => {
     // iPhone before the video has loaded: Apple's player can't open yet.
@@ -193,10 +202,10 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     p?.catch?.(() => showBtn("▶  Play"));
   };
   on(video, "webkitbeginfullscreen", () => (bigBtn.style.display = "none"));
-  on(video, "webkitendfullscreen", () => !done && !video.ended && showBtn("⛶  Full screen"));
+  on(video, "webkitendfullscreen", () => !party && !done && !video.ended && showBtn("⛶  Full screen"));
   on(document, "fullscreenchange", () => {
     if (fsElement()) bigBtn.style.display = "none";
-    else if (!done && !video.paused) showBtn("⛶  Full screen");
+    else if (!party && !done && !video.paused) showBtn("⛶  Full screen");
   });
 
   // ── Up Next: at the end of an episode, the next one plays by itself ──

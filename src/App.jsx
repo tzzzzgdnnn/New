@@ -1707,6 +1707,9 @@ export default function App() {
                   title: m.type === "tv" ? undefined : m.title,
                   name: m.type === "tv" ? m.title : undefined,
                   poster_path: m.poster || null,
+                  // Party: open straight into the player (Pick + Play on every device).
+                  ...(m.autoplay ? { autoResume: true } : {}),
+                  ...(m.type === "tv" ? { season: m.season || 1, episode: m.episode || 1 } : {}),
                 })
               }
             />

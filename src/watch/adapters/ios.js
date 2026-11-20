@@ -19,6 +19,7 @@ const EMPTY = Object.freeze({
 
 export function createIosAdapter({ getKey } = {}) {
   let last = null;
+  let sentKey; // key last handed to native (undefined = none yet)
 
   const post = (msg) => {
     try {
@@ -43,7 +44,15 @@ export function createIosAdapter({ getKey } = {}) {
     /** Set by the room client: called with the text the viewer sent from the native chat bar. */
     onChatSend: null,
 
+    /** Set by the room client: called on every native state push. */
+    onPush: null,
+
     read() {
+      // Native labels its player with the key JS gave it: keep that the title
+      // this page has open now (a party joined from Home, then a title opened,
+      // used to leave native on the old / null key, so remote pause / play /
+      // seek were never applied on the iPhone).
+      syncKey();
       if (!last) return { ...EMPTY };
       return {
         key: last.key ?? null,
@@ -75,7 +84,8 @@ export function createIosAdapter({ getKey } = {}) {
 
     begin() {
       install();
-      post({ cmd: "begin", key: currentKey() });
+      sentKey = currentKey();
+      post({ cmd: "begin", key: sentKey });
     },
 
     end() {
@@ -85,7 +95,8 @@ export function createIosAdapter({ getKey } = {}) {
     },
 
     setKey(key) {
-      post({ cmd: "setKey", key: key ?? null });
+      sentKey = key ?? null;
+      post({ cmd: "setKey", key: sentKey });
     },
 
     setVoice(on) {
@@ -119,17 +130,40 @@ export function createIosAdapter({ getKey } = {}) {
     },
   };
 
+  function syncKey() {
+    const k = currentKey();
+    if (sentKey !== undefined && k !== sentKey) adapter.setKey(k);
+  }
+
   function onState(s) {
-    if (s && typeof s === "object") last = s;
+    if (!s || typeof s !== "object") return;
+    const prev = last;
+    last = s;
+    // The viewer closed the native player (it reports no key once closing):
+    // "stop" pauses the party on that frame, like an explicit Pause.
+    if (prev && prev.key && !s.key && (prev.status === "playing" || prev.status === "waiting")) {
+      try {
+        adapter.onIntent?.({ action: "pause", stop: true, pos: Number.isFinite(prev.pos) ? prev.pos : undefined, key: prev.key });
+      } catch (e) {
+        console.error("watch intent handler failed", e);
+      }
+    }
+    try {
+      adapter.onPush?.();
+    } catch (e) {
+      console.error("watch push failed", e);
+    }
   }
 
   function onIntent(i) {
     if (!i || !i.action) return;
     try {
       adapter.onIntent?.({
-        action: i.action,
+        action: i.action === "stop" ? "pause" : i.action,
+        stop: i.action === "stop" || undefined,
         pos: Number.isFinite(i.pos) ? i.pos : undefined,
         rate: Number.isFinite(i.rate) ? i.rate : undefined,
+        key: last?.key ?? undefined,
       });
     } catch (e) {
       console.error("watch intent handler failed", e);
@@ -157,6 +191,8 @@ export function createIosAdapter({ getKey } = {}) {
     if (window.__sbWatchChatSend === onChatSend) delete window.__sbWatchChatSend;
   }
 
+  adapter._state = onState; // tests
+  adapter._intent = onIntent;
   // Hooks are live as soon as the adapter exists, so state pushed right
   // after begin() is never dropped.
   install();
