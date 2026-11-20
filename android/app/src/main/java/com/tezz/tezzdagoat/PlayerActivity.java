@@ -21,6 +21,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import androidx.appcompat.app.AlertDialog;
 import androidx.media3.common.Format;
+import androidx.media3.common.ForwardingPlayer;
+import androidx.media3.common.PlaybackParameters;
+import com.getcapacitor.JSObject;
 import androidx.media3.common.VideoSize;
 import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.ui.TrackSelectionDialogBuilder;
@@ -64,7 +67,23 @@ import java.util.Map;
 public class PlayerActivity extends AppCompatActivity {
     static PlayerActivity current;
     private ExoPlayer player;
+    /** What the on-screen controls drive: the player itself, or (in a Watch Party) a wrapper that reports the viewer's taps to the party. */
+    private Player ui;
     private PlayerView view;
+    // ── Watch Party (driven by SbPlayerPlugin.handleWatch) ──
+    private boolean bg; // activity in the background: never start playing
+    private boolean seekInFlight;
+    private long seekAt;
+    private double watchStartPos;
+    private double watchStartAt;
+    private float watchRate = 1f;
+    private final Runnable watchStart = () -> {
+        if (player == null || bg) return;
+        double late = (System.currentTimeMillis() - watchStartAt) / 1000.0;
+        if (late > 0.25) exactSeek(watchStartPos + late * watchRate);
+        player.setPlayWhenReady(true);
+    };
+    private static boolean partyOn() { return SbPlayerPlugin.watchOn; }
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean quiet, reported, started;
     static final String TAG = "SuperPlayer";
@@ -202,7 +221,7 @@ public class PlayerActivity extends AppCompatActivity {
         }
         new AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
                 .setTitle("Playback speed")
-                .setSingleChoiceItems(labels, sel, (d, w) -> { player.setPlaybackSpeed(SPEEDS[w]); updatePill(); d.dismiss(); hideBars(); })
+                .setSingleChoiceItems(labels, sel, (d, w) -> { ui.setPlaybackSpeed(SPEEDS[w]); updatePill(); d.dismiss(); hideBars(); })
                 .setOnDismissListener(d -> hideBars())
                 .show();
     }
@@ -261,7 +280,7 @@ public class PlayerActivity extends AppCompatActivity {
             @Override public boolean onDoubleTap(@NonNull MotionEvent e) {
                 if (player == null) return false;
                 long d = e.getX() < view.getWidth() / 2f ? -10_000 : 10_000;
-                player.seekTo(Math.max(0, player.getCurrentPosition() + d));
+                ui.seekTo(Math.max(0, player.getCurrentPosition() + d));
                 Toast.makeText(PlayerActivity.this, d < 0 ? "⏪ 10s" : "10s ⏩", Toast.LENGTH_SHORT).show();
                 return true;
             }
@@ -280,7 +299,7 @@ public class PlayerActivity extends AppCompatActivity {
     // between the buttons. Play/Pause, Rewind and Fast-forward always work.
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
-        if (player == null || view == null) return super.dispatchKeyEvent(e);
+        if (player == null || view == null || ui == null) return super.dispatchKeyEvent(e);
         int k = e.getKeyCode();
         boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
         switch (k) {
@@ -288,8 +307,8 @@ public class PlayerActivity extends AppCompatActivity {
             case KeyEvent.KEYCODE_MEDIA_PLAY:
             case KeyEvent.KEYCODE_MEDIA_PAUSE:
                 if (down && e.getRepeatCount() == 0) {
-                    if (k == KeyEvent.KEYCODE_MEDIA_PAUSE || (k == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && player.isPlaying())) player.pause();
-                    else player.play();
+                    if (k == KeyEvent.KEYCODE_MEDIA_PAUSE || (k == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && player.getPlayWhenReady())) ui.pause();
+                    else ui.play();
                     view.showController();
                 }
                 return true;
@@ -297,7 +316,7 @@ public class PlayerActivity extends AppCompatActivity {
             case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
                 if (down) {
                     long d = k == KeyEvent.KEYCODE_MEDIA_REWIND ? -10_000 : 10_000;
-                    player.seekTo(Math.max(0, player.getCurrentPosition() + d));
+                    ui.seekTo(Math.max(0, player.getCurrentPosition() + d));
                     view.showController();
                 }
                 return true;
@@ -306,14 +325,14 @@ public class PlayerActivity extends AppCompatActivity {
             if (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT) {
                 if (down) {
                     long d = k == KeyEvent.KEYCODE_DPAD_LEFT ? -10_000 : 10_000;
-                    player.seekTo(Math.max(0, player.getCurrentPosition() + d));
+                    ui.seekTo(Math.max(0, player.getCurrentPosition() + d));
                     Toast.makeText(this, d < 0 ? "⏪ 10s" : "10s ⏩", Toast.LENGTH_SHORT).show();
                 }
                 return true;
             }
             if (k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER || k == KeyEvent.KEYCODE_NUMPAD_ENTER) {
                 if (down && e.getRepeatCount() == 0) {
-                    if (player.isPlaying()) player.pause(); else player.play();
+                    if (player.getPlayWhenReady()) ui.pause(); else ui.play();
                     view.showController();
                 }
                 return true;
@@ -387,7 +406,8 @@ public class PlayerActivity extends AppCompatActivity {
                 .setSeekBackIncrementMs(10_000)
                 .setSeekForwardIncrementMs(10_000)
                 .build();
-        view.setPlayer(player);
+        ui = new PartyAwarePlayer(player);
+        view.setPlayer(ui);
         player.addAnalyticsListener(new AnalyticsListener() {
             @Override public void onBandwidthEstimate(@NonNull EventTime t, int loadMs, long bytes, long estimate) {
                 bitrateEstimate = estimate;
@@ -430,6 +450,7 @@ public class PlayerActivity extends AppCompatActivity {
                     Log.i(TAG, "player: playing " + host(streamUrl));
                 }
                 if (s == Player.STATE_ENDED) {
+                    if (partyOn()) return; // party: stay on the last frame, the room decides what's next
                     if (upNext != null && !upNextDismissed) { if (!upNextShown) showUpNext(); }
                     else finish();
                 }
@@ -438,9 +459,13 @@ public class PlayerActivity extends AppCompatActivity {
                 fail(describe(err));
             }
         });
-        float rate = getSharedPreferences("sb", MODE_PRIVATE).getFloat("rate", 1f);
+        // Party: open paused at 1x; the room seeks every phone to the same
+        // frame and starts them all together once each one is buffered.
+        boolean party = partyOn();
+        float rate = party ? 1f : getSharedPreferences("sb", MODE_PRIVATE).getFloat("rate", 1f);
+        watchRate = rate;
         player.setPlaybackSpeed(rate);
-        player.setPlayWhenReady(true);
+        player.setPlayWhenReady(!party);
         player.prepare();
         handler.removeCallbacks(tick);
         handler.postDelayed(tick, 5000);
@@ -580,11 +605,125 @@ public class PlayerActivity extends AppCompatActivity {
 
     @Override protected void onPause() {
         super.onPause();
+        bg = true;
+        handler.removeCallbacks(watchStart);
         if (player != null) {
             SbPlayerPlugin.emit("progress", session, pos(), dur(), null);
-            player.pause();
+            player.pause(); // never a party Pause: only the viewer's own tap is
         }
     }
+
+    @Override protected void onResume() {
+        super.onResume();
+        bg = false; // party: the sync engine puts this phone back on the room's timeline
+    }
+
+    // ── Watch Party ────────────────────────────────────────────────────────
+
+    /**
+     * The controls' player. Outside a party it is the player itself. In a
+     * party: Pause pauses here at once and tells the party (everyone pauses on
+     * that frame); Play only asks the party (everyone starts together); seeks
+     * and speed apply here and go to the party. Stalls, the app going to the
+     * background and the chat keyboard never reach the party.
+     */
+    private final class PartyAwarePlayer extends ForwardingPlayer {
+        PartyAwarePlayer(Player p) { super(p); }
+        @Override public void play() {
+            if (!partyOn()) { super.play(); return; }
+            SbPlayerPlugin.emitIntent("play", pos(), speed());
+        }
+        @Override public void pause() {
+            super.pause();
+            if (partyOn()) { handler.removeCallbacks(watchStart); SbPlayerPlugin.emitIntent("pause", pos(), speed()); }
+        }
+        @Override public void setPlayWhenReady(boolean b) { if (b) play(); else pause(); }
+        @Override public void seekTo(long ms) {
+            super.seekTo(ms);
+            if (partyOn()) { seekInFlight = true; seekAt = System.currentTimeMillis(); SbPlayerPlugin.emitIntent("seek", Math.max(0, ms) / 1000.0, speed()); }
+        }
+        @Override public void seekTo(int index, long ms) {
+            super.seekTo(index, ms);
+            if (partyOn()) { seekInFlight = true; seekAt = System.currentTimeMillis(); SbPlayerPlugin.emitIntent("seek", Math.max(0, ms) / 1000.0, speed()); }
+        }
+        @Override public void seekBack() { seekTo(Math.max(0, getCurrentPosition() - 10_000)); }
+        @Override public void seekForward() { seekTo(getCurrentPosition() + 10_000); }
+        @Override public void setPlaybackSpeed(float r) {
+            super.setPlaybackSpeed(r);
+            if (partyOn()) SbPlayerPlugin.emitIntent("rate", pos(), r);
+        }
+        @Override public void setPlaybackParameters(@NonNull PlaybackParameters p) {
+            super.setPlaybackParameters(p);
+            if (partyOn()) SbPlayerPlugin.emitIntent("rate", pos(), p.speed);
+        }
+    }
+
+    private float speed() { return player == null ? 1f : player.getPlaybackParameters().speed; }
+
+    private void exactSeek(double pos) {
+        if (player == null) return;
+        seekInFlight = true;
+        seekAt = System.currentTimeMillis();
+        player.seekTo((long) (Math.max(0, pos) * 1000));
+    }
+
+    /** Player state for the party (null once closing: the plugin then reports "no player"). */
+    JSObject watchState() {
+        if (player == null || isFinishing()) return null;
+        int st = player.getPlaybackState();
+        if (seekInFlight && st == Player.STATE_READY && System.currentTimeMillis() - seekAt > 120) seekInFlight = false;
+        if (seekInFlight && System.currentTimeMillis() - seekAt > 10_000) seekInFlight = false;
+        String status = player.isPlaying() ? "playing"
+                : (player.getPlayWhenReady() && st == Player.STATE_BUFFERING) ? "waiting" : "paused";
+        JSObject o = new JSObject();
+        o.put("open", true);
+        o.put("pos", pos());
+        o.put("rate", (double) speed());
+        o.put("status", status);
+        o.put("ready", st == Player.STATE_READY);
+        o.put("seeking", seekInFlight);
+        return o;
+    }
+
+    /** Stop, then land exactly on `pos`. */
+    void watchPause(double pos) {
+        if (player == null) return;
+        handler.removeCallbacks(watchStart);
+        player.setPlayWhenReady(false);
+        if (Math.abs(pos() - pos) > 0.02) exactSeek(pos);
+    }
+
+    /** Start item time `pos` at wall-clock instant `atMs` (JS Date.now() ms). */
+    void watchPlayAt(double pos, double atMs, float rate) {
+        if (player == null) return;
+        handler.removeCallbacks(watchStart);
+        watchRate = rate > 0 ? rate : 1f;
+        player.setPlaybackSpeed(watchRate);
+        long delay = (long) (atMs - System.currentTimeMillis());
+        if (delay > 0) {
+            player.setPlayWhenReady(false);
+            if (Math.abs(pos() - pos) > 0.02) exactSeek(pos);
+            watchStartPos = pos;
+            watchStartAt = atMs;
+            handler.postDelayed(watchStart, delay);
+        } else {
+            double target = pos + (-delay / 1000.0) * watchRate;
+            if (Math.abs(pos() - target) > 0.05) exactSeek(target);
+            if (!bg) player.setPlayWhenReady(true);
+        }
+    }
+
+    void watchSetRate(float r) {
+        watchRate = r;
+        if (player != null) player.setPlaybackSpeed(r);
+    }
+
+    void watchSeek(double pos) { exactSeek(pos); }
+
+    // Party chat UI (the chat column comes with the party player layout).
+    void setPartyUi(boolean on) {}
+    void setPartyChat(JSONArray messages) {}
+    void setPartyInfo(JSONObject info) {}
 
     /** Closed by the app (another title / server): no "closed" event. */
     void finishQuiet() { quiet = true; finish(); }
@@ -596,7 +735,13 @@ public class PlayerActivity extends AppCompatActivity {
         handler.removeCallbacks(upNextWatch);
         handler.removeCallbacks(upNextTick);
         if (player == null) return;
-        if (!silent && !quiet && !reported) { reported = true; SbPlayerPlugin.emit("closed", session, pos(), dur(), null); }
+        if (!silent && !quiet && !reported) {
+            reported = true;
+            SbPlayerPlugin.emit("closed", session, pos(), dur(), null);
+            // The viewer closed the party player: "stop" pauses the party on this frame.
+            if (partyOn()) SbPlayerPlugin.emitIntent("stop", pos(), speed());
+        }
+        handler.removeCallbacks(watchStart);
         getSharedPreferences("sb", MODE_PRIVATE).edit().putFloat("rate", player.getPlaybackParameters().speed).apply();
         player.release();
         player = null;

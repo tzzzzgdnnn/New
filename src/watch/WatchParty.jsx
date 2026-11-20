@@ -12,10 +12,18 @@ import { VoiceMesh } from "./voice.js";
 import { prettyCode, normalizeCode, isValidCode, mediaKey, cleanMedia, MAX_MEMBERS } from "./protocol.js";
 import { createWebAdapter } from "./adapters/web.js";
 import { createIosAdapter, isIosNative } from "./adapters/ios.js";
+import { createAndroidAdapter } from "./adapters/android.js";
+import { shouldAutoOpen } from "./autoOpen.js";
+import { registerPlugin } from "@capacitor/core";
 import { tmdbJson, imgUrl } from "../utils/api.js";
 import { startPresence } from "./presence.js";
 import { P2PHost, guestSocketClass, P2P_URL, NO_PARTY_MESSAGE } from "./p2p.js";
 import "./watch-party.css";
+
+// Android app: the built-in ExoPlayer (PlayerActivity) through the SbPlayer
+// plugin. A party plays there too, driven by adapters/android.js.
+const SbPlayer = import.meta.env.VITE_ANDROID ? registerPlugin("SbPlayer") : null;
+const isAndroidNative = () => !!SbPlayer && !!window.Capacitor?.isNativePlatform?.();
 
 const CONFIG_URL = "https://tzzzzgdnnn.github.io/New/watch/config.json";
 const CLIENT_ID_KEY = "sbWatchClientId";
@@ -79,7 +87,7 @@ const unescape = (s) =>
     .replace(/&#39;/g, "'")
     .replace(/&amp;/g, "&");
 
-const platform = () => (isIosNative() ? "ios" : /Android/i.test(navigator.userAgent) ? "android" : "web");
+const platform = () => (isIosNative() ? "ios" : isAndroidNative() || /Android/i.test(navigator.userAgent) ? "android" : "web");
 
 export function useWatchParty() {
   const [state, setState] = useState(null);
@@ -135,7 +143,11 @@ export function useWatchParty() {
         const m = currentMedia();
         return m ? mediaKey(m) : null;
       };
-      const adapter = ios ? createIosAdapter({ getKey }) : createWebAdapter({ getKey });
+      const adapter = ios
+        ? createIosAdapter({ getKey })
+        : isAndroidNative()
+          ? createAndroidAdapter({ plugin: SbPlayer, getKey })
+          : createWebAdapter({ getKey });
       adapterRef.current = adapter;
       const myId = clientId();
       const client = new WatchClient({
@@ -325,6 +337,14 @@ export function useWatchParty() {
         }
       },
       clearNotice: () => setNotice(null),
+      /** True when this device's player already has `key` open. */
+      playerHas: (key) => {
+        try {
+          return !!key && adapterRef.current?.read()?.key === key;
+        } catch {
+          return false;
+        }
+      },
       toggleFullscreen: () => adapterRef.current?.toggleFullscreen?.(),
     }),
     [create, join, leaveCleanup],
@@ -466,7 +486,7 @@ function ChatOverlay({ party, open, setOpen }) {
   );
 }
 
-function PartyBar({ party, onOpenTitle }) {
+function PartyBar({ party, onOpenTitle, markOpened }) {
   const [picking, setPicking] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   // The party player opens with the chat beside / below the movie.
@@ -512,7 +532,7 @@ function PartyBar({ party, onOpenTitle }) {
         )}
       </div>
       {elsewhere && (
-        <button className="wp-now" onClick={() => onOpenTitle(st.media)}>
+        <button className="wp-now" onClick={() => onOpenTitle({ ...st.media, autoplay: true })}>
           The party is watching {st.media.title || "something"} · Open
         </button>
       )}
@@ -543,7 +563,12 @@ function PartyBar({ party, onOpenTitle }) {
           onPick={(m) => {
             const picked = party.pick(m);
             setPicking(false);
-            if (picked) onOpenTitle(picked);
+            // Opens and starts the player here at once; every other device
+            // opens it from the room state (see autoOpen in WatchParty).
+            if (picked) {
+              markOpened(picked.key);
+              onOpenTitle({ ...picked, autoplay: true });
+            }
           }}
         />
       )}
@@ -658,12 +683,34 @@ export default function WatchParty({ page, onOpenTitle }) {
   const [sheet, setSheet] = useState(false);
   const [toast, setToast] = useState(null);
   const inParty = !!party.state || party.status === "connecting" || party.status === "reconnecting";
-  // Android app: while in a party, titles play in the page's own <video> (which
-  // the web adapter drives) instead of the native full-screen player.
+  // Pick + Play: whenever the party's title changes (anyone picked one, or
+  // this device just joined), open it here and start the player by itself.
+  // The room holds everyone on the start frame until every phone is
+  // buffered, then starts them all on the same instant (roomCore.evaluate).
+  // Web: while in a party, titles play inline in the page's <video> (beside
+  // the chat, driven by adapters/web.js). The apps use their native players.
   useEffect(() => {
     window.__sbWatchParty = inParty;
-    return () => { window.__sbWatchParty = false; };
+    return () => {
+      window.__sbWatchParty = false;
+    };
   }, [inParty]);
+  const openedRef = useRef({ rev: null, key: null, at: 0 });
+  const markOpened = useCallback((key) => {
+    openedRef.current.key = key;
+    openedRef.current.at = Date.now();
+  }, []);
+  const media = party.state?.media;
+  useEffect(() => {
+    if (!media) return;
+    const o = openedRef.current;
+    if (o.rev === media.rev) return;
+    o.rev = media.rev;
+    if (shouldAutoOpen(media, o, Date.now(), party.playerHas)) {
+      markOpened(media.key);
+      onOpenTitle({ ...media, autoplay: true });
+    }
+  }, [media?.rev, media?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   // Live counter (everyone, every device): shown on Home.
   const [live, setLive] = useState(null);
   useEffect(() => {
@@ -689,7 +736,7 @@ export default function WatchParty({ page, onOpenTitle }) {
           Watch Party
         </button>
       )}
-      {inParty && <PartyBar party={party} onOpenTitle={onOpenTitle} />}
+      {inParty && <PartyBar party={party} onOpenTitle={onOpenTitle} markOpened={markOpened} />}
       {sheet && !inParty && <StartSheet party={party} onClose={() => setSheet(false)} />}
       {toast && <div className="wp-toast">{toast}</div>}
       {live && page === "home" && !inParty && (

@@ -28,6 +28,10 @@ export class WatchClient {
     this.lastSeq = -1; // newest room state applied (stale / reordered states are ignored)
     this.pendingSeek = null; // a seek this device asked for that the room has not echoed yet
     adapter.onIntent = (i) => this.intent(i);
+    // Native players push their state ~4x a second: step on each push too, so
+    // sync keeps running when the page's own timers are throttled (Android
+    // WebView behind the full-screen player, iPhone web view under its player).
+    adapter.onPush = () => this.connected && this.engine.step();
   }
 
   connect() {
@@ -129,7 +133,13 @@ export class WatchClient {
   }
 
   /** The person tapped play / pause / seek / speed on this device. */
-  intent({ action, pos, rate }) {
+  intent({ action, pos, rate, key, stop }) {
+    // Closing the player stops the party only while it is playing (closing
+    // during a hold / a title switch is not a Pause).
+    if (stop && (!this.state?.playback || this.state.playback.paused)) return;
+    // A tap on a player still showing an older title (closing it while the
+    // party switched) must not pause / seek the party's new title.
+    if (key && this.state?.media?.key && key !== this.state.media.key) return;
     // Seek then Play (scrub, then tap play) go out back to back. The player has
     // not moved yet when Play is tapped, so its position is the old frame; Play
     // must carry the seek target or the room would jump back to where it was.

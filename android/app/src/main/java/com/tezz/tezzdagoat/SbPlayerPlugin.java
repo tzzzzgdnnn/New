@@ -9,6 +9,10 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import android.os.Handler;
+import android.os.Looper;
+
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.HashMap;
@@ -50,6 +54,117 @@ public class SbPlayerPlugin extends Plugin {
         i.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         getActivity().runOnUiThread(() -> getActivity().startActivity(i));
         call.resolve();
+    }
+
+    // ── Watch Party (src/watch/adapters/android.js) ─────────────────────────
+    // JS drives the player with watch({cmd}); the player's state goes back
+    // ~every 250 ms as "watchState", the viewer's own taps as "watchIntent"
+    // and chat sends as "watchChatSend". Mirrors the iPhone app's sbWatch.
+    static volatile boolean watchOn;
+    static JSONArray watchChat = new JSONArray();
+    static JSONObject watchParty;
+    private static final Handler main = new Handler(Looper.getMainLooper());
+    private static final Runnable watchTick = new Runnable() {
+        @Override public void run() {
+            if (!watchOn) return;
+            pushWatchState();
+            main.postDelayed(this, 250);
+        }
+    };
+
+    @PluginMethod
+    public void watch(PluginCall call) {
+        final String cmd = call.getString("cmd", "");
+        final JSObject d = call.getData();
+        main.post(() -> handleWatch(cmd, d));
+        call.resolve();
+    }
+
+    private static double num(JSONObject d, String k, double def) {
+        double v = d.optDouble(k, def);
+        return Double.isNaN(v) || Double.isInfinite(v) ? def : v;
+    }
+
+    static void handleWatch(String cmd, JSONObject d) {
+        PlayerActivity a = PlayerActivity.current;
+        switch (cmd) {
+            case "begin":
+                watchOn = true;
+                main.removeCallbacks(watchTick);
+                main.post(watchTick);
+                if (a != null) a.setPartyUi(true);
+                break;
+            case "end":
+                watchOn = false;
+                main.removeCallbacks(watchTick);
+                watchChat = new JSONArray();
+                watchParty = null;
+                if (a != null) a.setPartyUi(false);
+                break;
+            case "pause":
+                if (a != null) a.watchPause(num(d, "pos", 0));
+                break;
+            case "playAt":
+                if (a != null) a.watchPlayAt(num(d, "pos", 0), num(d, "atMs", System.currentTimeMillis()), (float) num(d, "rate", 1));
+                break;
+            case "setRate": {
+                double r = num(d, "rate", 1);
+                if (a != null && r > 0) a.watchSetRate((float) r);
+                break;
+            }
+            case "seek":
+                if (a != null) a.watchSeek(num(d, "pos", 0));
+                break;
+            case "chat": {
+                JSONArray m = d.optJSONArray("messages");
+                watchChat = m == null ? new JSONArray() : m;
+                if (a != null) a.setPartyChat(watchChat);
+                break;
+            }
+            case "party":
+                watchParty = d;
+                if (a != null) a.setPartyInfo(d);
+                break;
+            default:
+                break;
+        }
+    }
+
+    static void pushWatchState() {
+        SbPlayerPlugin p = instance;
+        if (p == null) return;
+        PlayerActivity a = PlayerActivity.current;
+        JSObject o = a != null ? a.watchState() : null;
+        if (o == null) {
+            o = new JSObject();
+            o.put("open", false);
+            o.put("pos", 0);
+            o.put("rate", 1);
+            o.put("status", "paused");
+            o.put("ready", false);
+            o.put("seeking", false);
+        }
+        o.put("sampledAt", (double) System.currentTimeMillis());
+        p.notifyListeners("watchState", o);
+    }
+
+    /** The viewer tapped play / pause / seek / speed, or closed the player ("stop"). */
+    static void emitIntent(String action, double pos, double rate) {
+        SbPlayerPlugin p = instance;
+        if (p == null || !watchOn) return;
+        JSObject o = new JSObject();
+        o.put("action", action);
+        o.put("pos", Double.isNaN(pos) || pos < 0 ? 0 : pos);
+        o.put("rate", Double.isNaN(rate) || rate <= 0 ? 1 : rate);
+        p.notifyListeners("watchIntent", o);
+    }
+
+    static void emitChatSend(String text) {
+        SbPlayerPlugin p = instance;
+        if (p == null || !watchOn || text == null) return;
+        JSObject o = new JSObject();
+        o.put("text", text);
+        p.notifyListeners("watchChatSend", o);
     }
 
     @PluginMethod

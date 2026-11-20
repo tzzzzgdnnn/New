@@ -325,6 +325,9 @@ public class MainActivity extends BridgeActivity {
         super.onStop();
         WebView wv = getBridge() == null ? null : getBridge().getWebView();
         if (wv != null) {
+            // Watch Party: the page runs the party (room link, sync engine,
+            // chat) while our player covers it, so it must not be paused.
+            if (SbPlayerPlugin.watchOn && PlayerActivity.current != null) return;
             wv.onPause();
             // Behind our own player the page must survive: it holds the title,
             // the server list and the fallback. Only waive it when the app

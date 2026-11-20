@@ -7,7 +7,37 @@
 // buffering, the tab going to the background or the chat keyboard opening
 // never are (the engine catches this phone back up on its own).
 
-const findVideo = () => document.querySelector("video.sb-direct-video") || document.querySelector("video");
+// The party player: the page's direct-stream <video> on screen, never the
+// hidden warm-up copy (directPlayer's prewarm), which would otherwise be
+// driven and reported as "this title is open" before anyone pressed play.
+const findVideo = () => {
+  for (const v of document.querySelectorAll("video.sb-direct-video")) {
+    if (v.isConnected && !v.closest("[data-sb-warm]")) return v;
+  }
+  return null;
+};
+
+/**
+ * play() that never leaves a party phone stuck: a browser that refuses to
+ * start with sound (iPhone Safari / a fresh desktop tab, no tap on this
+ * video yet) starts it muted instead, so it still plays in sync, and
+ * `onMuted` offers a "Tap for sound" button.
+ */
+export function playSafe(v, onMuted) {
+  let p;
+  try {
+    p = v.play();
+  } catch {
+    p = null;
+  }
+  if (!p || typeof p.catch !== "function") return Promise.resolve();
+  return p.catch((e) => {
+    if (e?.name !== "NotAllowedError" || v.muted) return;
+    v.muted = true;
+    onMuted?.();
+    return Promise.resolve(v.play()).catch(() => {});
+  });
+}
 
 export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
   let video = null;
@@ -72,12 +102,34 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
     return video;
   };
 
+  // Muted autostart: one tap anywhere on the button brings the sound back
+  // (inside a tap, so every browser allows it). Never pauses anything.
+  let soundBtn = null;
+  const offerSound = () => {
+    const v = video;
+    if (!v || soundBtn) return;
+    const b = document.createElement("button");
+    b.className = "sb-direct-ui wp-sound";
+    b.textContent = "🔇  Tap for sound";
+    b.style.cssText =
+      "position:absolute;left:12px;bottom:56px;z-index:7;padding:10px 16px;border-radius:20px;border:0;background:rgba(229,9,20,.94);color:#fff;font:600 15px -apple-system,system-ui,sans-serif";
+    b.onclick = (e) => {
+      e.stopPropagation();
+      v.muted = false;
+      if (v.paused && adapter.roomPlaying?.()) drive(() => v.play().catch(() => {}));
+      b.remove();
+      soundBtn = null;
+    };
+    (v.parentElement || document.body).appendChild(b);
+    soundBtn = b;
+  };
+
   const onExitFs = () => {
     const v = video;
     if (!v || document.fullscreenElement || document.webkitFullscreenElement) return;
     // Some browsers (iPhone Safari) pause when full screen ends: carry on.
     setTimeout(() => {
-      if (v.paused && adapter.roomPlaying?.()) drive(() => v.play().catch(() => {}));
+      if (v.paused && adapter.roomPlaying?.()) drive(() => playSafe(v, offerSound));
     }, 50);
   };
 
@@ -138,10 +190,10 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
         if (wait > 0) {
           v.pause();
           v.currentTime = pos;
-          startTimer = setTimeout(() => drive(() => v.play().catch(() => {})), wait);
+          startTimer = setTimeout(() => drive(() => playSafe(v, offerSound)), wait);
         } else {
           v.currentTime = pos + (-wait / 1000) * rate;
-          v.play().catch(() => {});
+          playSafe(v, offerSound);
         }
       });
     },
@@ -173,6 +225,8 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
     },
     end() {
       clearTimeout(startTimer);
+      soundBtn?.remove();
+      soundBtn = null;
       detach();
     },
   };
