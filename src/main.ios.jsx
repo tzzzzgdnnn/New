@@ -114,7 +114,9 @@ if (import.meta.env.VITE_WEB && !import.meta.env.VITE_ANDROID && "serviceWorker"
         ![...document.querySelectorAll("video")].some((v) => !v.paused && !v.closest("[data-sb-warm]")) &&
         // An embed counts as playing only while it reports progress (a server
         // page stuck on an error, e.g. vidrift's "Remove sandboxing", is not).
-        !(Date.now() - (window.__sbEmbedPlayingAt || 0) < 30_000);
+        !(Date.now() - (window.__sbEmbedPlayingAt || 0) < 30_000) &&
+        // #19: never reload while a title page / player is open (webview, video or server frame on screen).
+        !document.querySelector("webview, video, iframe[src^='http']");
       const switchIfIdle = () => {
         if (pending && document.visibilityState === "visible" && idle()) {
           pending = false;

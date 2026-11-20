@@ -712,6 +712,8 @@ function upgrade(wv) {
     const picked = readStored("playerSource");
     // In a party everyone plays the synced direct stream, whatever server this phone picked.
     if (picked && picked !== CINEJOY_ID && !isAutoPick() && !/cinejoy\.invalid/.test(url) && !inParty()) return false;
+    // Web Auto (#19): Vidfast first; Cinejoy direct only when its own URL comes up.
+    if (BROWSER_ONLY && !inParty() && !/cinejoy\.invalid/.test(url)) return false;
     directFor = url;
     iframe.src = "about:blank";
     fire("dom-ready");

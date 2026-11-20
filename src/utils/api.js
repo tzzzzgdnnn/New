@@ -479,11 +479,13 @@ const BROWSER_ONLY = !!(import.meta.env?.VITE_WEB && !import.meta.env?.VITE_ANDR
 // (vidfast plays unsandboxed), vidrift last (on iPhone Safari it shows "Remove
 // sandboxing" even unsandboxed: its pop-up check fails under Safari's pop-up
 // blocker). Aether (X-Frame-Options: DENY) can't be framed by any other site.
-export const WEB_EMBED_ORDER = ["cinezo", "vidfast", "flixer", "vidrift"];
+// Web app (fixes #19): only servers verified playing in a browser. Vidfast first.
+export const WEB_EMBED_ORDER = ["vidfast", "cinejoy-direct", "cinezo"];
+export const WEB_ALLOWED = new Set(WEB_EMBED_ORDER);
 export const WEB_UNFRAMEABLE = new Set(["aether", "7movies", "hexa", "vidnest"]);
-export const webEmbedRank = (id) => { const i = WEB_EMBED_ORDER.indexOf(id); return i < 0 ? WEB_EMBED_ORDER.length - 1.5 : i; };
+export const webEmbedRank = (id) => { const i = WEB_EMBED_ORDER.indexOf(id); return i < 0 ? WEB_EMBED_ORDER.length : i; };
 export const PLAYER_SOURCES = BROWSER_ONLY
-  ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES.filter((s) => !NEEDS_UNSANDBOXED.has(s.id) && !WEB_UNFRAMEABLE.has(s.id)).sort((a, b) => webEmbedRank(a.id) - webEmbedRank(b.id))]
+  ? [...WEB_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES].filter((s) => WEB_ALLOWED.has(s.id)).sort((a, b) => webEmbedRank(a.id) - webEmbedRank(b.id))
   : [...WEB_DIRECT_SOURCES, ...IOS_DIRECT_SOURCES, ...ALL_PLAYER_SOURCES]; // iPhone and Android apps: Cinejoy, then 7Movies, direct and listed first
 
 // Sources that require a transparent webRequest intercept to load properly

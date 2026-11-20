@@ -2,7 +2,7 @@
 // Edit servers.json on the ios-app branch to fix a dead/moved server without
 // rebuilding the app.
 import bundled from "../../../servers.json";
-import { PLAYER_SOURCES, WEB_UNFRAMEABLE, webEmbedRank } from "../../utils/api";
+import { PLAYER_SOURCES, WEB_UNFRAMEABLE, WEB_ALLOWED, webEmbedRank } from "../../utils/api";
 import { customPlayerSources, listCustomServers, serverFits, setCustomServersApplyHook } from "./customServers";
 
 export const SERVERS_BRANCH =
@@ -106,11 +106,11 @@ export function applyServers(cfg) {
     // any that show a captcha wall. Vidrift first for anime.
     // Embeds in the order they really play in a browser (webEmbedRank):
     // Cinezo, Vidfast, Flixer, then Vidrift last.
-    const direct = builtins.filter((s) => /\.invalid\//.test(s.movieUrl?.("1") || ""));
-    const embeds = [...builtins.filter((s) => !direct.includes(s)), ...added]
-      .filter((s) => !WEB_BLOCKED.has(s.id))
+    // fixes #19: only the servers verified playing on the web, Vidfast first.
+    const web = [...builtins, ...added]
+      .filter((s) => WEB_ALLOWED.has(s.id) && !WEB_BLOCKED.has(s.id))
       .sort((a, b) => webEmbedRank(a.id) - webEmbedRank(b.id));
-    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...direct, ...embeds, ...custom);
+    PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...web);
   } else {
     // iPhone app: Cinejoy (direct stream) stays listed first.
     const direct = builtins.filter((s) => /\.invalid\//.test(s.movieUrl?.("1") || ""));

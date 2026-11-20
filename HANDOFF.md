@@ -4,6 +4,26 @@ Branches: `apk-port` (Android + all shared JS), `ipa-test-build` (iOS IPA + web 
 copied file-by-file from apk-port to ipa-test-build (worktree pattern; never merge the Android folder there).
 Live web app: https://tzzzzgdnnn.github.io/New/ (gh-pages, built by `.github/workflows/deploy-web.yml` on push to ipa-test-build).
 
+## 18:50 ET session 6 — WHERE I STOPPED (read first)
+- PUSHED: web server list cut to servers verified playing on web: Vidfast (Auto first), Cinejoy direct, Cinezo
+  (`WEB_EMBED_ORDER`/`WEB_ALLOWED` in src/utils/api.js, web branch of applyServers in src/platform/ios/servers.js;
+  webview.js tryWebDirect: web Auto no longer forces Cinejoy before the picked embed). Removed from web: Vidrift,
+  7Movies, Aether, Flixer, ani.pm/Movy/Orion/Evion/Flixer direct/Rive. iOS/Android lists untouched.
+- PUSHED: PWA updater never reloads while a webview/video/server iframe is on screen (src/main.ios.jsx `idle`).
+- NOT DONE (#19 crash): Vidfast is still UNSANDBOXED. Montez asked to sandbox it (no allow-top-navigation), but the
+  previous session verified Vidfast shows "Please Disable Sandbox" in ANY sandbox, so sandboxing it would leave web
+  with no working embed. Next: test `sandbox="allow-scripts allow-same-origin allow-forms allow-popups
+  allow-presentation"` on vidfast in WebKit (livecheck/sbx.mjs); if it refuses, keep unsandboxed.
+- NOT DONE (#19): crash not reproduced yet. livecheck/soak.mjs (WebKit iPhone soak, logs crash/popup/main-nav/
+  iframe src count; env MIN, SERVER, PICK, SW=1) failed only at picking the title (`getByText(PICK)` on Home timed
+  out; TMDB 429 from sandbox IP at that moment). Suspects left: one `window` "message" listener per upgrade(wv) never
+  removed (webview.js ~372, leak per title mount); prewarm <video data-sb-warm> buffering while an embed plays
+  (memory -> iOS WebContent jetsam); webAutoNext loop is bounded by failedServers but uses menuId("auto").
+- Relay (#20/#21): DROPPED by Montez (no hosting). relay/deno/relay.ts + main.ts committed, unused. Verified locally
+  with deno 2.9: /anipm (ani.pm + settlar session + media via Referer/Origin embed.settlar.io), /relay + /media for
+  7Movies Orion & Evion (movie 550, tv 1396) and Rive Citadel/PrimeVids (playlist rewrite + Range 206 OK); Movy
+  api.wecollege.net = Cloudflare IP block (403) from the sandbox. Vercel entry (export default {fetch}) not written.
+
 ## Done (pushed)
 - apk-port 1b8a2cf / ipa-test-build ccd322d:
   - **Android gets the iPhone server list** (`src/utils/api.js` `BROWSER_ONLY`; `src/platform/ios/servers.js` uses the
