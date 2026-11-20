@@ -238,7 +238,7 @@ final class ServerTestMessageHandler: NSObject, WKScriptMessageHandlerWithReply 
             // The headers it plays with (never cookies): Direct mode reuses them.
             out["stream"] = ["ok": true, "url": r.url.absoluteString, "kind": kind, "ms": ms,
                              "headers": r.headers.filter { $0.key.lowercased() != "cookie" },
-                             "page": r.page?.absoluteString ?? NSNull()]
+                             "page": r.page.map { $0.absoluteString as Any } ?? NSNull()]
             let check = PlayabilityCheck()
             self?.runs[id]?.check = check
             check.run(url: r.url, headers: r.headers, cookies: r.cookies) { ok, detail in
