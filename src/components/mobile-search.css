@@ -29,3 +29,16 @@
 .nfs-msg b{color:#fff;font-size:17px}
 .nfs-retry{margin-top:12px;background:#fff;color:#000;border:0;border-radius:4px;padding:8px 18px;font-weight:600}
 .nfs-cancel{background:none;border:0;color:#fff;font-size:16px;font-weight:500;padding:8px 6px 8px 10px;flex:none}
+.nfs-mic.is-on{color:#e50914;animation:nfsPulse 1s ease-in-out infinite}
+@keyframes nfsPulse{50%{transform:scale(1.18)}}
+.nfs-voice{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 16px;background:#1a1a1a;border-bottom:1px solid #262626;animation:nfsVoiceIn .2s ease-out both}
+.nfs-voice-msg{color:#e5e5e5;font-size:15px;font-weight:600;margin-right:4px}
+.nfs-voice--listening .nfs-voice-msg,.nfs-voice--starting .nfs-voice-msg{color:#fff}
+.nfs-voice--denied .nfs-voice-msg,.nfs-voice--error .nfs-voice-msg,.nfs-voice--nomatch .nfs-voice-msg{color:#f5a3a3;font-weight:500}
+.nfs-voice-alt{background:#2b2b2b;color:#fff;border:0;border-radius:999px;padding:7px 14px;font-size:14px}
+.nfs-voice-alt:active,.nfs-voice-alt:focus{background:#fff;color:#000}
+.nfs-voice-x{padding:7px 11px;color:#aaa;margin-left:auto}
+@keyframes nfsVoiceIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+html.sb-tv .nfs-voice{padding:1.6vh 3vw}
+html.sb-tv .nfs-voice-msg{font-size:2.4vh}
+html.sb-tv .nfs-voice-alt{font-size:2.2vh;padding:1vh 1.6vw}

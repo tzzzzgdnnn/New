@@ -70,8 +70,7 @@ const SearchModal = lazy(() => import("./components/SearchModal"));
 // Lazy-loaded pages: each chunk is only downloaded when the user first visits
 const HomePage = lazy(() => import("./pages/HomePage"));
 const MoviePage = lazy(() => import("./pages/MoviePage"));
-// Watch Party (iPhone app + web app only; the desktop app has no room client).
-// Watch Party: iPhone app and web app (Android uses the web app for now).
+// Watch Party: iPhone app, web app and Android app (web adapter, PeerJS P2P).
 const WatchParty = lazy(() => import("./watch/WatchParty"));
 const TVPage = lazy(() => import("./pages/TVPage"));
 const LibraryPage = lazy(() => import("./pages/LibraryPage"));
@@ -94,6 +93,9 @@ import {
 
 // iOS has no Discord client.
 const DISCORD_OFF = { enabled: false };
+
+// "Can't reach TMDB": retry this often until it answers.
+const TMDB_RETRY_MS = 3000;
 
 export default function App() {
   // apiKey loaded async from secure storage (OS keychain)
@@ -448,6 +450,7 @@ export default function App() {
     setApiErrorHandlers(
       () => setApiKeyStatus("invalid_token"), // 401 / 403
       () => setApiKeyStatus("unreachable"), // network failure
+      () => setApiKeyStatus((s) => (s === "unreachable" ? "ok" : s)), // a request got through again
     );
   }, []);
 
@@ -620,6 +623,60 @@ export default function App() {
   useEffect(() => {
     fetchTrending();
   }, [fetchTrending]);
+
+  // "Can't reach TMDB" heals itself: retry every few seconds, when the
+  // phone comes back online, and when the app returns to the screen (the
+  // Android WebView often has no network for a moment at launch/resume).
+  useEffect(() => {
+    if (apiKeyStatus !== "unreachable" || !apiKey) return;
+    let stop = false, timer = 0, inFlight = false;
+    const probe = () => {
+      if (stop || inFlight) return;
+      clearTimeout(timer);
+      inFlight = true;
+      fetch("https://api.themoviedb.org/3/configuration", { headers: { Authorization: `Bearer ${apiKey}` } })
+        .then((res) => {
+          if (stop) return;
+          if (res.status === 401 || res.status === 403) setApiKeyStatus("invalid_token");
+          else setApiKeyStatus("ok");
+        })
+        .catch(() => {
+          if (!stop) timer = setTimeout(probe, TMDB_RETRY_MS);
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    const vis = () => document.visibilityState === "visible" && probe();
+    timer = setTimeout(probe, TMDB_RETRY_MS);
+    window.addEventListener("online", probe);
+    window.addEventListener("focus", probe);
+    window.addEventListener("pageshow", probe);
+    document.addEventListener("visibilitychange", vis);
+    document.addEventListener("resume", probe); // Capacitor/Cordova app resume
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+      window.removeEventListener("online", probe);
+      window.removeEventListener("focus", probe);
+      window.removeEventListener("pageshow", probe);
+      document.removeEventListener("visibilitychange", vis);
+      document.removeEventListener("resume", probe);
+    };
+  }, [apiKeyStatus, apiKey]);
+
+  // Back from "unreachable" (the probe above, or any TMDB request getting
+  // through): reload Home (trending + every row) without a manual refresh.
+  const [homeEpoch, setHomeEpoch] = useState(0);
+  const prevApiStatusRef = useRef(apiKeyStatus);
+  useEffect(() => {
+    const prev = prevApiStatusRef.current;
+    prevApiStatusRef.current = apiKeyStatus;
+    if (prev === "unreachable" && apiKeyStatus === "ok") {
+      fetchTrending();
+      setHomeEpoch((n) => n + 1);
+    }
+  }, [apiKeyStatus, fetchTrending]);
 
   const retryHome = useCallback(() => {
     if (offline) return;
@@ -844,6 +901,33 @@ export default function App() {
     if (navStackRef.current.length) navigateBack("page back button");
     else navigate("home");
   }, [navigateBack, navigate]);
+
+  // Fire TV / Android TV: the remote's Search key opens search.
+  useEffect(() => {
+    if (!import.meta.env.VITE_ANDROID) return;
+    const open = () => setShowSearch(true);
+    window.addEventListener("sb-tv-open-search", open);
+    return () => window.removeEventListener("sb-tv-open-search", open);
+  }, []);
+
+  // Android: the system Back button (MainActivity asks window.__sbAndroidBack).
+  // Leaves full screen first, then goes back a screen; false = nothing left,
+  // so Android puts the app in the background.
+  useEffect(() => {
+    if (!import.meta.env.VITE_ANDROID) return;
+    window.__sbAndroidBack = () => {
+      if (document.fullscreenElement) {
+        document.exitFullscreen?.().catch(() => {});
+        return true;
+      }
+      if (navStackRef.current.length || showSearchRef.current || nestedBack > 0) {
+        navigateBack("android back");
+        return true;
+      }
+      return false;
+    };
+    return () => delete window.__sbAndroidBack;
+  }, [navigateBack, nestedBack]);
 
   // iOS: swipe in from the left edge = Back (WKWebView keeps no history of
   // its own here). Settings sub-pages are handled through runBackHandlers.
@@ -1305,6 +1389,7 @@ export default function App() {
             {(page === "home" || homeSeenRef.current) && (
               <div className="sp-keep-home" style={page === "home" ? undefined : { display: "none" }}>
               <HomePage
+                key={homeEpoch}
                 trending={trending}
                 trendingTV={trendingTV}
                 loading={loadingHome}

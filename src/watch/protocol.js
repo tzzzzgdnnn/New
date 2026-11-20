@@ -45,7 +45,7 @@ export function mediaKey(m) {
   if (!m || !m.tmdbId) return "";
   const type = m.type === "tv" ? "tv" : "movie";
   const ep = type === "tv" ? `:${Number(m.season) || 0}:${Number(m.episode) || 0}` : "";
-  const dub = m.isAnime ? `:${m.dubMode === "dub" ? "dub" : "sub"}` : "";
+  const dub = m.isAnime ? `:${m.dubMode === "sub" ? "sub" : "dub"}` : "";
   return `${type}:${m.tmdbId}${ep}${dub}`;
 }
 
@@ -60,7 +60,7 @@ export function cleanMedia(m) {
     season: type === "tv" ? Number(m.season) || 1 : null,
     episode: type === "tv" ? Number(m.episode) || 1 : null,
     isAnime: !!m.isAnime,
-    dubMode: m.dubMode === "dub" ? "dub" : "sub",
+    dubMode: m.dubMode === "sub" ? "sub" : "dub",
     anilistId: m.anilistId || null,
     year: m.year || null,
     poster: typeof m.poster === "string" ? m.poster.slice(0, 300) : null,

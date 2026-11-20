@@ -4,6 +4,7 @@
 // waiting. ani.pm's API sends no CORS headers, so requests go through the
 // native HTTP client (CapacitorHttp, URLSession). Player only: downloads keep
 // their own server list.
+import { showNoDubNote } from "../../utils/dubNote";
 import { CapacitorHttp } from "@capacitor/core";
 import { resolveAnipm } from "../../utils/servers/anipm";
 import { diag } from "../../utils/diag";
@@ -32,7 +33,8 @@ async function relayGet(url, headers, signal) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
-const webRelay = !!(import.meta.env?.VITE_WEB && ANIPM_RELAY);
+// Android app: Capacitor's native HTTP (no CORS), so no relay is needed.
+const webRelay = !!(import.meta.env?.VITE_WEB && !import.meta.env?.VITE_ANDROID && ANIPM_RELAY);
 
 let http = webRelay ? relayGet : nativeGet;
 /** Tests swap the HTTP client. */
@@ -63,8 +65,27 @@ const fresh = (e, now) =>
  * Start (or reuse) the lookup for `ctx`. Resolves to the result or null
  * (not anime, no AniList id, no native HTTP, or ani.pm has no stream).
  */
+const testStream = () => {
+  try {
+    const u = localStorage.getItem("sbTestStream");
+    return u && /^https:\/\/[^\s]+$/.test(u) ? u : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Whether an ani.pm result fits the wanted audio. Dub is the default; an
+ * episode ani.pm says has no dub plays Sub instead (with a small note).
+ */
+export const anipmLangOk = (r, wanted) =>
+  !!r && (r.lang === wanted || (wanted === "dub" && r.lang === "sub" && r.availability?.dub === false));
+
 export function prefetchAnipm(ctx, { now = Date.now } = {}) {
   const key = anipmKey(ctx);
+  // Automated party test (scripts/party-e2e.mjs): its fixed test stream, never a real host.
+  const test = key && testStream();
+  if (test) return Promise.resolve({ ok: true, lang: ctx.dubMode === "dub" ? "dub" : "sub", source: test, embedUrl: test, ms: {} });
   if (!key || !nativeHttpAvailable()) return Promise.resolve(null);
   const hit = cache.get(key);
   if (fresh(hit, now()) && !hit.error) return hit.promise;
@@ -109,10 +130,12 @@ export async function anipmCandidates(ctx, { waitMs = WAIT_ON_PLAY_MS } = {}) {
     new Promise((res) => setTimeout(() => res(null), waitMs)),
   ]);
   if (!r?.ok) return [];
-  const wanted = ctx.dubMode === "dub" ? "dub" : "sub";
-  if (r.lang !== wanted) return [];
+  const wanted = ctx.dubMode === "sub" ? "sub" : "dub";
+  if (!anipmLangOk(r, wanted)) return [];
+  const fellBack = r.lang !== wanted;
+  if (fellBack) showNoDubNote();
   const id = `${ANIPM_ID}:${r.lang}`;
-  const label = `${ANIPM_LABEL} · ${r.lang === "dub" ? "Dub" : "Sub"}`;
+  const label = `${ANIPM_LABEL} · ${r.lang === "dub" ? "Dub" : fellBack ? "Sub (no dub)" : "Sub"}`;
   return [
     { id, label, url: `${r.source}#sb-direct` },
     { id, label, url: r.embedUrl },
@@ -143,4 +166,4 @@ export function cachedAnipm(ctx, now = Date.now()) {
   const e = cache.get(anipmKey(ctx));
   return fresh(e, now) && e.result?.ok ? e.result : null;
 }
-export const anipmWebReady = webRelay;
+export const anipmWebReady = webRelay || !!import.meta.env?.VITE_ANDROID;

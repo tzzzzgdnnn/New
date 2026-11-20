@@ -3,6 +3,7 @@ import { ActionSheet, InfoSheet, contextMenuProps } from "../platform/ui";
 import AnimeDubPrompt, { shouldAskAnimeDub } from "../platform/ios/AnimeDubPrompt";
 import {
   getAnimeDubMode,
+  setAnimeDubMode,
   publishPlayerContext,
   useAnimeServerGuard,
   useNativeServerSelect,
@@ -1802,6 +1803,12 @@ export default function TVPage({
         episode: ep.episode_number,
         episodeName: ep.name,
       });
+      // Watch Party: this episode plays for everyone (taps, Up Next, shuffle).
+      window.dispatchEvent(new CustomEvent("sb-party-play", { detail: {
+        ...(window.__sbCtx?.tmdbId === d?.id ? window.__sbCtx : {}),
+        type: "tv", tmdbId: d?.id, title: d?.name || d?.title,
+        season: selectedSeason, episode: ep.episode_number, poster: d?.poster_path || null,
+      } }));
       // d and selectedSeason are stable within a season view; onHistory is useCallback in App
     },
     [d, selectedSeason, onHistory],
@@ -1892,7 +1899,7 @@ export default function TVPage({
   useNativeServerSelect(({ sourceId, dubMode: mode }) => {
     if (mode) {
       setDubMode(mode);
-      storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, mode);
+      if (mode !== getAnimeDubMode()) setAnimeDubMode(mode); // a real pick from the server menu
     }
     if (sourceId) {
       setPlayerSource(sourceId);
@@ -2770,7 +2777,7 @@ export default function TVPage({
                       onClick={() => {
                         const next = dubMode === "sub" ? "dub" : "sub";
                         setDubMode(next);
-                        storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, next);
+                        setAnimeDubMode(next);
                         resetPlayerResolution();
                       }}
                       title="Toggle Sub/Dub"
@@ -2834,7 +2841,7 @@ export default function TVPage({
                     dubMode={dubMode}
                     onDubChange={(next) => {
                       setDubMode(next);
-                      storage.set(STORAGE_KEYS.HIANIME_DUB_MODE, next);
+                      setAnimeDubMode(next);
                       resetPlayerResolution();
                     }}
                     onSelect={(choice) =>

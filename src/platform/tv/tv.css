@@ -1,0 +1,75 @@
+/* Fire TV / Android TV skin: Netflix-on-TV layout.
+   Only transform + opacity animate (GPU), so it stays smooth on a Fire Stick. */
+html.sb-tv { --sp-tabbar-h: 0px; --tv-rail: 84px; --tv-ease: cubic-bezier(.2, .8, .2, 1); background: #141414; }
+html.sb-tv body { background: #141414; }
+
+/* Left rail instead of the phone's bottom tab bar */
+html.sb-tv .sp-tabbar {
+  top: 0; bottom: 0; left: 0; right: auto; width: var(--tv-rail); height: 100vh;
+  flex-direction: column; justify-content: center; gap: 10px; padding: 0;
+  background: linear-gradient(to right, rgba(0,0,0,.92) 0%, rgba(0,0,0,.6) 70%, rgba(0,0,0,0) 100%);
+  border: 0; box-shadow: none; z-index: 200;
+}
+html.sb-tv .sp-tab { flex: 0 0 auto; width: 56px; height: 56px; margin: 0 auto; border-radius: 50%; color: #8c8c8c; transition: transform .18s var(--tv-ease), color .18s; }
+html.sb-tv .sp-tab svg { width: 26px; height: 26px; }
+html.sb-tv .sp-tab-label { display: none; }
+html.sb-tv .sp-tab.is-active { color: #fff; }
+html.sb-tv .sp-tab.is-active::after { content: ""; position: absolute; left: 50%; bottom: 4px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: #e50914; }
+html.sb-tv .sp-tab:focus { color: #fff; background: rgba(255,255,255,.14) !important; transform: scale(1.12) !important; outline: none !important; box-shadow: none !important; }
+
+html.sb-tv .main { margin-left: 0; padding-left: var(--tv-rail) !important; padding-bottom: 32px !important; }
+html.sb-tv #root { padding: 0 !important; }
+
+/* Billboard: big, cinematic */
+html.sb-tv .sb-bill { height: 78vh; min-height: 0; }
+html.sb-tv .sb-bill-bg { transition: opacity .8s ease; transform: none !important; }
+html.sb-tv .sb-bill-body { padding: 0 5vw 6vh 3vw; max-width: 55vw; animation: tvFade .5s var(--tv-ease) both; }
+html.sb-tv .sb-bill-logo { max-width: 34vw; max-height: 22vh; }
+html.sb-tv .sb-bill-title { font-size: 7vh; }
+html.sb-tv .sb-bill-meta { font-size: 2.1vh; }
+html.sb-tv .sb-bill-shade { background:
+  linear-gradient(to top, #141414 0%, rgba(20,20,20,.7) 20%, rgba(20,20,20,0) 55%),
+  linear-gradient(to right, rgba(0,0,0,.85) 0%, rgba(0,0,0,.35) 40%, rgba(0,0,0,0) 65%); }
+html.sb-tv .hero { height: 78vh; }
+html.sb-tv .hero-title { font-size: 7vh; }
+
+/* Rows: posters overlap the billboard, Netflix style */
+html.sb-tv .sb-bill + * { margin-top: -10vh; position: relative; z-index: 2; }
+html.sb-tv .sb-row-section, html.sb-tv .section { padding: 1.2vh 0 1.2vh 3vw !important; }
+html.sb-tv .section-title, html.sb-tv .sb-row-head { font-size: 2.6vh; font-weight: 700; color: #e5e5e5; margin-bottom: 1vh; }
+html.sb-tv .section-title::after { display: none; }
+html.sb-tv .sb-row, html.sb-tv .cards-grid {
+  display: flex !important; flex-wrap: nowrap; gap: .9vw; overflow-x: auto; overflow-y: visible;
+  margin: 0 !important; padding: 2.4vh 3vw 2.4vh 0 !important; scroll-snap-type: none; scroll-padding-left: 0;
+}
+html.sb-tv .cards-grid::-webkit-scrollbar { display: none; }
+html.sb-tv .sb-row-item, html.sb-tv .cards-grid > * { flex: 0 0 12.5vw !important; width: 12.5vw !important; }
+html.sb-tv .sb-wide-item { flex: 0 0 22vw !important; width: 22vw !important; }
+html.sb-tv .card-info { display: none; }
+html.sb-tv .card, html.sb-tv .sb-row-item, html.sb-tv .sb-wide-item { background: transparent !important; box-shadow: none !important; }
+html.sb-tv .card-poster { border-radius: 6px !important; box-shadow: none !important; }
+
+/* Focus: the Netflix zoom. Only transform animates. */
+html.sb-tv .sb-row-item, html.sb-tv .sb-wide-item, html.sb-tv .cards-grid > *, html.sb-tv .card {
+  transform: scale(1); transition: transform .2s var(--tv-ease) !important; will-change: transform;
+}
+html.sb-tv .sb-row-item:focus, html.sb-tv .sb-wide-item:focus, html.sb-tv .cards-grid > *:focus, html.sb-tv .card:focus,
+html.sb-tv .sb-row-item:focus-within, html.sb-tv .cards-grid > *:focus-within {
+  transform: scale(1.12) !important; z-index: 10; outline: none !important; box-shadow: none !important;
+}
+html.sb-tv .sb-row-item:focus .card-poster, html.sb-tv .sb-wide-item:focus, html.sb-tv .cards-grid > *:focus .card-poster,
+html.sb-tv .card:focus .card-poster, html.sb-tv .sb-row-item:focus-within .card-poster {
+  box-shadow: 0 0 0 3px #fff, 0 12px 28px rgba(0,0,0,.7) !important;
+}
+
+/* Buttons: white pill when focused, like Netflix */
+html.sb-tv .sb-btn-play:focus, html.sb-tv .sb-btn-info:focus, html.sb-tv .btn:focus, html.sb-tv .sb-chip:focus {
+  background: #fff !important; color: #000 !important; outline: none !important; box-shadow: none !important; transform: scale(1.06) !important;
+}
+
+/* Page changes fade in */
+html.sb-tv .main > * { animation: tvFade .28s var(--tv-ease) both; }
+@keyframes tvFade { from { opacity: 0; transform: translateY(1.2vh); } to { opacity: 1; transform: none; } }
+
+/* Nothing that needs a touch screen */
+html.sb-tv .carousel-btn, html.sb-tv .carousel-dots, html.sb-tv .sb-bill-dots { display: none !important; }

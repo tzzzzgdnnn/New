@@ -81,13 +81,24 @@ export function createAndroidAdapter({ plugin, getKey, now = () => Date.now() } 
           text: String(m?.text ?? ""),
           ts: Number.isFinite(m?.ts) ? m.ts : 0,
           mine: !!m?.mine,
+          // Sender's picture: an image URL, else a gradient (two colours) with their initial.
+          avatarUrl: typeof m?.avatarUrl === "string" ? m.avatarUrl : "",
+          avatarFrom: String(m?.avatarFrom ?? "#8e8e93"),
+          avatarTo: String(m?.avatarTo ?? "#1c1c1e"),
+          initial: String(m?.initial ?? "").slice(0, 2),
         })),
       });
     },
     setParty({ code, count, max, host } = {}) {
       post({ cmd: "party", code: String(code ?? ""), count: Number(count) || 0, max: Number(max) || 0, host: !!host });
     },
-    setVoice() {},
+    setVoice(on) {
+      post({ cmd: "voice", on: !!on });
+    },
+    /** Movie volume while someone in the party talks (1 = full); native glides to it. */
+    setDuck(level) {
+      post({ cmd: "duck", level: Math.max(0, Math.min(1, Number(level) || 1)) });
+    },
 
     // Native → JS (also called directly by the tests).
     _state(s) {

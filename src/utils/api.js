@@ -35,7 +35,9 @@ export const imgUrl = (path, size = "w500") =>
 // Global auth-error callback, registered by App on mount
 let _onAuthError = null;
 let _onUnreachable = null;
-export const setApiErrorHandlers = (onAuth, onUnreachable) => {
+let _onReachable = null;
+export const setApiErrorHandlers = (onAuth, onUnreachable, onReachable = null) => {
+  _onReachable = onReachable;
   _onAuthError = onAuth;
   _onUnreachable = onUnreachable;
 };
@@ -283,6 +285,7 @@ async function _tmdbRequest(localizedPath, apiKey, cacheKey, signal) {
       throw tmdbError("bad-response", "TMDB sent an unreadable response.");
     }
     _remember(cacheKey, data);
+    _onReachable?.();
     return data;
   }
   if (lastErr?.code === "unreachable" || lastErr?.code === "timeout") _onUnreachable?.();

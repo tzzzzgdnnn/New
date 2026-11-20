@@ -13,13 +13,13 @@ let askedThisSession = false;
  * "chosen" flag, which made the prompt come back on every anime title).
  */
 export function shouldAskAnimeDub() {
-  if (askedThisSession || hasChosenAnimeDubMode()) return false;
-  const saved = storage.get(STORAGE_KEYS.HIANIME_DUB_MODE);
-  if (saved === "sub" || saved === "dub") {
-    storage.set(STORAGE_KEYS.ANIME_DUB_CHOSEN, true); // record it as the answer
-    return false;
-  }
-  return true;
+  // Anime now defaults to the English dub (Sub stays one tap away on the
+  // SUB/DUB toggle and in Settings), so the first-run question is not shown.
+  void askedThisSession;
+  void hasChosenAnimeDubMode;
+  void storage;
+  void STORAGE_KEYS;
+  return false;
 }
 
 const OPTIONS = [

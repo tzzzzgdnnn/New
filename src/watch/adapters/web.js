@@ -39,49 +39,72 @@ export function playSafe(v, onMuted) {
   });
 }
 
+const GAP_S = 0.5;
+
 export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
   let video = null;
-  let applying = 0; // > 0 while the engine drives the player (its events aren't the viewer's taps)
+  // While the engine drives the player, the events it causes aren't the
+  // viewer's taps. Counted per kind: an engine speed nudge (drift
+  // correction, many times a minute) must never swallow the viewer's Pause.
+  const applying = { play: 0, pause: 0, seek: 0, rate: 0 };
   let startTimer = null;
   let seeking = false;
   let userTapAt = 0;
+  let lastPos = 0; // where the party player was on its last read (for "stop")
+  let lastKey = null; // and which title it had
 
-  const drive = (fn) => {
-    applying++;
+  const drive = (fn, kinds = ["play", "pause", "seek", "rate"]) => {
+    for (const k of kinds) applying[k]++;
     try {
       fn();
     } finally {
-      setTimeout(() => applying--, 250);
+      setTimeout(() => kinds.forEach((k) => applying[k]--), 250);
     }
   };
 
   // A real pointer / key press just before a play/pause/seek event is the viewer;
   // anything else (stalls, visibility, the engine) is not.
   const markTap = () => (userTapAt = Date.now());
-  const isViewer = () => applying === 0 && Date.now() - userTapAt < 1500;
+  const isViewer = (kind) => applying[kind] === 0 && Date.now() - userTapAt < 1500;
+  // The engine's own last position write. A tapped seek that lands somewhere
+  // else is the viewer's, even inside the engine's 250 ms window (a skip right
+  // after a drift correction or the synchronized start must move everyone).
+  let engineSetPos = NaN;
+  const setPos = (v, p) => {
+    engineSetPos = p;
+    v.currentTime = p;
+  };
+  const isViewerSeek = () =>
+    Date.now() - userTapAt < 1500 && (applying.seek === 0 || !(Math.abs(video.currentTime - engineSetPos) < 0.5));
 
   const onPlay = () => {
-    if (!isViewer()) return;
+    if (!isViewer("play")) return;
     // Hold locally until the room's synchronized start arrives.
-    drive(() => video.pause());
+    drive(() => video.pause(), ["pause"]);
     adapter.onIntent?.({ action: "play", pos: video.currentTime });
   };
   const onPause = () => {
-    if (!isViewer() || video.ended) return;
+    if (!isViewer("pause") || video.ended) return;
     adapter.onIntent?.({ action: "pause", pos: video.currentTime });
   };
   const onSeeking = () => {
     seeking = true;
-    if (isViewer()) adapter.onIntent?.({ action: "seek", pos: video.currentTime });
+    if (isViewerSeek()) adapter.onIntent?.({ action: "seek", pos: video.currentTime });
   };
   const onSeeked = () => (seeking = false);
   const onRate = () => {
-    if (isViewer()) adapter.onIntent?.({ action: "rate", rate: video.playbackRate });
+    if (isViewer("rate")) adapter.onIntent?.({ action: "rate", rate: video.playbackRate });
   };
 
   const attach = () => {
     const v = getVideo();
     if (v === video) return video;
+    // The viewer closed the party player (left the title page) while the
+    // party was playing: that is "stop", the party pauses on that frame,
+    // like closing the iPhone / Android player.
+    if (video && !video.isConnected && !v && document.visibilityState === "visible" && adapter.roomPlaying?.()) {
+      adapter.onIntent?.({ action: "pause", stop: true, pos: lastPos, key: lastKey });
+    }
     detach();
     video = v;
     if (!video) return null;
@@ -116,7 +139,7 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
     b.onclick = (e) => {
       e.stopPropagation();
       v.muted = false;
-      if (v.paused && adapter.roomPlaying?.()) drive(() => v.play().catch(() => {}));
+      if (v.paused && adapter.roomPlaying?.()) drive(() => v.play().catch(() => {}), ["play"]);
       b.remove();
       soundBtn = null;
     };
@@ -129,7 +152,7 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
     if (!v || document.fullscreenElement || document.webkitFullscreenElement) return;
     // Some browsers (iPhone Safari) pause when full screen ends: carry on.
     setTimeout(() => {
-      if (v.paused && adapter.roomPlaying?.()) drive(() => playSafe(v, offerSound));
+      if (v.paused && adapter.roomPlaying?.()) drive(() => playSafe(v, offerSound), ["play"]);
     }, 50);
   };
 
@@ -150,7 +173,10 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
   const bufferedAhead = (v) => {
     const t = v.currentTime;
     for (let i = 0; i < v.buffered.length; i++) {
-      if (v.buffered.start(i) <= t + 0.1 && v.buffered.end(i) > t) return v.buffered.end(i) - t;
+      // A range starting just after the frame (Safari's MSE often leaves a few
+      // hundred ms between a seek target and the first appended sample) is
+      // ready too: playback steps over the gap (hls.js gap controller).
+      if (v.buffered.start(i) <= t + GAP_S && v.buffered.end(i) > t) return v.buffered.end(i) - t;
     }
     return 0;
   };
@@ -161,6 +187,8 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
       const v = attach();
       if (!v) return { key: null, ready: false, seeking: false, status: "paused", pos: 0, sampledAt: Date.now(), rate: 1 };
       const waiting = !v.paused && v.readyState < 3;
+      lastPos = v.currentTime;
+      lastKey = getKey?.() ?? null;
       return {
         key: getKey?.() ?? null,
         ready: v.readyState >= 3 || bufferedAhead(v) >= 2,
@@ -177,8 +205,8 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
       clearTimeout(startTimer);
       drive(() => {
         v.pause();
-        if (Number.isFinite(pos) && Math.abs(v.currentTime - pos) > 0.03) v.currentTime = pos;
-      });
+        if (Number.isFinite(pos) && Math.abs(v.currentTime - pos) > 0.03) setPos(v, pos);
+      }, ["pause", "seek"]);
     },
     playAt(pos, atLocal, rate = 1) {
       const v = attach();
@@ -189,21 +217,21 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
         const wait = atLocal - Date.now();
         if (wait > 0) {
           v.pause();
-          v.currentTime = pos;
-          startTimer = setTimeout(() => drive(() => playSafe(v, offerSound)), wait);
+          setPos(v, pos);
+          startTimer = setTimeout(() => drive(() => playSafe(v, offerSound), ["play"]), wait);
         } else {
-          v.currentTime = pos + (-wait / 1000) * rate;
+          setPos(v, pos + (-wait / 1000) * rate);
           playSafe(v, offerSound);
         }
       });
     },
     setRate(r) {
       const v = attach();
-      if (v) drive(() => (v.playbackRate = r));
+      if (v) drive(() => (v.playbackRate = r), ["rate"]);
     },
     seekTo(pos) {
       const v = attach();
-      if (v) drive(() => (v.currentTime = pos));
+      if (v) drive(() => setPos(v, pos), ["seek"]);
     },
     /** Full screen on / off for the party player (never pauses). */
     toggleFullscreen() {
@@ -220,8 +248,21 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
       const v = attach();
       if (!v) return;
       if (adapter.baseVolume == null) adapter.baseVolume = v.volume;
-      v.volume = Math.max(0, Math.min(1, adapter.baseVolume * level));
-      if (level === 1) adapter.baseVolume = null;
+      const base = adapter.baseVolume;
+      const target = Math.max(0, Math.min(1, base * level));
+      // Glide over ~250 ms. (iPhone Safari ignores page volume changes; the
+      // iPhone app's native player ducks instead.)
+      clearInterval(adapter.duckTimer);
+      const from = v.volume;
+      let i = 0;
+      adapter.duckTimer = setInterval(() => {
+        i += 1;
+        v.volume = from + (target - from) * Math.min(1, i / 10);
+        if (i >= 10) {
+          clearInterval(adapter.duckTimer);
+          if (level >= 1) adapter.baseVolume = null;
+        }
+      }, 25);
     },
     end() {
       clearTimeout(startTimer);

@@ -76,6 +76,43 @@ export default function MobileSearch({ apiKey, onSelect, onClose, offline }) {
     return () => clearTimeout(timer.current);
   }, [query, run]);
   useEffect(() => () => { clearTimeout(timer.current); req.current.ctl?.abort(); }, []);
+  // Mic search (phone + Fire TV): live words while you talk, then "Did you mean" picks.
+  const [voice, setVoice] = useState(null); // {state, text, alts}
+  const canVoice = !!(window.SbVoice || window.SbTV);
+  const startVoice = () => {
+    setVoice({ state: "starting", text: "", alts: [] });
+    if (window.SbVoice?.start) window.SbVoice.start();
+    else if (window.SbTV?.startVoice) window.SbTV.startVoice();
+    else { setVoice(null); inputRef.current?.focus(); }
+  };
+  useEffect(() => {
+    const apply = (t, alts) => {
+      t = String(t || "").trim(); if (!t) return;
+      const uniq = [...new Set((alts || []).map((a) => String(a).trim()).filter((a) => a && a.toLowerCase() !== t.toLowerCase()))].slice(0, 4);
+      setVoice(uniq.length ? { state: "done", text: t, alts: uniq } : null);
+      setQuery(t); run(t);
+    };
+    const on = (e) => { const d = e.detail; if (d && typeof d === "object") apply(d.text, d.alts); else apply(d, []); };
+    window.__sbVoiceResult = (t, alts) => apply(t, alts);
+    window.__sbVoicePartial = (t) => setVoice((v) => ({ ...(v || {}), state: "listening", text: String(t || ""), alts: [] }));
+    window.__sbVoiceState = (st) => setVoice((v) => (st === "cancel" ? null : st === "keyboard" ? null : { ...(v || { text: "", alts: [] }), state: st }));
+    window.addEventListener("sb-voice-query", on);
+    return () => {
+      window.removeEventListener("sb-voice-query", on);
+      delete window.__sbVoicePartial; delete window.__sbVoiceState;
+      window.__sbVoiceResult = (t, alts) => window.dispatchEvent(new CustomEvent("sb-voice-query", { detail: { text: t, alts } }));
+      window.SbVoice?.stop?.();
+    };
+  }, [run]);
+  const voiceMsg = voice && ({
+    starting: "Starting mic…",
+    listening: voice.text ? `“${voice.text}”` : "Listening… say a title",
+    thinking: voice.text ? `“${voice.text}”` : "Got it…",
+    nomatch: "Didn't catch that. Tap the mic and try again.",
+    denied: "Allow the microphone for Super Player in your device settings to use voice search.",
+    error: "Voice search isn't available right now. Try again.",
+    done: "Did you mean:",
+  })[voice.state];
 
   const remember = (t) => {
     const s = t.trim(); if (!s) return;
@@ -104,10 +141,23 @@ export default function MobileSearch({ apiKey, onSelect, onClose, offline }) {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && query.trim()) { remember(query); run(query); inputRef.current?.blur(); } if (e.key === "Escape") onClose(); }}
         />
+        {canVoice && <button className={`nfs-clear nfs-mic${voice && (voice.state === "listening" || voice.state === "starting") ? " is-on" : ""}`} onClick={() => (voice && voice.state === "listening" ? (window.SbVoice?.stop?.(), setVoice(null)) : startVoice())} aria-label="Voice search">🎤</button>}
         {query && <button className="nfs-clear" onClick={() => { setQuery(""); inputRef.current?.focus(); }} aria-label="Clear"><X /></button>}
       </div>
       <button className="nfs-cancel" onClick={onClose}>Cancel</button>
       </div>
+
+      {voiceMsg && (
+        <div className={`nfs-voice nfs-voice--${voice.state}`} role="status">
+          <span className="nfs-voice-msg">{voiceMsg}</span>
+          {voice.state === "done" && voice.alts.map((a) => (
+            <button key={a} className="nfs-voice-alt" onClick={() => { setQuery(a); run(a); setVoice(null); }}>{a}</button>
+          ))}
+          {(voice.state === "done" || voice.state === "nomatch" || voice.state === "error" || voice.state === "denied") && (
+            <button className="nfs-voice-alt nfs-voice-x" onClick={() => setVoice(null)} aria-label="Dismiss">✕</button>
+          )}
+        </div>
+      )}
 
       <div className="nfs-body" onTouchStart={() => inputRef.current?.blur()}>
         {offline && <div className="nfs-msg">You're offline. Search needs internet.</div>}

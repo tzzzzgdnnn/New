@@ -3,6 +3,7 @@
 // iPhone app, the Android app, the web app and the tests all run this file.
 import { ClockSync } from "./clock.js";
 import { SyncEngine } from "./engine.js";
+import { mediaKey } from "./protocol.js";
 
 export const TICK_MS = 100;
 export const PING_EVERY_MS = 4000;
@@ -15,8 +16,8 @@ export class WatchClient {
    * @param {"ios"|"android"|"web"} o.platform
    * @param {object} o.adapter    player adapter (see engine.js)
    */
-  constructor({ url, clientId, platform, name, adapter, WebSocketImpl = globalThis.WebSocket, now = () => Date.now(), timers = globalThis, onState, onStatus, onChat, onRtc, onVoice }) {
-    Object.assign(this, { url, clientId, platform, name, adapter, WebSocketImpl, now, timers, onState, onStatus, onChat, onRtc, onVoice });
+  constructor({ url, clientId, platform, name, avatar = null, adapter, WebSocketImpl = globalThis.WebSocket, now = () => Date.now(), timers = globalThis, onState, onStatus, onChat, onRtc, onVoice }) {
+    Object.assign(this, { url, clientId, platform, name, avatar, adapter, WebSocketImpl, now, timers, onState, onStatus, onChat, onRtc, onVoice });
     this.clock = new ClockSync();
     this.engine = new SyncEngine({ adapter, clock: this.clock, now, send: (m) => this.sendMsg(m) });
     this.state = null;
@@ -45,6 +46,8 @@ export class WatchClient {
       this.cseq = 0;
       this.retry = 0;
       this.onStatus?.("connected");
+      // Name + profile picture (the picture can be a thumbnail too big for the URL).
+      this.sendMsg({ type: "profile", name: this.name || "", avatar: this.avatar || null });
       // A quick burst first so the clock is good before the first start.
       for (let i = 0; i < 6; i++) this.timers.setTimeout(() => this.ping(), i * 120);
       this.timers.clearInterval(this.pingTimer);
@@ -137,6 +140,13 @@ export class WatchClient {
     // Closing the player stops the party only while it is playing (closing
     // during a hold / a title switch is not a Pause).
     if (stop && (!this.state?.playback || this.state.playback.paused)) return;
+    // This device just picked a new title and its page moved on before the
+    // room's switch arrived: the old player closing is not a Pause.
+    if (stop && this.pickedKey && Date.now() - this.pickedAt < 8000) {
+      const t = (k) => String(k || "").replace(/:(sub|dub)$/, "");
+      const old = key ? t(key) !== t(this.pickedKey) : t(this.state?.media?.key) !== t(this.pickedKey);
+      if (old) return;
+    }
     // A tap on a player still showing an older title (closing it while the
     // party switched) must not pause / seek the party's new title.
     if (key && this.state?.media?.key && key !== this.state.media.key) return;
@@ -157,6 +167,13 @@ export class WatchClient {
     if (typeof text === "string" && text.trim()) this.sendMsg({ type: "chat", text: text.slice(0, 280) });
   }
 
+  /** The person on this device switched profile: new name / picture for everyone. */
+  setProfile(name, avatar = null) {
+    this.name = name;
+    this.avatar = avatar;
+    this.sendMsg({ type: "profile", name: name || "", avatar: avatar || null });
+  }
+
   get isHost() {
     return !!this.state && this.state.host === this.clientId;
   }
@@ -167,6 +184,8 @@ export class WatchClient {
   }
 
   pickMedia(media) {
+    this.pickedAt = Date.now();
+    this.pickedKey = mediaKey(media);
     this.sendMsg({ type: "media", media });
   }
 

@@ -137,7 +137,7 @@ export async function probeDownload({ season = null, episode = null, ctx = null,
   const override =
     season != null && episode != null ? { season, episode, tmdbSeason: season, tmdbEpisode: episode } : {};
   const context = ctx || downloadContext(override);
-  if (import.meta.env.VITE_WEB) {
+  if (import.meta.env.VITE_WEB && !import.meta.env.VITE_ANDROID) {
     const found = await webCandidates(context);
     const candidates = found.list.filter((c) => !exclude.includes(c.id));
     if (!candidates.length) return { ok: false, error: found.why };

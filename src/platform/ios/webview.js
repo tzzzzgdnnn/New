@@ -15,13 +15,14 @@ import { probeUrl } from "../../utils/servers/probe";
 import { isAutoPick, isAnipmPinned, recordLookup, serverStats } from "./autoServer";
 import { autoOrder, prefetchRanking } from "./autoRank";
 import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
-import { anipmCandidates, ANIPM_ID, cachedAnipm, prefetchAnipm, anipmWebReady } from "./anipm";
+import { anipmCandidates, ANIPM_ID, cachedAnipm, prefetchAnipm, anipmWebReady, anipmLangOk } from "./anipm";
+import { showNoDubNote } from "../../utils/dubNote";
 import { movyCandidates, MOVY_ID } from "./movy";
 import { cinejoyCandidates, cachedCinejoy, prefetchCinejoy, CINEJOY_ID } from "./cinejoy";
 import { sevenMoviesCandidates, SEVENMOVIES_IDS } from "./sevenmovies";
 import { flixerCandidates, FLIXER_ID } from "./flixer";
 import { riveCandidates, RIVE_IDS } from "./rivestream";
-import { playDirect } from "../web/directPlayer";
+import { playDirect, forceFullscreen } from "../web/directPlayer";
 import { parseServerKey } from "../../utils/servers/catalog";
 import { diag } from "../../utils/diag";
 import { customCandidates, withCustom, pickedCustomId, isCustomPlaceholder } from "./customServers";
@@ -201,9 +202,9 @@ function pinnedFor(ctx) {
  * Candidates for `ctx`, best first: providers with no fresh stats are probed
  * now (in parallel, short budget). Ids in `exclude` are left out.
  */
-function rankedCandidates(url, ctx, { signal, exclude = [] } = {}) {
+function rankedCandidates(url, ctx, { signal, exclude = [], budgetMs } = {}) {
   const list = buildCandidateList(url, ctx).filter((c) => !exclude.includes(c.id));
-  return probeAndRank(list, { stats: serverStats, probe: probeUrl, pinned: pinnedFor(ctx), signal });
+  return probeAndRank(list, { stats: serverStats, probe: probeUrl, pinned: pinnedFor(ctx), signal, budgetMs });
 }
 
 /**
@@ -389,8 +390,10 @@ function upgrade(wv) {
   // Ad blocking: no allow-popups / allow-top-navigation, so embeds can't open
   // pop-ups, new tabs, or redirect the app. Servers that refuse a sandbox are
   // dropped from the web build (NEEDS_UNSANDBOXED in api.js).
-  // No sandbox: players detect it and refuse to play ("disable sandbox").
-  iframe.removeAttribute("sandbox");
+  // Pop-up / ad blocking: the sandbox has no allow-popups, allow-top-navigation
+  // or allow-modals, so an embed can't open ad tabs, pop-ups or redirect the
+  // app. (The main web path is the ad-free direct stream; embeds are backups.)
+  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-presentation");
   iframe.setAttribute("referrerpolicy", "origin");
   iframe.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media");
   iframe.setAttribute("allowfullscreen", "");
@@ -476,12 +479,15 @@ function upgrade(wv) {
       if (nativeToken !== token) return;
       postContext(url);
       const ctx = currentCtx();
+      const haveDirect = ctx.isAnime ? !!cachedAnipm(ctx) : !!cachedCinejoy(ctx);
       // Start on the fastest server: untested providers are probed at once,
       // within a short budget, while the Keychain read finishes.
       const tRank = Date.now();
       const [subCtx, ranked, anipm, movy, custom] = await Promise.all([
         subCtxReady,
-        rankedCandidates(url, ctx, { signal: probing.signal }),
+        // A direct stream already in hand plays first, so the embed probes
+        // (only backups then) get a tiny budget instead of holding Play up.
+        rankedCandidates(url, ctx, { signal: probing.signal, budgetMs: haveDirect ? 150 : undefined }),
         ctx.isAnime ? anipmCandidates(ctx) : [],
         ctx.isAnime ? [] : directCandidates(ctx),
         customCandidates(ctx).catch((e) => {
@@ -513,7 +519,7 @@ function upgrade(wv) {
         hideCard();
         loadUrl(url, { webOnly: true });
       }
-    }, 60);
+    }, window.__sbCtx?.tmdbId ? 0 : 60);
   };
 
   cardBtn.addEventListener("click", () => {
@@ -547,7 +553,7 @@ function upgrade(wv) {
   // player. Dub never silently plays Sub. Falls back to the embed server.
   const tryWebAnipm = (url, ctx) => {
     if (!anipmWebReady || !ctx.anilistId) return false;
-    const wanted = ctx.dubMode === "dub" ? "dub" : "sub";
+    const wanted = ctx.dubMode === "sub" ? "sub" : "dub";
     directFor = url;
     iframe.src = "about:blank";
     fire("dom-ready");
@@ -559,12 +565,14 @@ function upgrade(wv) {
     const start = (r) => {
       hideCard();
       log("playing", `ani.pm (${r.lang})`);
+      if (r.lang !== wanted) showNoDubNote();
       fire("did-finish-load");
       const prog = webProgress(ctx);
       const stop = playDirect(wv, r.source, {
         startAt: ctx.startAt || prog.startAt,
         onTime: prog.onTime,
         nativeOnly: true,
+        referer: "https://ani.pm/",
         onFail: (why) => {
           if (directFor !== url) return;
           diag("player", `web ani.pm failed: ${why}`);
@@ -575,7 +583,7 @@ function upgrade(wv) {
       stopDirect = () => { prog.flush(); stop?.(); };
     };
     const hit = cachedAnipm(ctx);
-    if (hit && hit.lang === wanted) {
+    if (hit && anipmLangOk(hit, wanted)) {
       start(hit);
       return true;
     }
@@ -583,7 +591,7 @@ function upgrade(wv) {
     Promise.race([prefetchAnipm(ctx), new Promise((r) => setTimeout(() => r(null), 9000))])
       .then((r) => {
         if (directFor !== url) return;
-        if (!r?.ok || r.lang !== wanted) throw new Error("no stream");
+        if (!r?.ok || !anipmLangOk(r, wanted)) throw new Error("no stream");
         start(r);
       })
       .catch(fallback);
@@ -639,6 +647,103 @@ function upgrade(wv) {
     return true;
   };
 
+  // Android app: auto-open the player like the iPhone app. MainActivity sees
+  // every request an embed server makes; the moment one asks for a video
+  // stream (.m3u8 / .mp4) it tells us, and we play that stream in our own
+  // full-screen player (no embed page, no ads). If it won't play, the embed
+  // simply keeps going.
+  if (import.meta.env.VITE_ANDROID) {
+    // Per embed page: streams it requested (first is played; the others are
+    // spares if it fails) and how many failed. After MAX_TRIES failures, or no
+    // spare within SPARE_WAIT_MS, the next server is tried automatically and
+    // the reason is shown, never a black screen.
+    const MAX_TRIES = 3;
+    const SPARE_WAIT_MS = 3000;
+    let sniff = { embed: null, queue: [], tried: new Set(), fails: 0, playing: false, waitTimer: null };
+    const resetSniff = (embed) => {
+      clearTimeout(sniff.waitTimer);
+      sniff = { embed, queue: [], tried: new Set(), fails: 0, playing: false, waitTimer: null };
+    };
+    const playSniffed = (s) => {
+      const ctx = currentCtx();
+      const embed = sniff.embed;
+      sniff.playing = true;
+      sniff.tried.add(s.url);
+      log("playing", "auto-opened stream");
+      diag("player", `android sniffed stream: ${s.url.slice(0, 120)} (try ${sniff.fails + 1})`);
+      let blanked = false;
+      const prog = webProgress(ctx);
+      const stop = playDirect(wv, s.url, {
+        startAt: ctx.startAt || prog.startAt,
+        // The embed page itself as the fallback Referer/Origin.
+        referer: embed,
+        headers: s.headers || {},
+        onTime: (pos, dur) => {
+          // Our player is running: drop the embed page (stops its audio/ads).
+          if (!blanked && pos > 0) { blanked = true; iframe.src = "about:blank"; }
+          prog.onTime(pos, dur);
+        },
+        onFail: (why) => {
+          stopDirect = null;
+          if (sniff.embed !== embed) return;
+          sniff.playing = false;
+          sniff.fails += 1;
+          diag("player", `android player failed (${why}) on ${s.url.slice(0, 120)}`);
+          if (blanked) loadUrl(embed, { webOnly: true });
+          const spare = sniff.queue.shift();
+          if (spare && sniff.fails < MAX_TRIES) return playSniffed(spare);
+          if (sniff.fails >= MAX_TRIES) return nextServer(why);
+          // Give the page a moment to request another stream.
+          sniff.waitTimer = setTimeout(() => {
+            if (sniff.embed !== embed || sniff.playing) return;
+            const later = sniff.queue.shift();
+            if (later) playSniffed(later);
+            else nextServer(why);
+          }, SPARE_WAIT_MS);
+        },
+      });
+      stopDirect = () => { prog.flush(); stop?.(); };
+    };
+    // The page's server failed: say why and move to the next server.
+    const failedServers = new Map(); // title key -> Set of servers that failed
+    const nextServer = (why) => {
+      const ctx = currentCtx();
+      const key = `${ctx.type}:${ctx.tmdbId}:${ctx.season ?? ""}:${ctx.episode ?? ""}`;
+      const current = menuId(readStored("playerSource"), ctx);
+      const failed = failedServers.get(key) || new Set();
+      failed.add(current);
+      failedServers.set(key, failed);
+      const list = serverListFor(ctx).filter((s) => PLAYER_SOURCES.some((p) => p.id === parseServerKey(s.id).sourceId));
+      const next = list.find((s) => !failed.has(s.id));
+      const label = list.find((s) => s.id === current)?.label || "This server";
+      diag("player", `android: ${label} failed (${why}); next: ${next ? next.label : "none"}`);
+      if (!next) {
+        showCard(`${label} couldn't play this (${why}). No other server worked — pick one in Server or try again later.`, false);
+        return;
+      }
+      showCard(`${label} couldn't play this (${why}). Trying ${next.label}…`, false);
+      setTimeout(hideCard, 4000);
+      const ev = new CustomEvent("sb-select-server", { detail: next.id });
+      ev.sbAuto = true; // an automatic switch: the viewer's own choice stays as it was
+      window.dispatchEvent(ev);
+    };
+    window.addEventListener("sb-android-stream", (e) => {
+      const u = String(e?.detail?.url || "");
+      if (!u || !wv.isConnected || directFor) return;
+      const embed = iframe.getAttribute("src") || "";
+      if (!embed || isBlank(embed)) return;
+      if (sniff.embed !== embed) resetSniff(embed);
+      if (sniff.tried.has(u) || sniff.queue.some((q) => q.url === u)) return;
+      const s = { url: u, headers: e?.detail?.headers || {} };
+      if (stopDirect || sniff.playing) {
+        if (sniff.queue.length < 5) sniff.queue.push(s); // a spare for when this one fails
+        return;
+      }
+      clearTimeout(sniff.waitTimer);
+      playSniffed(s);
+    });
+  }
+
   const loadUrl = (url, { webOnly = false } = {}) => {
     stopWeb();
     stopDirect?.();
@@ -654,6 +759,9 @@ function upgrade(wv) {
       iframe.src = "about:blank";
       return;
     }
+    // Android app: direct streams open the built-in full-screen player, so
+    // only the embed fallback puts the web view itself full screen.
+    if (import.meta.env.VITE_WEB && !/iPhone|iPod/.test(navigator.userAgent) && (import.meta.env.VITE_ANDROID ? webOnly : !webOnly)) forceFullscreen(wv);
     if (import.meta.env.VITE_WEB && !webOnly && tryWebDirect(url)) return;
     // A custom site never loads in the visible web view: its ads and pop-ups
     // are only blocked in the native stream finder.

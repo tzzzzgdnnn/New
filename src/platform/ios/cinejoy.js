@@ -36,6 +36,17 @@ const playableHere = async (url) => {
   }
 };
 
+// Android app: the same check through the native HTTP client.
+const playableNatively = async (url) => {
+  try {
+    const { CapacitorHttp } = await import("@capacitor/core");
+    const r = await CapacitorHttp.get({ url, responseType: "text", connectTimeout: 5000, readTimeout: 5000 });
+    return r.status < 400 && String(r.data || "").startsWith("#EXTM3U");
+  } catch {
+    return false;
+  }
+};
+
 const cache = new Map(); // key -> { at, promise, result?, error? }
 
 /** Cache key, or null when Cinejoy isn't used (anime has ani.pm). */
@@ -47,8 +58,24 @@ export const cinejoyKey = (ctx) => {
 };
 
 /** Start (or reuse) the lookup for `ctx`; resolves to the result or null. */
+/**
+ * Automated party test (scripts/party-e2e.mjs): a fixed https test stream set
+ * in this origin's localStorage ("sbTestStream") stands in for Cinejoy, so
+ * the test never touches real streaming hosts. Unset for everyone else.
+ */
+const testStream = () => {
+  try {
+    const u = localStorage.getItem("sbTestStream");
+    return u && /^https:\/\/[^\s]+$/.test(u) ? u : null;
+  } catch {
+    return null;
+  }
+};
+
 export function prefetchCinejoy(ctx, { now = Date.now } = {}) {
   const key = cinejoyKey(ctx);
+  const test = key && testStream();
+  if (test) return Promise.resolve({ ok: true, server: "test", source: test, subtitles: [] });
   if (!key || !nativeHttpAvailable()) return Promise.resolve(null);
   const hit = cache.get(key);
   if (hit && now() - hit.at < MAX_AGE_MS && !hit.error) return hit.promise;
@@ -65,7 +92,10 @@ export function prefetchCinejoy(ctx, { now = Date.now } = {}) {
       imdbId,
       season: ctx.tmdbSeason ?? ctx.season ?? 1,
       episode: ctx.tmdbEpisode ?? ctx.episode ?? 1,
-    }, undefined, import.meta.env?.VITE_WEB ? playableHere : null);
+      // Web app: the browser must be able to read the playlist (CORS). The
+  // Android app reads and plays it natively (no CORS), like the iPhone app,
+  // so only a removed / dead stream is turned away there.
+  }, undefined, import.meta.env?.VITE_ANDROID ? playableNatively : import.meta.env?.VITE_WEB ? playableHere : null);
   })()
     .then((r) => {
       entry.result = r;

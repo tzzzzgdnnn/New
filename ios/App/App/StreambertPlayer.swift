@@ -1087,6 +1087,9 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
             if let p = pos { playerVC?.watchSeek(p) }
         case "voice":
             setWatchVoice(on: (body["on"] as? Bool) == true)
+        case "duck":
+            let level = (body["level"] as? NSNumber)?.floatValue ?? 1
+            playerVC?.setWatchDuck(level)
         default:
             sbLog("sbWatch: unknown cmd \(cmd)")
         }
@@ -1163,8 +1166,10 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         let session = AVAudioSession.sharedInstance()
         do {
             if on {
-                try session.setCategory(.playAndRecord, mode: .default,
-                                        options: [.mixWithOthers, .allowBluetooth, .defaultToSpeaker])
+                // voiceChat: Apple's echo cancellation / voice processing for the mic.
+                try session.setCategory(.playAndRecord, mode: .voiceChat,
+                                        options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
+                try? session.setPreferredSampleRate(48_000)
             } else {
                 try session.setCategory(.playback, mode: .moviePlayback)
             }
@@ -2931,7 +2936,9 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     fileprivate var chatSplitApplied = false
     fileprivate var chatKeyboardObserver: NSObjectProtocol?
     fileprivate var chatKeyboardBottom: NSLayoutConstraint?
-    fileprivate var chatLabels: [String: UILabel] = [:]
+    fileprivate var chatLabels: [String: UIView] = [:]
+    /// Voice ducking ramp (setWatchDuck).
+    fileprivate var duckTimer: Timer?
     /// Original control-bar constraints swapped out while the split is on.
     fileprivate var chatOrigTopTrailing: NSLayoutConstraint?
     fileprivate var chatOrigBarTrailing: NSLayoutConstraint?
@@ -4552,6 +4559,21 @@ extension StreambertPlayerViewController: UITextFieldDelegate {
         return l
     }
 
+    /// One chat line: the sender's profile picture, then "Name: text".
+    fileprivate func makeChatRow(_ m: [String: Any]) -> UIView {
+        let avatar = ChatAvatarView(
+            url: m["avatarUrl"] as? String ?? "",
+            from: UIColor(chatHex: m["avatarFrom"] as? String ?? "") ?? UIColor(white: 0.55, alpha: 1),
+            to: UIColor(chatHex: m["avatarTo"] as? String ?? "") ?? UIColor(white: 0.11, alpha: 1),
+            initial: m["initial"] as? String ?? "")
+        let row = UIStackView(arrangedSubviews: [avatar, makeChatLabel(m)])
+        row.axis = .horizontal
+        row.alignment = .top
+        row.spacing = 8
+        row.isUserInteractionEnabled = false
+        return row
+    }
+
     fileprivate func renderChatMessages(animated: Bool) {
         guard chatUIReady else { return }
         let shown = Array(chatMessages.suffix(Self.chatShownMessages))
@@ -4559,11 +4581,11 @@ extension StreambertPlayerViewController: UITextFieldDelegate {
             chatStack.removeArrangedSubview(v)
             v.removeFromSuperview()
         }
-        var keep: [String: UILabel] = [:]
+        var keep: [String: UIView] = [:]
         for m in shown {
             let id = Self.chatId(m)
             let isNew = chatLabels[id] == nil
-            let label = chatLabels[id] ?? makeChatLabel(m)
+            let label = chatLabels[id] ?? makeChatRow(m)
             keep[id] = label
             chatStack.addArrangedSubview(label)
             if isNew && animated {
@@ -4627,5 +4649,102 @@ extension StreambertPlayerViewController: UITextFieldDelegate {
         if next.count <= Self.chatMaxLength { return true }
         textField.text = String(next.prefix(Self.chatMaxLength))
         return false
+    }
+}
+
+
+// MARK: - Party chat profile pictures
+
+extension UIColor {
+    /// "#rrggbb" (the profile gradient colours JS sends).
+    convenience init?(chatHex: String) {
+        let h = chatHex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
+        self.init(red: CGFloat((v >> 16) & 0xff) / 255, green: CGFloat((v >> 8) & 0xff) / 255,
+                  blue: CGFloat(v & 0xff) / 255, alpha: 1)
+    }
+}
+
+/// A sender's picture in party chat: their profile image, or their profile
+/// gradient with their initial (also shown while the image loads or if it fails).
+final class ChatAvatarView: UIView {
+    static let size: CGFloat = 24
+    private static let cache = NSCache<NSString, UIImage>()
+    private let gradient = CAGradientLayer()
+    private let initialLabel = UILabel()
+    private let imageView = UIImageView()
+
+    init(url: String, from: UIColor, to: UIColor, initial: String) {
+        super.init(frame: CGRect(x: 0, y: 0, width: Self.size, height: Self.size))
+        translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: Self.size),
+            heightAnchor.constraint(equalToConstant: Self.size),
+        ])
+        layer.cornerRadius = Self.size / 2
+        clipsToBounds = true
+        gradient.colors = [from.cgColor, to.cgColor]
+        gradient.startPoint = CGPoint(x: 0.2, y: 0.1)
+        gradient.endPoint = CGPoint(x: 1, y: 1)
+        layer.addSublayer(gradient)
+        initialLabel.text = String(initial.prefix(1))
+        initialLabel.font = .systemFont(ofSize: 12, weight: .heavy)
+        initialLabel.textColor = .white
+        initialLabel.textAlignment = .center
+        imageView.contentMode = .scaleAspectFill
+        imageView.clipsToBounds = true
+        for v in [initialLabel, imageView] {
+            v.frame = bounds
+            v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            addSubview(v)
+        }
+        load(url)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        gradient.frame = bounds
+    }
+
+    private func load(_ url: String) {
+        guard !url.isEmpty else { return }
+        if let img = Self.cache.object(forKey: url as NSString) { imageView.image = img; return }
+        if url.hasPrefix("data:image/"), let comma = url.firstIndex(of: ",") {
+            if let data = Data(base64Encoded: String(url[url.index(after: comma)...])), let img = UIImage(data: data) {
+                Self.cache.setObject(img, forKey: url as NSString)
+                imageView.image = img
+            }
+            return
+        }
+        guard let u = URL(string: url), u.scheme == "https" else { return }
+        URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
+            guard let data = data, let img = UIImage(data: data) else { return }
+            Self.cache.setObject(img, forKey: url as NSString)
+            DispatchQueue.main.async { self?.imageView.image = img }
+        }.resume()
+    }
+}
+
+
+// MARK: - Party voice ducking
+
+extension StreambertPlayerViewController {
+    /// Someone in the party is talking: the movie drops to `level` (0...1) of
+    /// its volume, gliding there in ~250 ms, and glides back to full after.
+    func setWatchDuck(_ level: Float) {
+        guard let p = player else { return }
+        let target = max(0, min(1, level))
+        duckTimer?.invalidate()
+        let start = p.volume
+        let steps = 10
+        var i = 0
+        duckTimer = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { [weak self] t in
+            i += 1
+            let f = Float(i) / Float(steps)
+            self?.player?.volume = start + (target - start) * f
+            if i >= steps { t.invalidate() }
+        }
     }
 }
