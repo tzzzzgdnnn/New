@@ -106,3 +106,36 @@
   -webkit-user-select: text;
   user-select: text;
 }
+
+/* Smart add: progress, summary card, site icon, Advanced disclosure. */
+.cs-step.is-pending { opacity: .45; }
+.cs-step.is-neutral .cs-step-icon, .cs-step.is-skipped .cs-step-icon, .cs-step.is-pending .cs-step-icon { background: rgba(235, 235, 245, .18); }
+.cs-step.is-running .cs-step-icon { background: none; }
+.cs-step.is-done .cs-step-icon { background: var(--sp-success, #30d158); }
+.cs-step.is-failed .cs-step-icon { background: var(--sp-warning, #ff9f0a); }
+.cs-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(235, 235, 245, .25);
+  border-top-color: var(--sp-accent);
+  border-radius: 50%;
+  animation: csSpin .8s linear infinite;
+}
+@keyframes csSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .cs-spinner { animation-duration: 2.4s; } }
+.cs-site { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.cs-site-icon { width: 22px; height: 22px; border-radius: 5px; object-fit: cover; flex: none; background: rgba(255, 255, 255, .06); }
+.cs-summary { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; font: 600 17px -apple-system, system-ui, sans-serif; }
+.cs-summary-line { font: 400 15px/1.4 -apple-system, system-ui, sans-serif; color: var(--sp-label, #fff); }
+.cs-summary-warn { font: 400 13px -apple-system, system-ui, sans-serif; color: var(--sp-warning, #ff9f0a); }
+.cs-disclosure {
+  width: 8px;
+  height: 8px;
+  margin-left: 8px;
+  border-right: 2px solid var(--sp-tertiary, rgba(235, 235, 245, .3));
+  border-bottom: 2px solid var(--sp-tertiary, rgba(235, 235, 245, .3));
+  transform: rotate(-45deg);
+  transition: transform .2s ease;
+}
+.cs-disclosure.is-open { transform: rotate(45deg); }

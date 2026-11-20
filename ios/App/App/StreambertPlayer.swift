@@ -129,7 +129,14 @@ final class DiagMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
 // URL is disguised) plus .vtt/.srt subtitles, to the native handler `sbMedia`.
 
 enum SniffScript {
-    static func source(subframesOnly: Bool, nudge: Bool) -> String {
+    /// Longest API answer / inline script a page reports in learn mode.
+    static let learnTextLimit = 262_144
+    static let learnScriptLimit = 100_000
+
+    /// `learn`: custom servers' Test and first play also report the page's
+    /// fetch / XHR calls with their answers, and its scripts, so the site's
+    /// stream API can be learned (Direct mode). Cookies are never read.
+    static func source(subframesOnly: Bool, nudge: Bool, learn: Bool = false) -> String {
         return """
         (function () {
           \(subframesOnly ? "if (window.top === window) return;" : "")
@@ -137,6 +144,37 @@ enum SniffScript {
           window.__sbHooked = true;
           var H = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.sbMedia;
           if (!H) return;
+          var L = \(learn ? "true" : "false");
+          var LT = \(learnTextLimit), LS = \(learnScriptLimit);
+          function learnPost(o) { if (!L) return; try { o.kind = o.kind || 'api'; o.page = location.href; H.postMessage(o); } catch (e) {} }
+          function hdrs(h) {
+            var o = {};
+            try {
+              if (!h) return o;
+              if (typeof h.forEach === 'function' && !Array.isArray(h)) h.forEach(function (v, k) { o[k] = String(v); });
+              else if (Array.isArray(h)) h.forEach(function (p) { o[p[0]] = String(p[1]); });
+              else Object.keys(h).forEach(function (k) { o[k] = String(h[k]); });
+            } catch (e) {}
+            return o;
+          }
+          function learnable(ct) { return !/image|video|audio|octet|font|css|mpegurl|javascript|html/.test(ct); }
+          if (L) {
+            var sentScripts = {};
+            var scanScripts = function () {
+              try {
+                var budget = LS * 4;
+                document.querySelectorAll('script').forEach(function (sc) {
+                  if (sc.src) { if (!sentScripts[sc.src]) { sentScripts[sc.src] = 1; learnPost({ kind: 'script', url: sc.src }); } return; }
+                  var t = sc.textContent || '';
+                  if (t.length < 40 || t.length > LS || budget < t.length || sentScripts['i' + t.length + t.slice(0, 40)]) return;
+                  sentScripts['i' + t.length + t.slice(0, 40)] = 1; budget -= t.length;
+                  learnPost({ kind: 'script', text: t });
+                });
+              } catch (e) {}
+            };
+            document.addEventListener('DOMContentLoaded', scanScripts);
+            setTimeout(scanScripts, 3000);
+          }
           var seen = {};
           function abs(u) { try { return new URL(String(u), location.href).href; } catch (e) { return null; } }
           function post(kind, u, label) {
@@ -195,14 +233,28 @@ enum SniffScript {
             if (++trackScans > 40) clearInterval(trackIv);
           }, 1500);
           var of = window.fetch;
-          if (of) window.fetch = function (i) {
+          if (of) window.fetch = function (i, init) {
             var u = typeof i === 'string' ? i : (i && i.url);
             rep(u);
+            var meta = null;
+            if (L) {
+              try {
+                meta = {
+                  method: String((init && init.method) || (i && i.method) || 'GET').toUpperCase(),
+                  headers: hdrs((init && init.headers) || (i && i.headers)),
+                  body: init && typeof init.body === 'string' ? init.body.slice(0, 8192) : null
+                };
+              } catch (e) {}
+            }
             var p = of.apply(this, arguments);
             try {
               p.then(function (r) {
                 try {
                   var ct = (r.headers.get('content-type') || '').toLowerCase();
+                  if (meta && learnable(ct)) r.clone().text().then(function (t) {
+                    learnPost({ url: r.url || abs(u), method: meta.method, headers: meta.headers, body: meta.body,
+                                status: r.status, contentType: ct, text: String(t).slice(0, LT) });
+                  }).catch(function () {});
                   if (ct.indexOf('mpegurl') >= 0) rep(r.url || u, true);
                   else if (!/image|video|audio|octet|font|css/.test(ct)) r.clone().text().then(function (t) { sniffText(r.url || u, t); }).catch(function () {});
                 } catch (e) {}
@@ -211,12 +263,30 @@ enum SniffScript {
             return p;
           };
           var xo = XMLHttpRequest.prototype.open;
+          if (L) {
+            var xh = XMLHttpRequest.prototype.setRequestHeader, xs = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
+              try { (this.__sbH = this.__sbH || {})[k] = String(v); } catch (e) {}
+              return xh.apply(this, arguments);
+            };
+            XMLHttpRequest.prototype.send = function (b) {
+              try { this.__sbB = typeof b === 'string' ? b.slice(0, 8192) : null; } catch (e) {}
+              return xs.apply(this, arguments);
+            };
+          }
           XMLHttpRequest.prototype.open = function (m, u) {
             var x = this; rep(u);
+            try { x.__sbM = String(m || 'GET').toUpperCase(); } catch (e) {}
             try {
               x.addEventListener('load', function () {
                 try {
                   var ct = (x.getResponseHeader('content-type') || '').toLowerCase();
+                  if (L && learnable(ct)) {
+                    var txt = (x.responseType === '' || x.responseType === 'text') ? x.responseText
+                      : (x.responseType === 'json' && x.response ? JSON.stringify(x.response) : null);
+                    if (txt != null) learnPost({ url: x.responseURL || abs(u), method: x.__sbM, headers: x.__sbH || {},
+                                                 body: x.__sbB || null, status: x.status, contentType: ct, text: String(txt).slice(0, LT) });
+                  }
                   if (ct.indexOf('mpegurl') >= 0) rep(x.responseURL || u, true);
                   else if (x.responseType === '' || x.responseType === 'text') sniffText(x.responseURL || u, x.responseText);
                   else if (x.responseType === 'json' && x.response) sniffSubs(x.responseURL || u, JSON.stringify(x.response));
@@ -314,14 +384,20 @@ struct SniffCandidate {
     var timeout: TimeInterval? = nil
     /// Reuse a stream found for this exact link earlier in the session.
     var cacheable = false
+    /// Headers the stream needs ("#sb-direct" streams from a custom site's API).
+    var headers: [String: String] = [:]
+    /// Custom servers: also report the page's API calls and scripts (Direct mode learning).
+    var learn = false
 
-    /// A candidate from the JS bridge ({ id, label, url, lockHost?, timeoutMs?, cache? }).
+    /// A candidate from the JS bridge ({ id, label, url, lockHost?, timeoutMs?, cache?, headers?, learn? }).
     static func from(_ d: [String: Any]) -> SniffCandidate? {
         guard let id = d["id"] as? String, let u = (d["url"] as? String).flatMap({ URL(string: $0) }) else { return nil }
         let host = (d["lockHost"] as? String).flatMap { $0.isEmpty ? nil : $0.lowercased() }
         let ms = (d["timeoutMs"] as? NSNumber)?.doubleValue
         return SniffCandidate(id: id, label: (d["label"] as? String) ?? id, url: u, lockHost: host,
-                              timeout: ms.map { $0 / 1000 }, cacheable: (d["cache"] as? Bool) ?? false)
+                              timeout: ms.map { $0 / 1000 }, cacheable: (d["cache"] as? Bool) ?? false,
+                              headers: (d["headers"] as? [String: String]) ?? [:],
+                              learn: (d["learn"] as? Bool) ?? false)
     }
 
     /// Whether `host` is the locked site or one of its subdomains.
@@ -340,6 +416,10 @@ struct SniffReport {
     var popupsBlocked = 0
     var redirectsBlocked: [String] = []
     var adFilterOn = false
+    /// The page's <title> once loaded (the Test checks it against TMDB's title).
+    var pageTitle: String?
+    /// A bot check the site showed instead of the page ("Cloudflare").
+    var wall: String?
 }
 
 /// A subtitle file seen on an embed page, with the page's label if it had one.
@@ -352,6 +432,10 @@ struct SniffResult {
     let headers: [String: String]
     let cookies: [HTTPCookie]
     let subtitles: [SniffSub]
+    /// The page (frame) the stream was found on.
+    var page: URL? = nil
+    /// Learn mode: the page's API calls and scripts ({ requests, scripts }).
+    var learn: [String: Any]? = nil
 }
 
 private final class WeakHandler: NSObject, WKScriptMessageHandler {
@@ -373,6 +457,8 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         let webView: WKWebView
         var streams: [(url: URL, page: URL?)] = []
         var subs: [SniffSub] = []
+        var learnRequests: [[String: Any]] = []
+        var learnScripts: [[String: Any]] = []
         var timeout: Timer?
         var settle: Timer?
         init(index: Int, webView: WKWebView) { self.index = index; self.webView = webView }
@@ -401,6 +487,13 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     /// A stream from a lower-priority server waits this long for the
     /// viewer's own server (earlier in the list) before it is used.
     static let preferWindow: TimeInterval = 1.5
+    /// Learn mode keeps at most this many API calls and scripts per page.
+    static let maxLearnRequests = 60
+    static let maxLearnScripts = 30
+    /// Titles a bot check page shows instead of the site.
+    static let wallTitle = try? NSRegularExpression(
+        pattern: "just a moment|attention required|verify you are human|checking your browser|ddos-guard|access denied",
+        options: [.caseInsensitive])
     /// After a stream is picked the page stays loaded this long, so subtitle
     /// files it fetches later still reach the player.
     static let lingerAfterPick: TimeInterval = 12
@@ -519,7 +612,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         cfg.allowsPictureInPictureMediaPlayback = false
         cfg.preferences.javaScriptCanOpenWindowsAutomatically = false
         let ucc = WKUserContentController()
-        ucc.addUserScript(WKUserScript(source: SniffScript.source(subframesOnly: false, nudge: true),
+        ucc.addUserScript(WKUserScript(source: SniffScript.source(subframesOnly: false, nudge: true, learn: c.learn),
                                        injectionTime: .atDocumentStart, forMainFrameOnly: false))
         ucc.add(WeakHandler(self), name: "sbMedia")
         if c.lockHost != nil {
@@ -572,6 +665,13 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         guard let b = m.body as? [String: Any], let slot = slot(for: m.webView) else { return }
         if (b["kind"] as? String) == "blocked" {
             reports[slot.index, default: SniffReport()].popupsBlocked += 1
+            return
+        }
+        // Learn mode: the page's API calls and scripts (only asked for by custom servers).
+        if let kind = b["kind"] as? String, kind == "api" || kind == "script" {
+            guard slot.index < candidates.count, candidates[slot.index].learn else { return }
+            if kind == "api", slot.learnRequests.count < Self.maxLearnRequests { slot.learnRequests.append(b) }
+            if kind == "script", slot.learnScripts.count < Self.maxLearnScripts { slot.learnScripts.append(b) }
             return
         }
         guard let s = b["url"] as? String, let u = URL(string: s) else { return }
@@ -638,6 +738,11 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             headers["Referer"] = origin + "/"
             headers["Origin"] = origin
         }
+        // A custom site's API stream ("#sb-direct") brings the headers it needs.
+        headers.merge(cand.headers) { _, new in new }
+        let learnLog: [String: Any]? = cand.learn
+            ? ["requests": slot.learnRequests, "scripts": slot.learnScripts] : nil
+        let streamPage = best.page
         // The winner stays loaded (late subtitles); every other page goes.
         for other in slots.values where other !== slot { drop(other) }
         slots = [:]
@@ -652,7 +757,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             guard let self = self else { return }
             self.startLingering()
             self.deliver(SniffResult(candidateIndex: i, server: cand, url: best.url, headers: headers,
-                                     cookies: cookies, subtitles: subtitles))
+                                     cookies: cookies, subtitles: subtitles, page: streamPage, learn: learnLog))
         }
         slot.webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { all in
             done(all.filter { c in
@@ -724,8 +829,16 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         if navigationResponse.isForMainFrame, let slot = slot(for: webView),
-           let status = (navigationResponse.response as? HTTPURLResponse)?.statusCode {
-            reports[slot.index, default: SniffReport()].pageStatus = status
+           let http = navigationResponse.response as? HTTPURLResponse {
+            reports[slot.index, default: SniffReport()].pageStatus = http.statusCode
+            // Cloudflare marks its challenge pages; a 403/503 from it is one too.
+            let server = (http.value(forHTTPHeaderField: "Server") ?? "").lowercased()
+            if http.value(forHTTPHeaderField: "cf-mitigated")?.lowercased() == "challenge"
+                || ([403, 503].contains(http.statusCode) && server.contains("cloudflare")) {
+                reports[slot.index, default: SniffReport()].wall = "Cloudflare"
+            } else if [403, 503].contains(http.statusCode) && server.contains("ddos-guard") {
+                reports[slot.index, default: SniffReport()].wall = "DDoS-Guard"
+            }
         }
         decisionHandler(.allow)
     }
@@ -734,6 +847,17 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         guard let slot = slot(for: webView), reports[slot.index]?.pageLoadedAfter == nil else { return }
         reports[slot.index, default: SniffReport()].pageLoadedAfter =
             Date().timeIntervalSince(launchedAt[slot.index] ?? startedAt)
+        let index = slot.index
+        webView.evaluateJavaScript("document.title") { [weak self] value, error in
+            guard let self = self else { return }
+            if let error = error { sbLog("page title unreadable: \(error.localizedDescription)"); return }
+            guard let title = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return }
+            self.reports[index, default: SniffReport()].pageTitle = String(title.prefix(200))
+            let range = NSRange(title.startIndex..., in: title)
+            if Self.wallTitle?.firstMatch(in: title, range: range) != nil, self.reports[index]?.wall == nil {
+                self.reports[index, default: SniffReport()].wall = title.lowercased().contains("ddos") ? "DDoS-Guard" : "Cloudflare"
+            }
+        }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -1103,12 +1227,25 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
             return
         }
         notifyJS(token: token, ok: true, server: r.server.id)
+        if let log = r.learn { sendLearnLog(r, log: log) }
         sniffIndex = r.candidateIndex
         if playerVC == nil {
             presentOnTop(makePlayer(currentServer: r.server.id, sniffBased: true))
         }
         playerVC?.load(url: r.url, headers: r.headers, cookies: r.cookies, server: r.server.id)
         playerVC?.setStreamSubtitles(r.subtitles, headers: r.headers)
+    }
+
+    /// A custom site's first play: what its page did, so JS can learn its
+    /// stream API in the background (Direct mode). No cookies are sent.
+    private func sendLearnLog(_ r: SniffResult, log: [String: Any]) {
+        sendToJS("__sbCustomLearn", [
+            "link": r.server.url.absoluteString,
+            "stream": r.url.absoluteString,
+            "headers": r.headers.filter { $0.key.lowercased() != "cookie" },
+            "page": r.page?.absoluteString ?? r.server.url.absoluteString,
+            "log": log,
+        ])
     }
 
     private func notifyJS(token: String, ok: Bool, server: String?) {

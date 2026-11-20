@@ -37,6 +37,10 @@ export function publishPlayerContext(ctx) {
   // Movies and series: Movy's stream API, resolved now so Play is instant.
   if (!import.meta.env.VITE_WEB && ctx && !ctx.isAnime && ctx.tmdbId) import("./movy").then((m) => m.prefetchMovy(ctx)).catch(() => {});
   if (ctx && !ctx.isAnime && ctx.tmdbId) import("./cinejoy").then((m) => m.prefetchCinejoy(ctx)).catch(() => {});
+  // Custom sites in Direct mode: their APIs, looked up now like Cinejoy's.
+  if (!import.meta.env.VITE_WEB && ctx && (ctx.tmdbId || ctx.anilistId)) {
+    import("./customServers").then((m) => m.prefetchCustomDirect(ctx)).catch(() => {});
+  }
   // Measure the title's servers now (player Auto ranking), not on Play.
   import("./webview").then((m) => m.prefetchTitle(ctx)).catch(() => {});
 }

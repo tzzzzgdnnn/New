@@ -1867,6 +1867,8 @@ export default function TVPage({
       year: Number(String(details?.first_air_date || item.first_air_date || "").slice(0, 4)) || null,
       tmdbSeason: playerEp?.season ?? selectedSeason,
       tmdbEpisode: playerEp?.episode ?? selectedEp?.episode_number ?? null,
+      // Custom sites that number a show's episodes straight through ({absolute}).
+      absoluteEpisode: tmdbAbsoluteEpisode(details?.seasons, playerEp?.season ?? selectedSeason, playerEp?.episode ?? selectedEp?.episode_number),
       anilistId: anilistIdForSeason,
       anilistEpisode,
       dubMode,
@@ -1884,6 +1886,7 @@ export default function TVPage({
     anilistIdForSeason,
     anilistEpisode,
     dubMode,
+    details?.seasons,
   ]);
 
   useNativeServerSelect(({ sourceId, dubMode: mode }) => {

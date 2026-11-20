@@ -10,6 +10,7 @@ import { storage, STORAGE_KEYS } from "../../utils/storage";
 import { cinejoyCandidates, prefetchCinejoy } from "./cinejoy";
 import { prefetchAnipm, ANIPM_RELAY } from "./anipm";
 import { customCandidates, withCustom } from "./customServers";
+import { DIRECT_DOWNLOAD_TIMEOUT_MS } from "./customDirect";
 import { providerOf } from "../../utils/servers/ranking";
 import { MOVY_ID, MOVY_LABEL } from "./movy";
 import { sourcesForTitle } from "../../utils/api";
@@ -151,7 +152,8 @@ export async function probeDownload({ season = null, episode = null, ctx = null,
     downloadCandidates(context, { exclude }),
     // Downloads wait up to 15 s for the direct streams (they carry every resolution).
     context?.isAnime ? [] : directCandidates(context, { waitMs: 15000 }).catch(() => []),
-    customCandidates(context).catch((e) => {
+    // Custom sites' APIs get longer here: the quality list comes from their stream.
+    customCandidates(context, { directTimeoutMs: DIRECT_DOWNLOAD_TIMEOUT_MS }).catch((e) => {
       diag("download", `custom servers: ${e?.message || e}`);
       return [];
     }),

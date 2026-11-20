@@ -11,7 +11,9 @@
 // copy, so the list survives app updates and a cleared web view.
 import { storage, secureStorage } from "../../utils/storage";
 import { fetchImdbId, lastTmdbKey, tmdbFetch } from "../../utils/api";
-import { buildUrl, deriveTemplate, siteDomain, templatePlaceholders, TEMPLATE_KINDS, validateTemplate } from "../../utils/customServers/template";
+import { buildUrl, deriveTemplate, normalizeSlugStyle, siteDomain, templatePlaceholders, TEMPLATE_KINDS, validateTemplate } from "../../utils/customServers/template";
+import { DIRECT_METHODS, EXTRACT_TYPES, validateDirect, checkTitle } from "../../utils/customServers/direct";
+import { cachedResolve, learnDirect, testDirect, DIRECT_TIMEOUT_MS } from "./customDirect";
 import { matchSample, withTimeout, LOOKUP_TIMEOUT_MS } from "../../utils/customServers/match";
 import { isAutoPick } from "./autoServer";
 import { diag } from "../../utils/diag";
@@ -32,6 +34,18 @@ const ID_LOOKUP_WAIT_MS = 2500;
 const MAX_NAME_LENGTH = 40;
 const MAX_SERVERS = 50;
 
+/**
+ * How a site plays. "auto": its API first (like Cinejoy), the page if that
+ * fails or takes longer than DIRECT_TIMEOUT_MS; "direct": API only; "page":
+ * load the page and capture the stream (the original way).
+ */
+export const MODES = Object.freeze(["auto", "direct", "page"]);
+export const DEFAULT_MODE = "auto";
+/** Direct definitions are kept per kind of link, plus one hand-written fallback. */
+const DIRECT_SLOTS = [...TEMPLATE_KINDS, "manual"];
+/** A failed silent learn on play isn't retried for this long. */
+const LEARN_RETRY_MS = 24 * 60 * 60_000;
+
 /** Lists a server can join. */
 export const LISTS = Object.freeze([
   { key: "anime", label: "Anime" },
@@ -43,7 +57,8 @@ export const LISTS = Object.freeze([
 export const REFERENCE_TITLES = Object.freeze({
   movie: { kind: "movie", tmdb: 27205, imdb: "tt1375666", title: "Inception", year: 2010 },
   tv: { kind: "tv", tmdb: 1396, imdb: "tt0903747", title: "Breaking Bad", year: 2008, season: 1, episode: 1 },
-  anime: { kind: "anime", anilist: 21, mal: 21, title: "One Piece", year: 1999, episode: 1 },
+  // tmdb: One Piece on TMDB, for sites whose anime route takes TMDB ids.
+  anime: { kind: "anime", anilist: 21, mal: 21, tmdb: 37854, title: "One Piece", altTitles: ["ONE PIECE"], year: 1999, season: 1, episode: 1 },
 });
 
 // ── Store ─────────────────────────────────────────────────────────────────
@@ -89,10 +104,57 @@ export function normalizeServer(s) {
         }
       : null,
     lastTest: s.lastTest && typeof s.lastTest === "object" ? { ok: !!s.lastTest.ok, at: Number(s.lastTest.at) || 0, summary: String(s.lastTest.summary || "") } : null,
+    mode: MODES.includes(s.mode) ? s.mode : DEFAULT_MODE,
+    direct: normalizeDirectMap(s.direct),
+    directNotes: Object.fromEntries(DIRECT_SLOTS.filter((k) => typeof s.directNotes?.[k] === "string").map((k) => [k, s.directNotes[k].slice(0, 200)])),
+    learnTried: Object.fromEntries(TEMPLATE_KINDS.filter((k) => Number(s.learnTried?.[k])).map((k) => [k, Number(s.learnTried[k])])),
+    slugStyle: s.slugStyle ? normalizeSlugStyle(s.slugStyle) : null,
+    icon: typeof s.icon === "string" && /^https?:\/\//.test(s.icon) ? s.icon : null,
     createdAt: Number(s.createdAt) || Date.now(),
     updatedAt: Number(s.updatedAt) || Date.now(),
   };
 }
+
+/** A saved direct definition in its expected shape, or null when it can't work. */
+export function normalizeDirect(d) {
+  if (!d || typeof d !== "object" || typeof d.url !== "string") return null;
+  const def = {
+    url: d.url.trim(),
+    method: DIRECT_METHODS.includes(d.method) ? d.method : "GET",
+    headers: plainHeaders(d.headers),
+    body: typeof d.body === "string" && d.body ? d.body : null,
+    extract: EXTRACT_TYPES.includes(d.extract?.type)
+      ? d.extract.type === "path"
+        ? { type: "path", path: String(d.extract.path || "") }
+        : { type: "regex", pattern: String(d.extract.pattern || "") }
+      : null,
+    streamHeaders: plainHeaders(d.streamHeaders),
+    source: d.source === "manual" ? "manual" : "auto",
+    learnedAt: Number(d.learnedAt) || null,
+  };
+  return validateDirect(def) ? null : def;
+}
+
+// Only string headers, never Cookie or Authorization (nothing session-bound is kept).
+function plainHeaders(h) {
+  const out = {};
+  for (const [k, v] of Object.entries(h && typeof h === "object" ? h : {})) {
+    if (typeof v === "string" && /^[A-Za-z0-9-]+$/.test(k) && !/^(cookie|authorization)$/i.test(k)) out[k] = v;
+  }
+  return out;
+}
+
+function normalizeDirectMap(m) {
+  const out = {};
+  for (const k of DIRECT_SLOTS) {
+    const d = normalizeDirect(m?.[k]);
+    if (d) out[k] = d;
+  }
+  return out;
+}
+
+/** The direct definition a server uses for a kind of link (learned first, then hand-written). */
+export const directFor = (s, kind) => (s.mode === "page" ? null : s.direct?.[kind] || s.direct?.manual || null);
 
 /** Every saved custom server, in the order they were added. */
 export function listCustomServers() {
@@ -160,6 +222,26 @@ export async function recordTestResult(id, result) {
   const s = list.find((x) => x.id === id);
   if (!s) return;
   s.lastTest = { ok: !!result.ok, at: Date.now(), summary: result.summary || "" };
+  await writeAll(list);
+}
+
+/**
+ * Store what Direct learning found for one kind: the definition, or why
+ * there is none (shown in the Test and the summary).
+ */
+export async function recordDirect(id, kind, def, note = "") {
+  const list = listCustomServers();
+  const s = list.find((x) => x.id === id);
+  if (!s) return;
+  s.direct = { ...s.direct };
+  s.directNotes = { ...s.directNotes };
+  s.learnTried = { ...s.learnTried, [kind]: Date.now() };
+  if (def) {
+    s.direct[kind] = def;
+    delete s.directNotes[kind];
+  } else if (note) {
+    s.directNotes[kind] = note;
+  }
   await writeAll(list);
 }
 
@@ -320,6 +402,7 @@ export async function valuesFor(template, ctx, { waitMs = ID_LOOKUP_WAIT_MS } = 
     year: ctx.year || null,
     season: ctx.tmdbSeason ?? ctx.season ?? 1,
     episode: animeIds ? ctx.anilistEpisode ?? ctx.episode ?? 1 : ctx.tmdbEpisode ?? ctx.episode ?? 1,
+    absolute: ctx.absoluteEpisode ?? null,
     lang: ctx.dubMode === "dub" ? "dub" : "sub",
     imdb: ctx.imdbId || null,
     mal: ctx.malId || null,
@@ -335,33 +418,105 @@ export async function valuesFor(template, ctx, { waitMs = ID_LOOKUP_WAIT_MS } = 
 /** Whether a source URL is a custom server's placeholder (never loaded as a page). */
 export const isCustomPlaceholder = (url) => String(url || "").includes(`//${CUSTOM_HOST}/`);
 
+/** Which kind of link a template is on a server ("movie" | "tv" | "anime"). */
+const kindOfTemplate = (s, tpl) => TEMPLATE_KINDS.find((k) => s.templates[k] === tpl) || "movie";
+
+// Page links whose play should also learn the site's API (silently), by link.
+const pendingLearn = new Map(); // url -> { serverId, kind, values, want }
+
+/** TMDB's idea of the title on screen, for title checks. */
+const wantFor = (ctx, values, kind) => ({
+  kind: kind === "movie" ? "movie" : "tv",
+  title: ctx.title || "",
+  year: ctx.year || null,
+  tmdb: values.tmdb,
+  imdb: values.imdb,
+});
+
 /**
  * Custom-server candidates for the native player / downloader, in the order
  * the servers were added. Ids match the server menu ("custom-x:dub" when the
- * server has a Sub/Dub route).
+ * server has a Sub/Dub route). A server with a learned API gives its stream
+ * first ("<stream>#sb-direct", like Cinejoy), then its page as the fallback
+ * (mode "auto"). An API that answers for another title drops the server.
+ * @param {{ directTimeoutMs?: number }} opts
  */
 export async function customCandidates(ctx, opts = {}) {
   if (!ctx || (!ctx.tmdbId && !ctx.anilistId)) return [];
   const isAnime = !!ctx.isAnime;
   const type = ctx.type === "tv" ? "tv" : "movie";
   const dubMode = ctx.dubMode === "dub" ? "dub" : "sub";
+  const directTimeoutMs = opts.directTimeoutMs ?? DIRECT_TIMEOUT_MS;
   const out = await Promise.all(
     listCustomServers()
       .filter((s) => serverFits(s, { isAnime, type }))
       .map(async (s) => {
         const tpl = templateFor(s, { isAnime, type, dubMode });
-        if (!tpl) return null;
-        const url = buildUrl(tpl, await valuesFor(tpl, ctx, opts));
+        if (!tpl) return [];
+        const values = { ...(await valuesFor(tpl, ctx, opts)), slugStyle: s.slugStyle };
+        const url = buildUrl(tpl, values);
         if (!url) {
           diag("custom", `${s.name}: no link for ${type} ${ctx.tmdbId ?? ctx.anilistId} (a value is missing)`);
-          return null;
+          return [];
         }
         const dubbable = isAnime && !!s.templates.anime && templatePlaceholders(s.templates.anime).includes("lang");
         const id = dubbable ? `${s.id}:${dubMode}` : s.id;
-        return candidateFor(s, url, { id, label: s.name + (isAnime ? (dubMode === "dub" ? " · Dub" : " · Sub") : "") });
+        const label = s.name + (isAnime ? (dubMode === "dub" ? " · Dub" : " · Sub") : "");
+        const kind = kindOfTemplate(s, tpl);
+        const def = directFor(s, kind);
+        const list = [];
+        if (def) {
+          const want = wantFor(ctx, values, kind);
+          const r = await cachedResolve(`${s.id}:${url}`, def, values, want, { timeoutMs: directTimeoutMs });
+          if (r.check === "mismatch") {
+            diag("custom", `${s.name}: its API answered for another title than ${ctx.title}; skipped`);
+            return [];
+          }
+          if (r.ok) list.push({ id, label, url: `${r.stream}#sb-direct`, headers: def.streamHeaders, direct: true });
+        }
+        if (s.mode !== "direct" || !def) {
+          const learn = s.mode !== "page" && !def && Date.now() - (s.learnTried?.[kind] || 0) > LEARN_RETRY_MS;
+          if (learn) pendingLearn.set(url, { serverId: s.id, kind, values, want: wantFor(ctx, values, kind) });
+          list.push({ ...candidateFor(s, url, { id, label }), ...(learn ? { learn: true } : {}) });
+        }
+        return list;
       }),
   );
-  return out.filter(Boolean);
+  return out.flat();
+}
+
+/** Start the direct lookups for a title now (title page opened), so Play doesn't wait. */
+export function prefetchCustomDirect(ctx) {
+  customCandidates(ctx).catch((e) => diag("custom", `prefetch: ${e?.message || e}`));
+}
+
+/**
+ * The first play of a page link that had no API yet: the native sniffer
+ * sends what the page did, and the API is learned in the background.
+ * window.__sbCustomLearn({ link, stream, headers, page, log })
+ */
+export async function learnFromPlay(payload) {
+  const job = pendingLearn.get(payload?.link);
+  if (!job) return;
+  pendingLearn.delete(payload.link);
+  const s = listCustomServers().find((x) => x.id === job.serverId);
+  if (!s || directFor(s, job.kind)) return;
+  const r = await learnDirect({
+    kind: job.kind,
+    values: job.values,
+    want: job.want,
+    stream: payload.stream,
+    streamHeaders: payload.headers || {},
+    log: payload.log,
+    page: payload.page || payload.link,
+  });
+  diag("custom", `${s.name}: learned on play: ${r.ok ? `direct API (${r.via})` : r.reason}`);
+  await recordDirect(s.id, job.kind, r.ok ? r.def : null, r.ok ? "" : r.reason);
+}
+if (typeof window !== "undefined") {
+  window.__sbCustomLearn = (p) => {
+    learnFromPlay(p).catch((e) => diag("custom", `learn on play failed: ${e?.message || e}`));
+  };
 }
 
 /** One native candidate for a server's link. */
@@ -450,6 +605,11 @@ export function saveProblem(draft) {
     const err = t && validateTemplate(t);
     if (err) return `${k === "tv" ? "TV" : k[0].toUpperCase() + k.slice(1)} link: ${err}`;
   }
+  const manual = draft.direct?.manual;
+  if (manual && (manual.url || manual.extract?.path)) {
+    const err = validateDirect(manual);
+    if (err) return `Manual API: ${err}`;
+  }
   return null;
 }
 
@@ -473,10 +633,13 @@ export function testLinkFor(server, kind) {
     : { ...ref, lang: "sub" };
   // Season / episode / lang as they were in the sample, so the rebuilt link matches it.
   if (own && server.sample) Object.assign(v, sampleNumbers(tpl, server.sample));
+  v.slugStyle = server.slugStyle;
   const url = buildUrl(tpl, v);
   if (!url) return { ok: false, error: "The template needs a value this title doesn't have." };
   const expected = own && server.sample ? server.sample : null;
-  return { ok: true, url, expected, title: own ? own.title : ref.title, reference: !own };
+  const title = own ? own.title : ref.title;
+  const want = { kind: kind === "movie" ? "movie" : "tv", title, altTitles: (own || ref).altTitles || [], year: v.year, tmdb: v.tmdb, imdb: v.imdb };
+  return { ok: true, url, expected, title, reference: !own, values: v, want };
 }
 
 /** Season / episode / lang read back out of the sample at the template's places. */
@@ -506,10 +669,133 @@ export function sampleNumbers(template, sample) {
   return out;
 }
 
+/** Open one link in the hidden page (native), with the learn log on. */
+export async function nativeTry(server, url, { timeoutMs = TEST_SNIFF_TIMEOUT_MS, learn = true } = {}) {
+  try {
+    return await nativeTest().postMessage({
+      candidate: { ...candidateFor(server, url, { id: server.id, timeoutMs, cache: false }), learn },
+    });
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+/** Whether the native headless player can open a stream with these headers. */
+export async function nativePlayable(url, headers) {
+  if (!nativeTest()) return { ok: false, error: "Checking playback needs the iPhone app." };
+  try {
+    const r = await nativeTest().postMessage({ playable: { url, headers } });
+    return r?.ok ? { ok: true, detail: r.detail } : { ok: false, error: r?.error || "The player couldn't open the stream" };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+/** Steps for what one hidden page did (page, stream, playable, title, ads). */
+export function pageSteps(r, { title, want, site, t0 = Date.now() }) {
+  const steps = [];
+  const page = r?.page || {};
+  steps.push({
+    id: "page",
+    ok: !!page.ok && !page.wall,
+    label: "Page reached",
+    detail: page.wall
+      ? `${page.wall}: the site shows a bot check to the app`
+      : page.ok
+        ? `${page.status ? `HTTP ${page.status}` : "Loaded"}${page.ms != null ? ` in ${(page.ms / 1000).toFixed(1)} s` : ""}`
+        : page.error || (page.status ? `The site answered HTTP ${page.status}` : r?.error || "No answer from the site"),
+  });
+  const stream = r?.stream || {};
+  steps.push({
+    id: "stream",
+    ok: !!stream.ok,
+    label: "Stream found",
+    detail: stream.ok
+      ? `${(stream.kind || "hls").toUpperCase()} in ${((stream.ms ?? Date.now() - t0) / 1000).toFixed(1)} s`
+      : stream.error || (page.ok ? `No video stream within ${TEST_SNIFF_TIMEOUT_MS / 1000} s` : "Skipped: the page didn't load"),
+  });
+  const play = r?.playable || {};
+  steps.push({
+    id: "playable",
+    ok: !!play.ok,
+    label: "Plays in Super Player",
+    detail: play.ok ? play.detail || "Ready to play" : stream.ok ? play.error || "The player couldn't open the stream" : "Skipped: no stream",
+  });
+  // The page's title against TMDB's: the link must open the title asked for.
+  const verdict = page.title ? checkTitle(page.title, want, [site || ""]) : "unknown";
+  steps.push({
+    id: "title",
+    ok: verdict !== "mismatch",
+    neutral: verdict === "unknown",
+    label: "Right title",
+    detail: verdict === "match" ? `The page is ${title}` : verdict === "mismatch" ? `The page says "${page.title}", not ${title}` : "The page doesn't name the title",
+  });
+  const ads = r?.ads || {};
+  const blocked = (ads.popups || 0) + (ads.redirects?.length || 0);
+  steps.push({
+    id: "ads",
+    ok: ads.filter !== false,
+    label: "Ads blocked",
+    detail: ads.filter === false
+      ? "The ad filter isn't active"
+      : blocked
+        ? `Stopped ${ads.popups || 0} pop-up${ads.popups === 1 ? "" : "s"} and ${ads.redirects?.length || 0} redirect${ads.redirects?.length === 1 ? "" : "s"}${ads.redirects?.length ? ` (${ads.redirects.slice(0, 3).join(", ")})` : ""}`
+        : "Filter on; this page didn't try any",
+  });
+  return steps;
+}
+
+/**
+ * Learn (or re-check) Direct mode for one kind after its page was tried.
+ * @returns {Promise<{ steps, def, note }>}
+ */
+export async function directSteps(server, kind, link, r) {
+  const steps = [];
+  let def = server.direct?.[kind] || null;
+  let note = "";
+  if (!def && r?.stream?.ok) {
+    const learned = await learnDirect({
+      kind,
+      values: link.values,
+      want: link.want,
+      stream: r.stream.url,
+      streamHeaders: r.stream.headers || {},
+      log: r.learn,
+      page: link.url,
+    });
+    if (learned.ok) def = learned.def;
+    else note = learned.reason;
+  } else if (!def) {
+    note = "Needs a working page first.";
+  }
+  steps.push({
+    id: "direct",
+    ok: true,
+    neutral: !def,
+    label: def ? "Direct mode available ✓" : "Direct mode",
+    detail: def
+      ? `Plays from the site's API (${new URL(def.url.replace(/\{[a-z]+\}/g, "1")).host}), no page`
+      : `${note} Keeps Page mode.`,
+  });
+  const use = def || server.direct?.manual || null;
+  if (use) {
+    const t = await testDirect(use, link.values, link.want, { playable: nativePlayable });
+    steps.push(...t.steps);
+    if (!t.ok && def && !server.direct?.[kind]) {
+      // Learned but not working on replay: don't keep it.
+      note = t.steps.find((x) => !x.ok)?.detail || "The API didn't work on a second try.";
+      def = null;
+    }
+  }
+  return { steps, def, note };
+}
+
 /**
  * Run the step-by-step test for every link a server has. `onStep` gets
  * progress as it comes in. Resolves to { ok, kinds: [{ kind, steps[] }], summary, playable }.
- * Steps: link built, page reached, stream found, playable, ads blocked.
+ * Steps: link built, page reached, stream found, playable, right title, ads
+ * blocked, then Direct mode (learned from the page) and its own test.
+ * Learned APIs are saved on the server.
  */
 export async function testServer(server, { onStep } = {}) {
   const kinds = TEMPLATE_KINDS.filter((k) => server.templates[k]);
@@ -517,8 +803,8 @@ export async function testServer(server, { onStep } = {}) {
   let playable = null;
   for (const kind of kinds) {
     const steps = [];
-    const push = (s) => {
-      steps.push(s);
+    const push = (...s) => {
+      steps.push(...s);
       onStep?.({ kind, steps: steps.slice() });
     };
     const link = testLinkFor(server, kind);
@@ -542,56 +828,18 @@ export async function testServer(server, { onStep } = {}) {
       continue;
     }
     const t0 = Date.now();
-    let r;
-    try {
-      r = await nativeTest().postMessage({
-        candidate: candidateFor(server, link.url, { id: server.id, timeoutMs: TEST_SNIFF_TIMEOUT_MS, cache: false }),
-      });
-    } catch (e) {
-      r = { ok: false, error: e?.message || String(e) };
+    const r = await nativeTry(server, link.url, { learn: server.mode !== "page" });
+    push(...pageSteps(r, { title: link.title, want: link.want, site: server.name, t0 }));
+    if (server.mode !== "page") {
+      const d = await directSteps(server, kind, link, r);
+      push(...d.steps);
+      await recordDirect(server.id, kind, d.def, d.note);
     }
-    const page = r?.page || {};
-    push({
-      id: "page",
-      ok: !!page.ok,
-      label: "Page reached",
-      detail: page.ok
-        ? `${page.status ? `HTTP ${page.status}` : "Loaded"}${page.ms != null ? ` in ${(page.ms / 1000).toFixed(1)} s` : ""}`
-        : page.error || (page.status ? `The site answered HTTP ${page.status}` : r?.error || "No answer from the site"),
-    });
-    const stream = r?.stream || {};
-    push({
-      id: "stream",
-      ok: !!stream.ok,
-      label: "Stream found",
-      detail: stream.ok
-        ? `${(stream.kind || "hls").toUpperCase()} in ${((stream.ms ?? Date.now() - t0) / 1000).toFixed(1)} s`
-        : stream.error || (page.ok ? `No video stream within ${TEST_SNIFF_TIMEOUT_MS / 1000} s` : "Skipped: the page didn't load"),
-    });
-    const play = r?.playable || {};
-    push({
-      id: "playable",
-      ok: !!play.ok,
-      label: "Plays in Super Player",
-      detail: play.ok ? play.detail || "Ready to play" : stream.ok ? play.error || "The player couldn't open the stream" : "Skipped: no stream",
-    });
-    const ads = r?.ads || {};
-    const blocked = (ads.popups || 0) + (ads.redirects?.length || 0);
-    push({
-      id: "ads",
-      ok: ads.filter !== false,
-      label: "Ads blocked",
-      detail: ads.filter === false
-        ? "The ad filter isn't active"
-        : blocked
-          ? `Stopped ${ads.popups || 0} pop-up${ads.popups === 1 ? "" : "s"} and ${ads.redirects?.length || 0} redirect${ads.redirects?.length === 1 ? "" : "s"}${ads.redirects?.length ? ` (${ads.redirects.slice(0, 3).join(", ")})` : ""}`
-          : "Filter on; this page didn't try any",
-    });
-    if (stream.ok && play.ok && !playable) playable = { kind, url: link.url };
+    if (r?.stream?.ok && r?.playable?.ok && !playable) playable = { kind, url: link.url };
     results.push({ kind, steps });
   }
   const ok = results.length > 0 && results.every((k) => k.steps.every((s) => s.ok));
-  const working = results.filter((k) => k.steps.find((s) => s.id === "playable")?.ok).map((k) => k.kind);
+  const working = results.filter((k) => k.steps.some((s) => (s.id === "playable" || s.id === "d-playable") && s.ok)).map((k) => k.kind);
   const summary = ok
     ? "Working"
     : working.length
