@@ -653,6 +653,9 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     private var playerPrefs: [String: Any] = [:]
     /// The "Up Next" episode the page offers for the playing episode.
     private var upNextInfo: [String: Any]?
+    /// A downloaded episode is playing: its Up Next is the next downloaded
+    /// episode (set by playDownload), so the show page's online offer is ignored.
+    private var playingDownload = false
     /// Resolve token in flight when the last player started closing.
     private var closingToken: String?
 
@@ -702,20 +705,51 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
                 "ok": true, "streamUrl": r.url.absoluteString, "headers": headers, "server": r.server.id,
                 "subtitles": r.subtitles.map { ["url": $0.url.absoluteString, "lang": $0.label ?? "sub"] },
             ]
-            if r.url.pathExtension.lowercased() == "mp4" {
-                result["kind"] = "mp4"
-                reply(result); return
-            }
-            result["kind"] = "hls"
-            var req = URLRequest(url: r.url, timeoutInterval: 15)
-            headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
-            URLSession.shared.dataTask(with: req) { data, resp, _ in
-                let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                if text.contains("#EXT-X-STREAM-INF") {
-                    result["variants"] = HLSMaster.variants(text, base: resp?.url ?? r.url)
+            Self.streamKind(r.url, headers: headers) { kind, master, base in
+                result["kind"] = kind
+                if let master = master {
+                    result["variants"] = HLSMaster.variants(master, base: base)
                 }
                 DispatchQueue.main.async { reply(result) }
-            }.resume()
+            }
+        }
+    }
+
+    /// Bytes read to tell an HLS playlist from a media file.
+    private static let kindSniffBytes = 4096
+    private static let kindSniffTimeout: TimeInterval = 15
+
+    /// Whether a stream is an HLS playlist or a single media file, from the
+    /// response itself: many direct links have no .mp4 extension, and taking
+    /// one for a playlist left the quality sheet without a size. Only the
+    /// first bytes are read (the transfer is then cancelled, even if the
+    /// server ignores Range), so a video file is never fetched whole here.
+    /// Replies (kind, master playlist text when it is one, base URL).
+    private static func streamKind(_ url: URL, headers: [String: String],
+                                   done: @escaping (String, String?, URL) -> Void) {
+        var req = URLRequest(url: url, timeoutInterval: kindSniffTimeout)
+        headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
+        let byExtension = url.pathExtension.lowercased() == "mp4" ? "mp4" : "hls"
+        Task {
+            do {
+                let (stream, resp) = try await URLSession.shared.bytes(for: req)
+                var head = Data()
+                for try await byte in stream {
+                    head.append(byte)
+                    if head.count >= Self.kindSniffBytes { break }
+                }
+                stream.task.cancel()
+                let base = resp.url ?? url
+                let type = (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
+                let isPlaylist = String(decoding: head, as: UTF8.self).hasPrefix("#EXTM3U") || type.contains("mpegurl")
+                guard isPlaylist else { done(head.isEmpty ? byExtension : "mp4", nil, base); return }
+                let (body, fullResp) = try await URLSession.shared.data(for: req)
+                let text = String(data: body, encoding: .utf8) ?? ""
+                done("hls", text.contains("#EXT-X-STREAM-INF") ? text : nil, fullResp.url ?? base)
+            } catch {
+                sbLog("download probe: stream check failed (\(error.localizedDescription)); treating it as \(byExtension)")
+                done(byExtension, nil, url)
+            }
         }
     }
 
@@ -728,6 +762,14 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         resolveList = []
         context = ["ctx": ctx]
         let vc = makePlayer(currentServer: nil, sniffBased: false)
+        playingDownload = true
+        // Next downloaded episode of the same show (chosen by the page), or
+        // none. Accepting it plays that download, offline, the same way.
+        let next = ctx["upNext"] as? [String: Any]
+        vc.setUpNext(next)
+        if let nextId = next?["downloadId"] as? String {
+            vc.onUpNextPlay = { [weak self] in self?.sendToJS("__sbDownloadUpNextPlay", ["id": nextId]) }
+        }
         presentOnTop(vc)
         vc.load(url: url, headers: [:], cookies: [], server: nil)
         let subs = DownloadManager.shared.subtitleFiles(id)
@@ -841,7 +883,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
             playerVC?.applyPrefs(body)
         case "sbUpNext":
             upNextInfo = (body["clear"] as? Bool) == true ? nil : body
-            playerVC?.setUpNext(upNextInfo)
+            if !playingDownload { playerVC?.setUpNext(upNextInfo) }
         default: break
         }
     }
@@ -1006,6 +1048,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     // MARK: Player
 
     private func makePlayer(currentServer: String?, sniffBased: Bool) -> StreambertPlayerViewController {
+        playingDownload = false
         let ctx = context["ctx"] as? [String: Any] ?? [:]
         let vc = StreambertPlayerViewController(
             title: (ctx["title"] as? String) ?? "",
@@ -1131,7 +1174,7 @@ final class DownloadMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
                 return (u, (d["lang"] as? String) ?? "sub")
             }
             let req = DownloadManager.StartRequest(
-                id: id, name: b["name"] as? String ?? "Video", url: s,
+                id: id, name: b["name"] as? String ?? "Video", url: s, kind: b["kind"] as? String,
                 variant: (b["variantUrl"] as? String).flatMap { URL(string: $0) },
                 audio: (b["audioUrl"] as? String).flatMap { URL(string: $0) },
                 headers: b["headers"] as? [String: String] ?? [:],
@@ -1147,6 +1190,9 @@ final class DownloadMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
             }
         case "pause": dm.pause(id); replyHandler(true, nil)
         case "resume": dm.resume(id); replyHandler(true, nil)
+        // A show's episodes ({ids}), or every download when ids is absent.
+        case "pauseMany": dm.pause(ids: (b["ids"] as? [String]).map(Set.init)); replyHandler(true, nil)
+        case "resumeMany": dm.resume(ids: (b["ids"] as? [String]).map(Set.init)); replyHandler(true, nil)
         case "remove": dm.remove(id); replyHandler(true, nil)
         case "play":
             replyHandler(bridge?.playDownload(id, ctx: b["ctx"] as? [String: Any] ?? [:]) ?? false, nil)
