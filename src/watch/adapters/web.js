@@ -48,6 +48,7 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
   // correction, many times a minute) must never swallow the viewer's Pause.
   const applying = { play: 0, pause: 0, seek: 0, rate: 0 };
   let startTimer = null;
+  let kickAt = NaN;
   let seeking = false;
   let userTapAt = 0;
   let lastPos = 0; // where the party player was on its last read (for "stop")
@@ -135,7 +136,7 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
     b.className = "sb-direct-ui wp-sound";
     b.textContent = "🔇  Tap for sound";
     b.style.cssText =
-      "position:absolute;left:12px;bottom:56px;z-index:7;padding:10px 16px;border-radius:20px;border:0;background:rgba(229,9,20,.94);color:#fff;font:600 15px -apple-system,system-ui,sans-serif";
+      "position:absolute;visibility:visible;left:12px;bottom:56px;z-index:7;padding:10px 16px;border-radius:20px;border:0;background:rgba(229,9,20,.94);color:#fff;font:600 15px -apple-system,system-ui,sans-serif";
     b.onclick = (e) => {
       e.stopPropagation();
       v.muted = false;
@@ -181,6 +182,21 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
     return 0;
   };
 
+  // Start latency (ms) of play() on this browser: time from the call until
+  // currentTime moves, back-dated by how far it has moved. Smoothed, capped.
+  let startLag = 0;
+  const learnStartLag = (v, callAt, t0, rate) => {
+    let tries = 0;
+    const probe = () => {
+      if (v.paused || ++tries > 60) return;
+      const moved = v.currentTime - t0;
+      if (moved <= 0) return requestAnimationFrame(probe);
+      const lag = performance.now() - callAt - (moved / (rate || 1)) * 1000;
+      if (Number.isFinite(lag)) startLag = Math.max(0, Math.min(150, startLag ? startLag * 0.6 + lag * 0.4 : lag));
+    };
+    requestAnimationFrame(probe);
+  };
+
   const adapter = {
     onIntent: null,
     read() {
@@ -218,7 +234,15 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
         if (wait > 0) {
           v.pause();
           setPos(v, pos);
-          startTimer = setTimeout(() => drive(() => playSafe(v, offerSound), ["play"]), wait);
+          // play() takes a few tens of ms to get the picture moving: call it
+          // that much early (learned from the last starts on this player) so
+          // the frame at `pos` shows on the shared instant.
+          startTimer = setTimeout(() => {
+            const callAt = performance.now();
+            const t0 = v.currentTime;
+            drive(() => playSafe(v, offerSound), ["play"]);
+            learnStartLag(v, callAt, t0, rate);
+          }, Math.max(0, wait - startLag));
         } else {
           setPos(v, pos + (-wait / 1000) * rate);
           playSafe(v, offerSound);
@@ -228,6 +252,31 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
     setRate(r) {
       const v = attach();
       if (v) drive(() => (v.playbackRate = r), ["rate"]);
+    },
+    /**
+     * The player sits on `pos` but never gets data there (hls.js can leave
+     * its loader idle after a seek: readyState 1, nothing buffered at the
+     * frame). Restart the loader at `pos` and re-seek onto it.
+     */
+    kick(pos) {
+      // (kickAt: the frame of the last kick)
+      const v = attach();
+      if (!v || !Number.isFinite(pos)) return;
+      const h = v.__sbHls;
+      window.__sbKicks = (window.__sbKicks || 0) + 1;
+      try {
+        if (h) {
+          // hls.js sometimes ends up with no level selected (-1) and idles.
+          if (h.levels?.length && !(h.loadLevel >= 0)) h.nextLoadLevel = 0;
+          h.stopLoad();
+          // Second kick on the same frame: the loader didn't wake up, so
+          // reload the playlist from scratch (keeps the same <video>).
+          if (kickAt === pos && h.url) h.loadSource(h.url);
+          h.startLoad(pos);
+          kickAt = pos;
+        }
+      } catch {}
+      drive(() => setPos(v, pos), ["seek"]);
     },
     seekTo(pos) {
       const v = attach();

@@ -14,6 +14,12 @@ export const RECONNECT_GRACE_MS = 30_000;
 export const EMPTY_ROOM_TTL_MS = 10 * 60_000;
 /** A Play waits this long at most for every phone to buffer, then starts anyway. */
 export const START_WAIT_MS = 45_000;
+/**
+ * A seek / resume hold (not a buffering stall) whose only holdouts already have
+ * the title open at this frame but never get data there (a stuck stream
+ * loader) starts without them after this long; they catch up on their own.
+ */
+export const SEEK_WAIT_MS = 12_000;
 /** A socket silent this long (no ping) is treated as dropped. */
 export const IDLE_EVICT_MS = 20_000;
 export const MAX_MEMBERS = 9; // a party holds up to 9 people (dropped members keep their seat through the grace period)

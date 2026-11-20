@@ -18,7 +18,7 @@ import { formatClock, getResumeSeconds, MIN_RESUME_SECONDS } from "./resume";
 import { anipmCandidates, ANIPM_ID, cachedAnipm, prefetchAnipm, anipmWebReady, anipmLangOk } from "./anipm";
 import { showNoDubNote } from "../../utils/dubNote";
 import { movyCandidates, MOVY_ID } from "./movy";
-import { cinejoyCandidates, cachedCinejoy, prefetchCinejoy, CINEJOY_ID } from "./cinejoy";
+import { cinejoyCandidates, cachedCinejoy, forgetCinejoy, prefetchCinejoy, CINEJOY_ID } from "./cinejoy";
 import { sevenMoviesCandidates, SEVENMOVIES_IDS } from "./sevenmovies";
 import { flixerCandidates, FLIXER_ID } from "./flixer";
 import { riveCandidates, RIVE_IDS } from "./rivestream";
@@ -374,6 +374,7 @@ function upgrade(wv) {
   // page (currentTime / duration, sometimes inside a JSON string). Save it
   // like any other progress so the movie resumes instead of restarting.
   let embedProg = null;
+  let startWatch = null; // see armStartWatch below
   window.addEventListener("message", (e) => {
     if (e.source !== iframe.contentWindow) return;
     let d = e.data;
@@ -382,6 +383,7 @@ function upgrade(wv) {
     const t = Number(x?.currentTime ?? x?.time ?? x?.position);
     const dur = Number(x?.duration);
     if (!(t > 0) || !(dur > 60) || !isFinite(dur) || t > dur + 5) return;
+    startWatch?.started();
     const ctx = currentCtx();
     if (!ctx.progressKey) return;
     if (!embedProg || embedProg.key !== ctx.progressKey) { embedProg?.p.flush(); embedProg = { key: ctx.progressKey, p: webProgress(ctx) }; }
@@ -393,7 +395,20 @@ function upgrade(wv) {
   // Pop-up / ad blocking: the sandbox has no allow-popups, allow-top-navigation
   // or allow-modals, so an embed can't open ad tabs, pop-ups or redirect the
   // app. (The main web path is the ad-free direct stream; embeds are backups.)
-  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-presentation");
+  const SANDBOX = "allow-scripts allow-same-origin allow-forms allow-presentation";
+  iframe.setAttribute("sandbox", SANDBOX);
+  // Servers that check for a sandbox and refuse to play inside one ("Remove
+  // sandboxing to enable playback"): no sandbox for them. Left to the
+  // browser's own guards there: its pop-up blocker (no pop-up without a tap)
+  // and its frame-busting rule (a cross-origin frame can't redirect the app
+  // without a tap). A tap on such a player can still open an ad tab.
+  const SANDBOX_REFUSERS = /(^|\.)(vidrift\.(in|to|net|cc|xyz|com)|vidrift)$/i;
+  const sandboxFor = (u) => {
+    let host = "";
+    try { host = new URL(u).hostname; } catch {}
+    if (SANDBOX_REFUSERS.test(host)) iframe.removeAttribute("sandbox");
+    else if (iframe.getAttribute("sandbox") !== SANDBOX) iframe.setAttribute("sandbox", SANDBOX);
+  };
   iframe.setAttribute("referrerpolicy", "origin");
   iframe.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media");
   iframe.setAttribute("allowfullscreen", "");
@@ -597,6 +612,32 @@ function upgrade(wv) {
       .catch(fallback);
     return true;
   };
+  const inParty = () => !!window.__sbWatchParty;
+  const partyTries = new Map(); // title url -> direct retries in this party
+  const partyNoSync = (embedUrl) => {
+    const ctx = currentCtx();
+    const keyOf = (c) => `${c?.type}:${c?.tmdbId || c?.anilistId}:${c?.season || ""}:${c?.episode || ""}`;
+    const key = keyOf(ctx);
+    const n = (partyTries.get(key) || 0) + 1;
+    partyTries.set(key, n);
+    iframe.src = "about:blank";
+    diag("player", `party: embed ${String(embedUrl).slice(0, 60)} can't sync (try ${n})`);
+    if (n > 2) {
+      showCard("No synced stream for this title right now. Pick something else for the party.", false);
+      return;
+    }
+    showCard("This server can't sync with the party. Switching…", false);
+    if (ctx) forgetCinejoy(ctx);
+    const synced = ctx?.isAnime
+      ? `https://cinejoy.invalid/anime/${ctx.anilistId || ctx.tmdbId}/${ctx.episode || 1}/${ctx.dubMode === "sub" ? "sub" : "dub"}`
+      : ctx?.type === "movie"
+        ? `https://cinejoy.invalid/movie/${ctx.tmdbId}`
+        : `https://cinejoy.invalid/tv/${ctx?.tmdbId}/${ctx?.season || 1}/${ctx?.episode || 1}`;
+    setTimeout(() => {
+      if (!inParty() || keyOf(currentCtx()) !== key) return; // left the party / the title changed
+      if (!tryWebDirect(synced)) showCard("No synced stream for this title right now. Pick something else for the party.", false);
+    }, 1200);
+  };
   const tryWebDirect = (url) => {
     const ctx = currentCtx();
     if (ctx?.isAnime) {
@@ -606,7 +647,8 @@ function upgrade(wv) {
     }
     if (!ctx || !ctx.tmdbId) return false;
     const picked = readStored("playerSource");
-    if (picked && picked !== CINEJOY_ID && !isAutoPick() && !/cinejoy\.invalid/.test(url)) return false;
+    // In a party everyone plays the synced direct stream, whatever server this phone picked.
+    if (picked && picked !== CINEJOY_ID && !isAutoPick() && !/cinejoy\.invalid/.test(url) && !inParty()) return false;
     directFor = url;
     iframe.src = "about:blank";
     fire("dom-ready");
@@ -763,6 +805,14 @@ function upgrade(wv) {
     // only the embed fallback puts the web view itself full screen.
     if (import.meta.env.VITE_WEB && !/iPhone|iPod/.test(navigator.userAgent) && (import.meta.env.VITE_ANDROID ? webOnly : !webOnly)) forceFullscreen(wv);
     if (import.meta.env.VITE_WEB && !webOnly && tryWebDirect(url)) return;
+    // Watch Party on the web: an embed server (a cross-origin page in an
+    // iframe) can't be paused, seeked or read by the party, so the phones
+    // would drift apart. Never play one in a party; retry the synced direct
+    // stream instead (everyone in the party then plays the same source).
+    if (import.meta.env.VITE_WEB && !import.meta.env.VITE_ANDROID && inParty()) {
+      partyNoSync(url);
+      return;
+    }
     // A custom site never loads in the visible web view: its ads and pop-ups
     // are only blocked in the native stream finder.
     if (isCustomPlaceholder(url)) {
@@ -775,6 +825,7 @@ function upgrade(wv) {
     webFallback = createFallback([url, ...mirrorsFor(url)], {
       stallMs: LOAD_TIMEOUT_MS,
       play: (u) => {
+        sandboxFor(u);
         iframe.src = u;
         postContext(u);
       },
@@ -783,11 +834,53 @@ function upgrade(wv) {
     webFallback.start();
   };
 
+  // An embed server that loads but never starts (refuses to play in our
+  // frame, a dead stream, an error page): after START_WATCH_MS with no sign
+  // of playback (no position from the player) and no tap on it, the page's
+  // normal server failover moves on to the next server. Never more than
+  // MAX_SILENT_SKIPS servers in a row without the viewer touching anything,
+  // so a player that simply waits for a tap is not skipped forever.
+  const START_WATCH_MS = 8000;
+  const MAX_SILENT_SKIPS = 2;
+  let silentSkips = 0;
+  let skipsFor = "";
+  const armStartWatch = () => {
+    startWatch?.cancel();
+    const ctx = currentCtx();
+    const key = `${ctx?.type}:${ctx?.tmdbId || ctx?.anilistId}:${ctx?.season || ""}:${ctx?.episode || ""}`;
+    if (key !== skipsFor) { skipsFor = key; silentSkips = 0; }
+    if (silentSkips >= MAX_SILENT_SKIPS) return;
+    const src = iframe.src;
+    let done = false;
+    const cancel = () => {
+      done = true;
+      clearTimeout(t);
+      window.removeEventListener("blur", onBlur);
+      wv.removeEventListener("pointerdown", onTap, true);
+    };
+    // A tap inside a cross-origin frame shows up as this window losing focus.
+    const onBlur = () => setTimeout(() => document.activeElement === iframe && (cancel(), (silentSkips = 0)), 0);
+    const onTap = () => { cancel(); silentSkips = 0; };
+    window.addEventListener("blur", onBlur);
+    wv.addEventListener("pointerdown", onTap, true);
+    const t = setTimeout(() => {
+      if (done || iframe.src !== src || isBlank(src)) return cancel();
+      cancel();
+      silentSkips += 1;
+      diag("player", `embed did not start in ${START_WATCH_MS} ms: next server (${String(src).slice(0, 60)})`);
+      showCard("This server didn't start. Trying the next one…", false);
+      setTimeout(hideCard, 2500);
+      fire("did-fail-load");
+    }, START_WATCH_MS);
+    startWatch = { cancel, started: () => { cancel(); silentSkips = 0; } };
+  };
+
   iframe.addEventListener("load", () => {
     if (isBlank(iframe.src)) return;
     stopWeb();
     fire("dom-ready");
     fire("did-finish-load");
+    if (import.meta.env.VITE_WEB) armStartWatch();
   });
 
   Object.defineProperty(wv, "src", {

@@ -363,3 +363,46 @@ test("ducking: the movie drops while someone else talks and comes back when they
   assert.deepEqual(ducks, [DUCK_VOLUME, 1], "back to full");
   assert.ok(DUCK_VOLUME >= 0.3 && DUCK_VOLUME <= 0.4);
 });
+
+// ── ani.pm relay (web app anime) and relayed voice frames ───────────────
+import { handle as workerHandle } from "./worker.js";
+import { muEncode, muDecode } from "../src/watch/voiceRelay.js";
+
+test("worker /anipm relays ani.pm API GETs with CORS, refuses other hosts", async () => {
+  const seen = [];
+  const fake = async (u, init) => {
+    seen.push([u, init.headers.Referer]);
+    return new Response('{"ok":1}', { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const ok = await workerHandle(new Request("https://w.dev/anipm?u=" + encodeURIComponent("https://api.ani.pm/x?a=1") + "&r=" + encodeURIComponent("https://ani.pm/w")), {}, fake);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get("access-control-allow-origin"), "*");
+  assert.equal(await ok.text(), '{"ok":1}');
+  assert.deepEqual(seen[0], ["https://api.ani.pm/x?a=1", "https://ani.pm/w"]);
+  const bad = await workerHandle(new Request("https://w.dev/anipm?u=" + encodeURIComponent("https://evil.example/x")), {}, fake);
+  assert.equal(bad.status, 403);
+  assert.equal(seen.length, 1);
+});
+
+test("voice relay: mu-law round trip keeps speech-level samples close", () => {
+  const f = new Float32Array(160).map((_, i) => 0.5 * Math.sin(i / 5));
+  const back = muDecode(muEncode(f));
+  for (let i = 0; i < f.length; i++) assert.ok(Math.abs(back[i] - f[i]) < 0.02, `sample ${i}: ${f[i]} -> ${back[i]}`);
+});
+
+test("room: relayed voice frames go to everyone else, only from a member with the mic on", () => {
+  const sent = [];
+  const core = new RoomCore({ code: "ABC234", now: () => 1000, send: (to, m) => sent.push([to, typeof m === "string" ? JSON.parse(m) : m]) });
+  core.join("a", {});
+  core.join("b", {});
+  core.join("c", {});
+  sent.length = 0;
+  core.handle("a", { type: "vaud", c: "o", s: 1, d: "AAAA" });
+  assert.equal(sent.filter(([, m]) => m.type === "vaud").length, 0, "mic off: dropped");
+  core.handle("a", { type: "voice", mic: true, speaking: false });
+  sent.length = 0;
+  core.handle("a", { type: "vaud", c: "o", s: 2, d: "AAAA" });
+  const out = sent.filter(([, m]) => m.type === "vaud");
+  assert.deepEqual(out.map(([to]) => to).sort(), ["b", "c"]);
+  assert.equal(out[0][1].from, "a");
+});

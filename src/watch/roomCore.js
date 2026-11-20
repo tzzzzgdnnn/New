@@ -20,6 +20,7 @@
 import {
   START_LEAD_MS,
   START_WAIT_MS,
+  SEEK_WAIT_MS,
   IDLE_EVICT_MS,
   RECONNECT_GRACE_MS,
   PLATFORMS,
@@ -41,6 +42,9 @@ export const RATE_PER_S = 10;
 // must neither be dropped nor eat the tokens Play / Pause / Seek need.
 export const SIGNAL_BURST = 200;
 export const SIGNAL_PER_S = 50;
+// Relayed voice frames (voiceRelay.js): 25 per second per talker, some slack.
+export const AUDIO_BURST = 100;
+export const AUDIO_PER_S = 40;
 /** Largest data: URL avatar (a ~64 px JPEG thumbnail) a member may carry. */
 export const AVATAR_DATA_MAX = 8000;
 const AVATAR_HOSTS = ["image.tmdb.org", "static.tvmaze.com"];
@@ -228,7 +232,9 @@ export class RoomCore {
     }
     // Rate limit: a token bucket per member (pings exempt; 20 burst, 10/s).
     // Voice signalling has its own, larger bucket (see SIGNAL_BURST).
-    if (msg.type === "rtc" || msg.type === "voice") {
+    if (msg.type === "vaud") {
+      if (!this.allow(m, "aud", AUDIO_BURST, AUDIO_PER_S)) return;
+    } else if (msg.type === "rtc" || msg.type === "voice") {
       if (!this.allow(m, "sig", SIGNAL_BURST, SIGNAL_PER_S)) return;
     } else if (msg.type !== "ping" && msg.type !== "status" && !this.allow(m)) return; // status is an idempotent overwrite (sent every tick)
     switch (msg.type) {
@@ -244,7 +250,7 @@ export class RoomCore {
       case "play":
         return this.play(msg.pos);
       case "pause":
-        return this.pause(msg.pos);
+        return this.pause(msg.pos, id);
       case "seek":
         return this.seek(msg.pos);
       case "rate":
@@ -260,6 +266,15 @@ export class RoomCore {
       case "rtc": // voice: WebRTC offer/answer/ICE relayed to one member, never inspected
         if (typeof msg.to === "string" && this.members.get(msg.to)?.connected && msg.data && typeof msg.data === "object" && JSON.stringify(msg.data).length < 16_000)
           this.send(msg.to, { type: "rtc", from: id, data: msg.data });
+        return;
+      case "vaud": // relayed voice frame (no WebRTC link to someone): to everyone else, mic on only
+        if (m.mic && typeof msg.d === "string" && msg.d.length < 4000) {
+          const out = JSON.stringify({ type: "vaud", from: id, c: msg.c === "o" ? "o" : "m", s: Number.isInteger(msg.s) ? msg.s : 0, d: msg.d });
+          const ids = [];
+          for (const o of this.members.values()) if (o.connected && o.id !== id) ids.push(o.id);
+          if (this.sendMany) this.sendMany(ids, out);
+          else for (const o of ids) this.send(o, JSON.parse(out));
+        }
         return;
       case "voice": // mic state + speaking indicator, fanned out to everyone
         {
@@ -319,13 +334,15 @@ export class RoomCore {
 
   play(pos) {
     this.intent = "play";
+    this.pausedBy = null;
     if (finite(pos) && this.playback.paused && Math.abs(pos - this.playback.pos) > 0.05) this.hold(Math.max(0, pos));
     this.evaluate();
     this.broadcast();
   }
 
-  pause(pos) {
+  pause(pos, by = null) {
     this.intent = "pause";
+    this.pausedBy = by;
     const expected = expectedPosition(this.playback, this.now());
     // The frame the person saw when they tapped, if it is plausible.
     const at = finite(pos) && Math.abs(pos - expected) < 2 ? pos : expected;
@@ -453,7 +470,16 @@ export class RoomCore {
     if (this.intent !== "play") return false;
     // Start once everyone is buffered at the hold. Safety net: a phone stuck
     // for START_WAIT_MS (its stream died) is left to catch up on its own.
-    if (this.waitingOn().length && now - (this.playback.at || 0) < START_WAIT_MS) return false;
+    const waiting = this.waitingOn();
+    if (waiting.length) {
+      const held = now - (this.playback.at || 0);
+      const onFrame = (id) => {
+        const m = this.members.get(id);
+        return m && m.rev === this.media.rev && m.epoch === this.epoch && m.synced;
+      };
+      const stuckSeek = this.holdReason !== "buffering" && waiting.every(onFrame) && held >= SEEK_WAIT_MS;
+      if (!stuckSeek && held < START_WAIT_MS) return false;
+    }
     // Everyone is loaded and buffered at the hold position: start together.
     this.playback = { paused: false, pos: this.playback.pos, at: now + START_LEAD_MS, rate: this.playback.rate || 1 };
     this.holdReason = null;
@@ -471,6 +497,7 @@ export class RoomCore {
       intent: this.intent,
       playback: this.playback,
       holdReason: this.holdReason || null,
+      pausedBy: this.intent === "play" ? null : this.pausedBy || null,
       host: this.hostId || null,
       count: this.members.size,
       max: MAX_MEMBERS,

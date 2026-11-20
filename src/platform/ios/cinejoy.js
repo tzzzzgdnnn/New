@@ -131,5 +131,11 @@ export function cachedCinejoy(ctx) {
   return hit?.result?.ok ? hit.result : null;
 }
 
+/** Forget the lookup for `ctx` (its stream failed to play: look it up again). */
+export function forgetCinejoy(ctx) {
+  const key = cinejoyKey(ctx);
+  if (key) cache.delete(key);
+}
+
 /** Forget every lookup (tests). */
 export const clearCinejoyCache = () => cache.clear();
