@@ -9,21 +9,28 @@ import { showLaunchSplash } from "./platform/ios/splash";
 import { installImageReadyMarker } from "./platform/ios/imageReady";
 
 import { installDiagnostics } from "./utils/diag";
+import { prepareWebLaunch, offerAdBlockSheet } from "./platform/ios/web";
 
 installDiagnostics();
 showLaunchSplash();
 installImageReadyMarker();
 
-bootIOS().then(async () => {
-  const [{ default: App }, { default: ProfileGate }] = await Promise.all([
-    import("./App"),
-    import("./platform/ios/profiles/ProfileGate"),
-  ]);
-  ReactDOM.createRoot(document.getElementById("root")).render(
-    <React.StrictMode>
-      <ProfileGate>
-        <App />
-      </ProfileGate>
-    </React.StrictMode>,
-  );
-});
+// Web build: a Home Screen launch first imports the data carried over from
+// Safari (#sp-import), so the app boots with it. No-op in the native app.
+prepareWebLaunch()
+  .catch((e) => console.warn("[web] launch prep failed", e))
+  .then(() => bootIOS())
+  .then(async () => {
+    const [{ default: App }, { default: ProfileGate }] = await Promise.all([
+      import("./App"),
+      import("./platform/ios/profiles/ProfileGate"),
+    ]);
+    ReactDOM.createRoot(document.getElementById("root")).render(
+      <React.StrictMode>
+        <ProfileGate>
+          <App />
+        </ProfileGate>
+      </React.StrictMode>,
+    );
+    offerAdBlockSheet();
+  });

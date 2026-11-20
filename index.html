@@ -5,6 +5,15 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
         <title>Super Player</title>
         <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+        <!-- No start_url in the manifest on purpose: iOS then saves the current
+             URL (with #sp-import=… data from Safari) as the Home Screen app's start. -->
+        <link rel="manifest" href="./manifest.webmanifest" />
+        <link rel="apple-touch-icon" href="./sized/512x512.png" />
+        <meta name="theme-color" content="#000000" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="Super Player" />
     </head>
     <body>
         <div id="root"></div>
