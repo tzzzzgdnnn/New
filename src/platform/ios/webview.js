@@ -337,13 +337,6 @@ export const downloadContext = (override = {}) => ({ ...currentCtx(), ...overrid
  */
 export const downloadCandidates = (ctx, opts) => rankedCandidates(null, ctx, opts);
 
-// Web app: where to start (the saved Resume point) and progress reports in
-// the same shape the native player sends, so Continue Watching works.
-const webProgress = (ctx) => (time, duration) => {
-  if (!ctx?.progressKey || !(duration > 0)) return;
-  window.__sbNativeProgress?.({ key: ctx.progressKey, time, duration });
-};
-
 // ── Native playback bookkeeping ──────────────────────────────────────────
 const pending = new Map(); // token -> callback(result)
 window.__sbNativeResult = (r) => {
