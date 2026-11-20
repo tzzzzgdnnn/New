@@ -14,6 +14,7 @@ import {
   useCallback,
   useMemo,
   useRef,
+  useLayoutEffect,
   lazy,
   Suspense,
 } from "react";
@@ -780,7 +781,35 @@ export default function App() {
     }
   }, []);
 
+  // Home keep-alive + its scroll position (see the Home render below).
+  const homeSeenRef = useRef(false);
+  if (page === "home") homeSeenRef.current = true;
+  const homeScrollRef = useRef(0);
+  const lastPageRef = useRef(page);
+  useLayoutEffect(() => {
+    const main = document.querySelector(".main");
+    const prev = lastPageRef.current;
+    lastPageRef.current = page;
+    if (!main || prev === page) return;
+    if (page === "home") main.scrollTop = homeScrollRef.current;
+    else main.scrollTop = 0;
+  }, [page]);
+  useEffect(() => {
+    const main = document.querySelector(".main");
+    if (!main) return;
+    const onScroll = () => { if (pageRef.current === "home") homeScrollRef.current = main.scrollTop; };
+    main.addEventListener("scroll", onScroll, { passive: true });
+    return () => main.removeEventListener("scroll", onScroll);
+  }, []);
+
   const navigate = useCallback((pg, data = null) => {
+    // Home tapped while on Home: glide back to the top, like the app.
+    if (pg === "home" && pageRef.current === "home" && !data) {
+      document.querySelector(".main")?.scrollTo({ top: 0, behavior: "smooth" });
+      showSearchRef.current = false;
+      setShowSearch(false);
+      return;
+    }
     const stack = pushNav(
       navStackRef.current,
       { page: pageRef.current, selected: selectedRef.current },
@@ -1262,7 +1291,11 @@ export default function App() {
             }
           >
             <PageBoundary resetKey={`${page}:${selected?.id ?? ""}`}>
-            {page === "home" && (
+            {/* Home stays mounted once opened (hidden on other pages), so
+                tapping Home is instant: same rows, same posters, same scroll,
+                like the iPhone app, instead of rebuilding the page. */}
+            {(page === "home" || homeSeenRef.current) && (
+              <div className="sp-keep-home" style={page === "home" ? undefined : { display: "none" }}>
               <HomePage
                 trending={trending}
                 trendingTV={trendingTV}
@@ -1282,6 +1315,7 @@ export default function App() {
                 saved={savedList}
                 onSearch={() => setShowSearch(true)}
               />
+              </div>
             )}
             {page === "movie" && selected && (
               <KidsTitleGate item={selected} type="movie" apiKey={apiKey} onBack={navigateBackOrHome}>
