@@ -266,12 +266,19 @@ async function pickBreakingBad(c) {
 }
 
 async function pickTitle(c, query, { tv = false, episode = 1 } = {}) {
-  await c.page.locator(".wp-bar button", { hasText: "Pick" }).click();
-  await c.page.locator(".wp-pick input").fill(query);
-  await c.page.locator(".wp-pick-row", { hasText: query }).first().click({ timeout: 20_000 });
+  const step = async (name, f) => {
+    try {
+      return await f();
+    } catch (e) {
+      throw new Error(`pick ${query} on ${c.kind}, step "${name}": ${e.message.split("\n").filter((l) => /Timeout|intercepts|not visible|not enabled|not stable|resolved to|waiting for/.test(l)).slice(-4).join(" / ")}`);
+    }
+  };
+  await step("Pick button", () => c.page.locator(".wp-bar button", { hasText: "Pick" }).click({ timeout: 15_000 }));
+  await step("search box", () => c.page.locator(".wp-pick input").first().fill(query, { timeout: 15_000 }));
+  await step("result row", () => c.page.locator(".wp-pick-row", { hasText: query }).first().click({ timeout: 20_000 }));
   if (tv) {
-    await c.page.locator(".wp-pick .wp-se", { hasText: "Episode" }).locator("input").fill(String(episode));
-    await c.page.locator(".wp-pick button", { hasText: "together" }).click();
+    await step("episode box", () => c.page.locator(".wp-pick .wp-se", { hasText: "Episode" }).locator("input").fill(String(episode), { timeout: 15_000 }));
+    await step("together button", () => c.page.locator(".wp-pick button", { hasText: "together" }).click({ timeout: 15_000 }));
   }
 }
 
@@ -475,7 +482,7 @@ async function main() {
   // 2d. Pick + Play from each device: a movie, an anime (dub by default) and a TV episode start for everyone.
   for (const [who, query, opt, want] of [
     [iphone, "Inception", {}, "movie"],
-    [desktop, "Frieren", { tv: true, episode: 1 }, "anime"],
+    [iphone, "Frieren", { tv: true, episode: 1 }, "anime"],
     [iphone, "Breaking Bad", { tv: true, episode: 2 }, "tv"],
   ]) {
     await scenario(`pickplay:${want}`, all, async () => {

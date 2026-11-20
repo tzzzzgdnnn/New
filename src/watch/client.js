@@ -3,6 +3,7 @@
 // iPhone app, the Android app, the web app and the tests all run this file.
 import { ClockSync } from "./clock.js";
 import { SyncEngine } from "./engine.js";
+import { mediaKey } from "./protocol.js";
 
 export const TICK_MS = 100;
 export const PING_EVERY_MS = 4000;
@@ -139,6 +140,13 @@ export class WatchClient {
     // Closing the player stops the party only while it is playing (closing
     // during a hold / a title switch is not a Pause).
     if (stop && (!this.state?.playback || this.state.playback.paused)) return;
+    // This device just picked a new title and its page moved on before the
+    // room's switch arrived: the old player closing is not a Pause.
+    if (stop && this.pickedKey && Date.now() - this.pickedAt < 8000) {
+      const t = (k) => String(k || "").replace(/:(sub|dub)$/, "");
+      const old = key ? t(key) !== t(this.pickedKey) : t(this.state?.media?.key) !== t(this.pickedKey);
+      if (old) return;
+    }
     // A tap on a player still showing an older title (closing it while the
     // party switched) must not pause / seek the party's new title.
     if (key && this.state?.media?.key && key !== this.state.media.key) return;
@@ -176,6 +184,8 @@ export class WatchClient {
   }
 
   pickMedia(media) {
+    this.pickedAt = Date.now();
+    this.pickedKey = mediaKey(media);
     this.sendMsg({ type: "media", media });
   }
 

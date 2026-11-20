@@ -51,6 +51,7 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
   let seeking = false;
   let userTapAt = 0;
   let lastPos = 0; // where the party player was on its last read (for "stop")
+  let lastKey = null; // and which title it had
 
   const drive = (fn, kinds = ["play", "pause", "seek", "rate"]) => {
     for (const k of kinds) applying[k]++;
@@ -102,7 +103,7 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
     // party was playing: that is "stop", the party pauses on that frame,
     // like closing the iPhone / Android player.
     if (video && !video.isConnected && !v && document.visibilityState === "visible" && adapter.roomPlaying?.()) {
-      adapter.onIntent?.({ action: "pause", stop: true, pos: lastPos });
+      adapter.onIntent?.({ action: "pause", stop: true, pos: lastPos, key: lastKey });
     }
     detach();
     video = v;
@@ -187,6 +188,7 @@ export function createWebAdapter({ getKey, getVideo = findVideo } = {}) {
       if (!v) return { key: null, ready: false, seeking: false, status: "paused", pos: 0, sampledAt: Date.now(), rate: 1 };
       const waiting = !v.paused && v.readyState < 3;
       lastPos = v.currentTime;
+      lastKey = getKey?.() ?? null;
       return {
         key: getKey?.() ?? null,
         ready: v.readyState >= 3 || bufferedAhead(v) >= 2,
