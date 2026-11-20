@@ -810,6 +810,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         installWebProcessRecovery(wv)
         ucc.addScriptMessageHandler(DownloadMessageHandler(self), contentWorld: .page, name: "sbDownload")
         ucc.addScriptMessageHandler(ServerTestMessageHandler(container: view), contentWorld: .page, name: "sbServerTest")
+        ucc.addScriptMessageHandler(SiteRenderMessageHandler(container: view), contentWorld: .page, name: "sbSiteRender")
         AdFilter.shared.warm()
         DownloadManager.shared.onEvent = { [weak self] e in self?.sendToJS("__sbDownloadEvent", e) }
     }

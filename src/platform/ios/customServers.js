@@ -11,6 +11,7 @@
 // copy, so the list survives app updates and a cleared web view.
 import { storage, secureStorage } from "../../utils/storage";
 import { fetchImdbId, lastTmdbKey, tmdbFetch } from "../../utils/api";
+import { normalizeSiteServer, resolveSiteServer } from "./siteServers";
 import { buildUrl, deriveTemplate, siteDomain, templatePlaceholders, TEMPLATE_KINDS, validateTemplate } from "../../utils/customServers/template";
 import { matchSample, withTimeout, LOOKUP_TIMEOUT_MS } from "../../utils/customServers/match";
 import { isAutoPick } from "./autoServer";
@@ -53,6 +54,7 @@ const newId = () => CUSTOM_ID_PREFIX + Math.random().toString(36).slice(2, 10);
 /** A saved server with every field in its expected shape (unknown fields dropped). */
 export function normalizeServer(s) {
   if (!s || typeof s !== "object") return null;
+  if (s.kind === "site") return normalizeSiteServer(s, CUSTOM_ID_PREFIX);
   const templates = {};
   const guessed = {};
   for (const k of TEMPLATE_KINDS) {
@@ -201,6 +203,7 @@ export const isCustomId = (id) => typeof id === "string" && id.startsWith(CUSTOM
 
 /** Whether a server joins the list for this title (anime / movie / series). */
 export function serverFits(s, { isAnime, type }) {
+  if (s.kind === "site") return isAnime ? !!s.lists.anime : type === "tv" ? !!s.lists.tv : !!s.lists.movies;
   if (!s?.lists) return false;
   if (isAnime) return !!s.lists.anime && !!templateFor(s, { isAnime, type, dubMode: "sub" });
   return type === "tv" ? !!s.lists.tv && !!s.templates.tv : !!s.lists.movies && !!s.templates.movie;
@@ -349,6 +352,10 @@ export async function customCandidates(ctx, opts = {}) {
     listCustomServers()
       .filter((s) => serverFits(s, { isAnime, type }))
       .map(async (s) => {
+        if (s.kind === "site") {
+          const r = await resolveSiteServer(s, ctx).catch(() => null);
+          return r ? candidateFor(s, r.url) : null;
+        }
         const tpl = templateFor(s, { isAnime, type, dubMode });
         if (!tpl) return null;
         const url = buildUrl(tpl, await valuesFor(tpl, ctx, opts));
