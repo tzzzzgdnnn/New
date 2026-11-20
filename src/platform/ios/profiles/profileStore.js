@@ -20,6 +20,8 @@ import { diag } from "../../../utils/diag";
 
 /** Most profiles one device can hold. */
 export const MAX_PROFILES = 5;
+/** Profile gender options (null = Not set). */
+export const GENDERS = ["girl", "guy"];
 /** Longest profile name. */
 export const MAX_NAME_LENGTH = 20;
 /** PIN length (digits). */
@@ -80,6 +82,8 @@ function normalize(p, index) {
     name: String(p.name || "").trim().slice(0, MAX_NAME_LENGTH) || `Profile ${index + 1}`,
     avatar: typeof p.avatar === "string" && p.avatar ? p.avatar : defaultAvatarFor(index),
     kids: !!p.kids,
+    // "girl" | "guy" | null (not set): Girls Night shows on Girl profiles only.
+    gender: GENDERS.includes(p.gender) ? p.gender : null,
     // A PIN is a lock against other people in the household, not a secret
     // that leaves the device, so it is kept as typed.
     pin: safePin(p),
@@ -228,7 +232,7 @@ export function ensureProfiles() {
 
 /**
  * Add a profile. Throws when the device already has MAX_PROFILES.
- * @param {{name: string, avatar?: string, kids?: boolean, pin?: string|null}} fields
+ * @param {{name: string, avatar?: string, kids?: boolean, gender?: string|null, pin?: string|null}} fields
  * @returns {Promise<object>} the new profile, once saved
  */
 export async function createProfile(fields) {
@@ -240,7 +244,7 @@ export async function createProfile(fields) {
 }
 
 /**
- * Change a profile's name, avatar, Kids flag or PIN.
+ * Change a profile's name, avatar, Kids flag, gender or PIN.
  * Only the given fields change; the rest (the PIN included) are kept.
  * @returns {Promise<object>} the updated profile, once saved
  */

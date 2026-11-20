@@ -8,6 +8,8 @@ import { PlayIcon, InfoIcon, BookmarkIcon, BookmarkFillIcon } from "../../compon
 import { imgUrl, tmdbFetch } from "../../utils/api";
 import NOSTALGIA from "./nostalgia.json";
 import HORROR from "./horror.json";
+import GIRLS_NIGHT from "./girlsnight.json";
+import { useProfiles } from "./profiles/ProfileContext";
 import { isKidsProfileActive } from "../../utils/profileScope";
 import { SkeletonRail } from "./Skeletons";
 import { useKidsFilter } from "./kids/useKidsFilter";
@@ -560,10 +562,94 @@ function Horror({ rows, common }) {
   );
 }
 
+// ── Girls Night ───────────────────────────────────────────────────────────
+// girlsnight.json: per tab (Movies / Shows), a hand-picked row (TMDB ids,
+// cached with the Nostalgia titles) and TMDB discover rows (romance / comedy
+// / drama genres + girls-night keywords). Only on profiles set to Girl.
+
+const GN_DISCOVER_PAGES = 2;
+
+const isGirlProfile = (profile) => profile?.gender === "girl";
+
+async function loadGirlsNightRow(r, type, apiKey) {
+  if (r.items) return loadCurated(r.items, apiKey);
+  const pages = await Promise.all(
+    Array.from({ length: GN_DISCOVER_PAGES }, (_, i) =>
+      tmdbFetch(`${r.discover}&page=${i + 1}`, apiKey).then(tag(type)),
+    ),
+  );
+  return mix([pages.flat()], 40);
+}
+
+function useGirlsNight(apiKey, offline, enabled) {
+  const [rows, setRows] = useState({});
+  useEffect(() => {
+    if (!apiKey || offline || !enabled) return;
+    let alive = true;
+    for (const tab of GIRLS_NIGHT.tabs) {
+      const type = tab.id === "shows" ? "tv" : "movie";
+      for (const r of tab.rows) {
+        loadGirlsNightRow(r, type, apiKey)
+          .catch((err) => {
+            console.warn(`[girls-night] row ${r.id} failed`, err);
+            return [];
+          })
+          .then((items) => alive && setRows((d) => ({ ...d, [r.id]: items })));
+      }
+    }
+    return () => {
+      alive = false;
+    };
+  }, [apiKey, offline, enabled]);
+  return rows;
+}
+
+function GirlsNight({ rows, common }) {
+  const [tabId, setTabId] = useState(GIRLS_NIGHT.tabs[0].id);
+  const tab = GIRLS_NIGHT.tabs.find((t) => t.id === tabId);
+  const pool = (rows[tab.rows[0].id] || []).filter((i) => i.backdrop_path);
+  const feat = pool.length ? pool[Math.floor(Date.now() / 864e5) % pool.length] : null;
+  return (
+    <div className="sb-gn">
+      <div className="sb-gn-head">
+        {feat && <img src={imgUrl(feat.backdrop_path, "w1280")} alt="" decoding="async" loading="lazy" />}
+        <div className="sb-gn-shade" />
+        <div className="sb-gn-body">
+          <div className="sb-gn-kicker">Grab the popcorn</div>
+          <div className="sb-gn-title">Girls Night</div>
+          <div className="sb-gn-sub">Rom-coms, chick flicks and the shows you binge together</div>
+        </div>
+      </div>
+      <div className="sb-chips" role="tablist" aria-label="Girls Night">
+        {GIRLS_NIGHT.tabs.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={t.id === tabId}
+            className={"sb-chip sb-gn-chip" + (t.id === tabId ? " on" : "")}
+            onClick={() => setTabId(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab.rows.map((r) =>
+        r.id in rows ? (
+          <PosterRail key={r.id} title={r.title} sub={r.sub} items={rows[r.id]} {...common} />
+        ) : (
+          <SkeletonRail key={r.id} />
+        ),
+      )}
+    </div>
+  );
+}
+
 export default function HomeSections({ apiKey, offline, onSelect, watched, onMarkWatched, onMarkUnwatched }) {
   const [data, setData] = useState({});
   const nostalgia = useNostalgia(apiKey, offline);
   const horror = useHorror(apiKey, offline);
+  const girlsNightOn = isGirlProfile(useProfiles()?.profile);
+  const girlsNight = useGirlsNight(apiKey, offline, girlsNightOn);
   useEffect(() => {
     if (!apiKey || offline) return;
     let alive = true;
@@ -592,6 +678,7 @@ export default function HomeSections({ apiKey, offline, onSelect, watched, onMar
         ),
       )}
       <Nostalgia rows={nostalgia} onSelect={onSelect} common={common} />
+      {girlsNightOn && <GirlsNight rows={girlsNight} common={common} />}
       <Horror rows={horror} common={common} />
     </>
   );

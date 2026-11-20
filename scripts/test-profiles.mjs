@@ -234,4 +234,16 @@ await t("corrupt profile list with no Keychain copy is rebuilt from stored profi
   assert.ok(!rebuilt.some((p) => p.name === "Main" && !ids.includes(p.id)), "fresh Main created");
 });
 
+await t("gender: Girl / Guy / Not set is saved with the profile, anything else is Not set", async () => {
+  const p = await store.createProfile({ name: "Gen", gender: "girl" });
+  assert.equal(store.listProfiles().find((x) => x.id === p.id).gender, "girl");
+  await store.updateProfile(p.id, { gender: "guy" });
+  assert.equal(store.listProfiles().find((x) => x.id === p.id).gender, "guy");
+  await store.updateProfile(p.id, { gender: null });
+  assert.equal(store.listProfiles().find((x) => x.id === p.id).gender, null);
+  await store.updateProfile(p.id, { gender: "other" });
+  assert.equal(store.listProfiles().find((x) => x.id === p.id).gender, null);
+  assert.ok(store.listProfiles().filter((x) => x.id !== p.id).every((x) => x.gender === null), "profiles saved before default to Not set");
+});
+
 console.log(`\n${pass} profile tests passed`);
