@@ -209,7 +209,6 @@ async function connect(code, transport) {
     },
     onRtc: (m) => S.voice?.onSignal(m).catch((e) => console.warn("[voice] signal failed", e)),
     onVoice: (m) => S.voice?.onVoice(m),
-    onVoiceFrame: (m) => S.voice?.onRelay(m),
   });
   // Debug handle (the party test reads the sync engine's state on a failure).
   globalThis.__sbParty = { engine: client.engine, adapter };

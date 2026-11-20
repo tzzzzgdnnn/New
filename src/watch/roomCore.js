@@ -42,9 +42,6 @@ export const RATE_PER_S = 10;
 // must neither be dropped nor eat the tokens Play / Pause / Seek need.
 export const SIGNAL_BURST = 200;
 export const SIGNAL_PER_S = 50;
-// Relayed voice frames (voiceRelay.js): 25 per second per talker, some slack.
-export const AUDIO_BURST = 100;
-export const AUDIO_PER_S = 40;
 /** Largest data: URL avatar (a ~64 px JPEG thumbnail) a member may carry. */
 export const AVATAR_DATA_MAX = 8000;
 const AVATAR_HOSTS = ["image.tmdb.org", "static.tvmaze.com"];
@@ -232,9 +229,7 @@ export class RoomCore {
     }
     // Rate limit: a token bucket per member (pings exempt; 20 burst, 10/s).
     // Voice signalling has its own, larger bucket (see SIGNAL_BURST).
-    if (msg.type === "vaud") {
-      if (!this.allow(m, "aud", AUDIO_BURST, AUDIO_PER_S)) return;
-    } else if (msg.type === "rtc" || msg.type === "voice") {
+    if (msg.type === "rtc" || msg.type === "voice") {
       if (!this.allow(m, "sig", SIGNAL_BURST, SIGNAL_PER_S)) return;
     } else if (msg.type !== "ping" && msg.type !== "status" && !this.allow(m)) return; // status is an idempotent overwrite (sent every tick)
     switch (msg.type) {
@@ -266,15 +261,6 @@ export class RoomCore {
       case "rtc": // voice: WebRTC offer/answer/ICE relayed to one member, never inspected
         if (typeof msg.to === "string" && this.members.get(msg.to)?.connected && msg.data && typeof msg.data === "object" && JSON.stringify(msg.data).length < 16_000)
           this.send(msg.to, { type: "rtc", from: id, data: msg.data });
-        return;
-      case "vaud": // relayed voice frame (no WebRTC link to someone): to everyone else, mic on only
-        if (m.mic && typeof msg.d === "string" && msg.d.length < 4000) {
-          const out = JSON.stringify({ type: "vaud", from: id, c: msg.c === "o" ? "o" : "m", s: Number.isInteger(msg.s) ? msg.s : 0, d: msg.d });
-          const ids = [];
-          for (const o of this.members.values()) if (o.connected && o.id !== id) ids.push(o.id);
-          if (this.sendMany) this.sendMany(ids, out);
-          else for (const o of ids) this.send(o, JSON.parse(out));
-        }
         return;
       case "voice": // mic state + speaking indicator, fanned out to everyone
         {
