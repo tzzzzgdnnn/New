@@ -1,0 +1,107 @@
+name: Watch Together (room server)
+# Tests the Watch Together sync engine + room server, deploys the Cloudflare
+# Worker (one Durable Object per room) when the Cloudflare secrets exist, and
+# publishes its URL to gh-pages /watch/config.json, where the apps read it.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ipa-test-build]
+    paths:
+      - "watch-together/**"
+      - "src/watch/**"
+      - ".github/workflows/watch-together.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: watch-together
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: superplayer-watch
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test sync engine, room and worker
+        run: node --test watch-together/test.mjs
+
+      - name: Check Cloudflare secrets
+        id: secrets
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            msg="CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID are not set (Settings > Secrets and variables > Actions). The room server was tested but not deployed; Watch Together shows 'not set up yet' in the apps until it is."
+            echo "::warning title=Deploy skipped::$msg"
+            echo "### Deploy skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy worker (wrangler)
+        if: steps.secrets.outputs.have == 'true'
+        working-directory: watch-together
+        run: npx --yes wrangler@4 deploy --name "$WORKER_NAME" 2>&1 | tee ../wrangler-deploy.log
+
+      - name: Find workers.dev URL
+        if: steps.secrets.outputs.have == 'true'
+        id: url
+        run: |
+          sub=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
+            | jq -r '.result.subdomain // empty' || true)
+          if [ -n "$sub" ]; then
+            base="https://$WORKER_NAME.$sub.workers.dev"
+          else
+            base=$(grep -oE "https://$WORKER_NAME\.[a-z0-9-]+\.workers\.dev" wrangler-deploy.log | head -1)
+          fi
+          if [ -z "$base" ]; then
+            echo "::error::Could not find the workers.dev subdomain. Enable workers.dev in the Cloudflare dashboard (Workers & Pages > your subdomain)."
+            exit 1
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "Room server: $base" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke-test (create a room)
+        if: steps.secrets.outputs.have == 'true'
+        run: |
+          base='${{ steps.url.outputs.base }}'
+          for i in 1 2 3 4 5 6; do
+            out=$(curl -s -X POST "$base/rooms") || true
+            echo "$out" | grep -q '"code"' && break
+            sleep 10
+          done
+          echo "POST /rooms -> $out"
+          echo "$out" | grep -q '"code"' || { echo "::error::Room server did not create a room"; exit 1; }
+
+      - name: Publish the room server URL (gh-pages /watch/config.json)
+        if: steps.secrets.outputs.have == 'true'
+        run: |
+          base='${{ steps.url.outputs.base }}'
+          for attempt in 1 2 3; do
+            rm -rf ../pages
+            git fetch -q --depth=1 origin gh-pages
+            git worktree prune
+            git worktree add -f ../pages FETCH_HEAD
+            mkdir -p ../pages/watch
+            printf '{"url":"%s"}\n' "$base" > ../pages/watch/config.json
+            cd ../pages
+            git add watch/config.json
+            if git diff --cached --quiet; then echo "unchanged"; exit 0; fi
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "Watch Together room server: $base"
+            if git push -q origin HEAD:gh-pages; then echo "published"; exit 0; fi
+            cd "$GITHUB_WORKSPACE"
+            sleep 5
+          done
+          exit 1

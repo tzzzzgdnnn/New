@@ -58,6 +58,9 @@ jobs:
       - name: Download math tests (Swift)
         run: npm run test:swift
 
+      - name: Watch Together tests (sync engine, room, worker)
+        run: node --test watch-together/test.mjs
+
       - name: Build web (iOS mode)
         # TMDB token is built in via .env.ios
         run: npx vite build --mode ios
