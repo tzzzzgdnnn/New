@@ -19,6 +19,29 @@ import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.ScrollView;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.text.InputFilter;
+import android.text.InputType;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.StyleSpan;
+import android.util.Base64;
+import android.util.LruCache;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import androidx.core.view.ViewCompat;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import androidx.appcompat.app.AlertDialog;
 import androidx.media3.common.Format;
 import androidx.media3.common.ForwardingPlayer;
@@ -267,6 +290,7 @@ public class PlayerActivity extends AppCompatActivity {
         root.addView(view, new FrameLayout.LayoutParams(-1, -1));
         buildOverlay(root);
         buildUpNext(root);
+        buildPartyChat(root);
         setContentView(root);
         view.setControllerVisibilityListener((PlayerView.ControllerVisibilityListener) vis -> {
             hideBars();
@@ -292,6 +316,12 @@ public class PlayerActivity extends AppCompatActivity {
         view.setOnTouchListener((v, e) -> { gd.onTouchEvent(e); return true; });
 
         start(getIntent());
+        // Opened during a party: show the chat the party already has.
+        if (partyOn()) {
+            setPartyUi(true);
+            setPartyChat(SbPlayerPlugin.watchChat);
+            if (SbPlayerPlugin.watchParty != null) setPartyInfo(SbPlayerPlugin.watchParty);
+        }
     }
 
     // TV remote (Fire TV / Android TV): with the controls hidden, Left/Right
@@ -300,6 +330,8 @@ public class PlayerActivity extends AppCompatActivity {
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
         if (player == null || view == null || ui == null) return super.dispatchKeyEvent(e);
+        // Typing in the party chat: keys belong to the text box, never the player.
+        if (chatField != null && chatField.hasFocus()) return super.dispatchKeyEvent(e);
         int k = e.getKeyCode();
         boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
         switch (k) {
@@ -720,10 +752,284 @@ public class PlayerActivity extends AppCompatActivity {
 
     void watchSeek(double pos) { exactSeek(pos); }
 
-    // Party chat UI (the chat column comes with the party player layout).
-    void setPartyUi(boolean on) {}
-    void setPartyChat(JSONArray messages) {}
-    void setPartyInfo(JSONObject info) {}
+    // ── Party chat (the counterpart of the iPhone player's chat column) ──
+    // Video on the left, chat on the right (36%, at most 360 dp): the
+    // party's code and head count, the messages with each sender's profile
+    // picture, and a compose bar. The 💬 chip hides it (full-screen video,
+    // unread count on the chip) and brings it back. Chat never pauses
+    // anything: typing, the keyboard and sending are not player events.
+    private static final int CHAT_MAX_LEN = 280;
+    private static final LruCache<String, Bitmap> avatarCache = new LruCache<>(64);
+    private static final ExecutorService avatarLoader = Executors.newFixedThreadPool(2);
+    private boolean chatOn, chatHidden;
+    private int chatUnread;
+    private final Set<String> chatSeen = new HashSet<>();
+    private boolean chatPrimed;
+    private LinearLayout chatPanel, chatList;
+    private ScrollView chatScroll;
+    private EditText chatField;
+    private TextView chatPill, chatToggle;
+
+    private void buildPartyChat(FrameLayout root) {
+        chatPanel = new LinearLayout(this);
+        chatPanel.setOrientation(LinearLayout.VERTICAL);
+        chatPanel.setBackgroundColor(0xFF0C0C10);
+        chatPanel.setPadding(dp(10), dp(12), dp(10), dp(8));
+        chatPanel.setClickable(true); // taps on the chat never reach the video
+
+        chatPill = new TextView(this);
+        chatPill.setTextColor(0xFFFFD0E6);
+        chatPill.setTextSize(13);
+        chatPill.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        chatPill.setLetterSpacing(0.08f);
+        chatPanel.addView(chatPill, new LinearLayout.LayoutParams(-1, -2));
+
+        chatScroll = new ScrollView(this);
+        chatScroll.setFillViewport(true);
+        chatList = new LinearLayout(this);
+        chatList.setOrientation(LinearLayout.VERTICAL);
+        chatList.setGravity(Gravity.BOTTOM);
+        chatScroll.addView(chatList, new FrameLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-1, 0, 1f);
+        sl.topMargin = dp(6);
+        chatPanel.addView(chatScroll, sl);
+
+        LinearLayout compose = new LinearLayout(this);
+        compose.setOrientation(LinearLayout.HORIZONTAL);
+        compose.setGravity(Gravity.CENTER_VERTICAL);
+        chatField = new EditText(this);
+        chatField.setHint("Say something…");
+        chatField.setHintTextColor(0x88FFFFFF);
+        chatField.setTextColor(0xFFFFFFFF);
+        chatField.setTextSize(15);
+        chatField.setSingleLine(true);
+        chatField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        chatField.setImeOptions(EditorInfo.IME_ACTION_SEND | EditorInfo.IME_FLAG_NO_FULLSCREEN | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+        chatField.setFilters(new InputFilter[]{new InputFilter.LengthFilter(CHAT_MAX_LEN)});
+        chatField.setPadding(dp(12), dp(8), dp(12), dp(8));
+        GradientDrawable fb = new GradientDrawable();
+        fb.setCornerRadius(dp(12));
+        fb.setColor(0x14FFFFFF);
+        fb.setStroke(dp(1), 0x2EFFFFFF);
+        chatField.setBackground(fb);
+        chatField.setOnEditorActionListener((v, id, ev) -> {
+            if (id == EditorInfo.IME_ACTION_SEND || (ev != null && ev.getKeyCode() == KeyEvent.KEYCODE_ENTER && ev.getAction() == KeyEvent.ACTION_DOWN)) {
+                sendChat();
+                return true;
+            }
+            return false;
+        });
+        compose.addView(chatField, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView send = chip("Send", true);
+        send.setOnClickListener(v -> sendChat());
+        LinearLayout.LayoutParams snd = new LinearLayout.LayoutParams(-2, -2);
+        snd.leftMargin = dp(6);
+        compose.addView(send, snd);
+        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(-1, -2);
+        cl.topMargin = dp(6);
+        chatPanel.addView(compose, cl);
+        chatPanel.setVisibility(View.GONE);
+        root.addView(chatPanel, new FrameLayout.LayoutParams(chatWidth(), -1, Gravity.END));
+
+        // 💬 chip: hide / show the chat (always reachable, top right under the meter).
+        chatToggle = chip("💬", false);
+        chatToggle.setOnClickListener(v -> setChatHidden(!chatHidden));
+        chatToggle.setVisibility(View.GONE);
+        FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+        tl.setMargins(0, dp(56), dp(18), 0);
+        root.addView(chatToggle, tl);
+
+        // The keyboard pushes the compose bar up instead of covering it.
+        ViewCompat.setOnApplyWindowInsetsListener(chatPanel, (v, insets) -> {
+            int ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
+            v.setPadding(dp(10), dp(12), dp(10), dp(8) + ime);
+            return insets;
+        });
+    }
+
+    private int chatWidth() {
+        int w = getResources().getDisplayMetrics().widthPixels;
+        int h = getResources().getDisplayMetrics().heightPixels;
+        return Math.min((int) (Math.max(w, h) * 0.36f), dp(360));
+    }
+
+    private void layoutForChat() {
+        if (chatPanel == null) return;
+        boolean show = chatOn && !chatHidden;
+        chatPanel.setVisibility(show ? View.VISIBLE : View.GONE);
+        chatToggle.setVisibility(chatOn ? View.VISIBLE : View.GONE);
+        FrameLayout.LayoutParams vl = (FrameLayout.LayoutParams) view.getLayoutParams();
+        vl.rightMargin = show ? chatWidth() : 0;
+        view.setLayoutParams(vl);
+        FrameLayout.LayoutParams pl = (FrameLayout.LayoutParams) netPill.getLayoutParams();
+        pl.rightMargin = dp(18) + (show ? chatWidth() : 0);
+        netPill.setLayoutParams(pl);
+        FrameLayout.LayoutParams tl = (FrameLayout.LayoutParams) chatToggle.getLayoutParams();
+        tl.rightMargin = dp(18) + (show ? chatWidth() : 0);
+        chatToggle.setLayoutParams(tl);
+        updateChatToggle();
+        if (!show && chatField.hasFocus()) hideKeyboard();
+    }
+
+    private void setChatHidden(boolean hidden) {
+        chatHidden = hidden;
+        if (!hidden) chatUnread = 0;
+        layoutForChat();
+        if (!hidden) scrollChatToEnd();
+    }
+
+    private void updateChatToggle() {
+        if (chatToggle == null) return;
+        chatToggle.setText(chatHidden && chatUnread > 0 ? "💬 " + chatUnread : "💬");
+    }
+
+    private void hideKeyboard() {
+        InputMethodManager im = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (im != null) im.hideSoftInputFromWindow(chatField.getWindowToken(), 0);
+        chatField.clearFocus();
+        hideBars();
+    }
+
+    private void sendChat() {
+        String t = chatField.getText().toString().trim();
+        if (t.isEmpty()) return;
+        if (t.length() > CHAT_MAX_LEN) t = t.substring(0, CHAT_MAX_LEN);
+        SbPlayerPlugin.emitChatSend(t);
+        chatField.setText("");
+    }
+
+    private void scrollChatToEnd() {
+        if (chatScroll != null) chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
+    }
+
+    void setPartyUi(boolean on) {
+        if (chatPanel == null) return;
+        chatOn = on;
+        chatHidden = false; // a party opens with the chat beside the video
+        chatUnread = 0;
+        if (!on) {
+            chatSeen.clear();
+            chatPrimed = false;
+            chatList.removeAllViews();
+            chatField.setText("");
+            chatPill.setText("");
+        }
+        layoutForChat();
+    }
+
+    /** Recent messages, latest last: {id, name, text (HTML-escaped by the room), ts, mine, avatarUrl, avatarFrom, avatarTo, initial}. */
+    void setPartyChat(JSONArray messages) {
+        if (chatList == null || messages == null) return;
+        boolean first = !chatPrimed;
+        chatPrimed = true;
+        chatList.removeAllViews();
+        int from = Math.max(0, messages.length() - 50);
+        for (int i = from; i < messages.length(); i++) {
+            JSONObject m = messages.optJSONObject(i);
+            if (m == null) continue;
+            String id = m.has("id") && !m.isNull("id") ? m.optString("id") : m.optString("ts") + "|" + m.optString("name") + "|" + m.optString("text");
+            if (chatSeen.add(id) && !first && chatHidden && !m.optBoolean("mine")) chatUnread++;
+            chatList.addView(chatRow(m));
+        }
+        updateChatToggle();
+        scrollChatToEnd();
+    }
+
+    void setPartyInfo(JSONObject info) {
+        if (chatPill == null || info == null) return;
+        String code = info.optString("code", "");
+        String pretty = code.length() == 6 ? code.substring(0, 3) + " " + code.substring(3) : code;
+        int count = info.optInt("count", 0), max = info.optInt("max", 0);
+        chatPill.setText("PARTY " + pretty + (max > 0 ? "  ·  " + count + "/" + max : ""));
+    }
+
+    private static String unescapeHtml(String s) {
+        return s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
+                .replace("&#39;", "'").replace("&#x27;", "'").replace("&amp;", "&");
+    }
+
+    private View chatRow(JSONObject m) {
+        boolean mine = m.optBoolean("mine");
+        String name = unescapeHtml(m.optString("name", ""));
+        String text = unescapeHtml(m.optString("text", ""));
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.TOP);
+        row.setPadding(0, dp(3), 0, dp(3));
+        row.addView(avatarView(m), new LinearLayout.LayoutParams(dp(26), dp(26)));
+        TextView t = new TextView(this);
+        SpannableStringBuilder sb = new SpannableStringBuilder();
+        String who = mine ? "You" : name;
+        sb.append(who.isEmpty() ? "" : who + ": ");
+        sb.setSpan(new StyleSpan(Typeface.BOLD), 0, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        sb.setSpan(new ForegroundColorSpan(mine ? 0xFFFF4F6A : 0xBFFFFFFF), 0, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        sb.append(text); // plain text, never HTML
+        t.setText(sb);
+        t.setTextColor(0xFFFFFFFF);
+        t.setTextSize(14);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
+        lp.leftMargin = dp(8);
+        row.addView(t, lp);
+        return row;
+    }
+
+    private static int color(String hex, int def) {
+        try { return 0xFF000000 | Integer.parseInt(hex.replace("#", ""), 16); } catch (Exception e) { return def; }
+    }
+
+    /** The sender's profile picture, or their profile gradient with their initial. */
+    private View avatarView(JSONObject m) {
+        FrameLayout f = new FrameLayout(this);
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{color(m.optString("avatarFrom"), 0xFF8E8E93), color(m.optString("avatarTo"), 0xFF1C1C1E)});
+        g.setShape(GradientDrawable.OVAL);
+        f.setBackground(g);
+        f.setClipToOutline(true);
+        f.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override public void getOutline(View v, android.graphics.Outline o) { o.setOval(0, 0, v.getWidth(), v.getHeight()); }
+        });
+        TextView ini = new TextView(this);
+        String initial = m.optString("initial", "");
+        ini.setText(initial.isEmpty() ? "" : initial.substring(0, 1));
+        ini.setTextColor(0xFFFFFFFF);
+        ini.setTextSize(12);
+        ini.setTypeface(Typeface.DEFAULT_BOLD);
+        ini.setGravity(Gravity.CENTER);
+        f.addView(ini, new FrameLayout.LayoutParams(-1, -1));
+        ImageView img = new ImageView(this);
+        img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        f.addView(img, new FrameLayout.LayoutParams(-1, -1));
+        loadAvatar(m.optString("avatarUrl", ""), img);
+        return f;
+    }
+
+    private void loadAvatar(String url, ImageView into) {
+        if (url == null || url.isEmpty()) return;
+        Bitmap hit = avatarCache.get(url);
+        if (hit != null) { into.setImageBitmap(hit); return; }
+        avatarLoader.execute(() -> {
+            Bitmap b = null;
+            try {
+                if (url.startsWith("data:image/")) {
+                    int comma = url.indexOf(',');
+                    byte[] bytes = Base64.decode(url.substring(comma + 1), Base64.DEFAULT);
+                    b = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                } else if (url.startsWith("https://")) {
+                    HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+                    c.setConnectTimeout(6000);
+                    c.setReadTimeout(8000);
+                    try (InputStream in = c.getInputStream()) { b = BitmapFactory.decodeStream(in); }
+                    finally { c.disconnect(); }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "chat avatar: " + e.getMessage());
+            }
+            if (b == null) return;
+            avatarCache.put(url, b);
+            final Bitmap bm = b;
+            into.post(() -> into.setImageBitmap(bm));
+        });
+    }
 
     /** Closed by the app (another title / server): no "closed" event. */
     void finishQuiet() { quiet = true; finish(); }

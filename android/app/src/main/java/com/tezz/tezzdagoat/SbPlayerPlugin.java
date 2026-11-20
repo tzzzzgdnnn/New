@@ -1,6 +1,10 @@
 package com.tezz.tezzdagoat;
 
+import android.content.Context;
 import android.content.Intent;
+import android.media.AudioDeviceInfo;
+import android.media.AudioManager;
+import android.os.Build;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -99,6 +103,7 @@ public class SbPlayerPlugin extends Plugin {
                 main.removeCallbacks(watchTick);
                 watchChat = new JSONArray();
                 watchParty = null;
+                voiceRoute(false);
                 if (a != null) a.setPartyUi(false);
                 break;
             case "pause":
@@ -125,8 +130,42 @@ public class SbPlayerPlugin extends Plugin {
                 watchParty = d;
                 if (a != null) a.setPartyInfo(d);
                 break;
+            case "voice":
+                voiceRoute(d.optBoolean("on", false));
+                break;
             default:
                 break;
+        }
+    }
+
+    /**
+     * Party voice on: call audio (the other people) plays from the headset when
+     * one is connected, otherwise from the loudspeaker, never the earpiece
+     * (a WebRTC call in the WebView would otherwise route there). Off: back to normal.
+     */
+    static void voiceRoute(boolean on) {
+        SbPlayerPlugin p = instance;
+        if (p == null) return;
+        AudioManager am = (AudioManager) p.getContext().getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) return;
+        try {
+            if (Build.VERSION.SDK_INT >= 31) {
+                if (!on) { am.clearCommunicationDevice(); return; }
+                AudioDeviceInfo speaker = null, headset = null;
+                for (AudioDeviceInfo d : am.getAvailableCommunicationDevices()) {
+                    int t = d.getType();
+                    if (t == AudioDeviceInfo.TYPE_WIRED_HEADSET || t == AudioDeviceInfo.TYPE_USB_HEADSET
+                            || t == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || t == AudioDeviceInfo.TYPE_BLE_HEADSET) headset = d;
+                    else if (t == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) speaker = d;
+                }
+                AudioDeviceInfo pick = headset != null ? headset : speaker;
+                if (pick != null) am.setCommunicationDevice(pick);
+            } else {
+                boolean headset = am.isWiredHeadsetOn() || am.isBluetoothScoOn() || am.isBluetoothA2dpOn();
+                am.setSpeakerphoneOn(on && !headset);
+            }
+        } catch (Exception e) {
+            android.util.Log.w("SuperPlayer", "voice route: " + e.getMessage());
         }
     }
 
