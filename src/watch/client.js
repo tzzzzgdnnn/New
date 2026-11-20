@@ -15,8 +15,8 @@ export class WatchClient {
    * @param {"ios"|"android"|"web"} o.platform
    * @param {object} o.adapter    player adapter (see engine.js)
    */
-  constructor({ url, clientId, platform, name, adapter, WebSocketImpl = globalThis.WebSocket, now = () => Date.now(), timers = globalThis, onState, onStatus, onChat, onRtc, onVoice }) {
-    Object.assign(this, { url, clientId, platform, name, adapter, WebSocketImpl, now, timers, onState, onStatus, onChat, onRtc, onVoice });
+  constructor({ url, clientId, platform, name, avatar = null, adapter, WebSocketImpl = globalThis.WebSocket, now = () => Date.now(), timers = globalThis, onState, onStatus, onChat, onRtc, onVoice }) {
+    Object.assign(this, { url, clientId, platform, name, avatar, adapter, WebSocketImpl, now, timers, onState, onStatus, onChat, onRtc, onVoice });
     this.clock = new ClockSync();
     this.engine = new SyncEngine({ adapter, clock: this.clock, now, send: (m) => this.sendMsg(m) });
     this.state = null;
@@ -45,6 +45,8 @@ export class WatchClient {
       this.cseq = 0;
       this.retry = 0;
       this.onStatus?.("connected");
+      // Name + profile picture (the picture can be a thumbnail too big for the URL).
+      this.sendMsg({ type: "profile", name: this.name || "", avatar: this.avatar || null });
       // A quick burst first so the clock is good before the first start.
       for (let i = 0; i < 6; i++) this.timers.setTimeout(() => this.ping(), i * 120);
       this.timers.clearInterval(this.pingTimer);
@@ -155,6 +157,13 @@ export class WatchClient {
   /** In-room chat. Text arrives HTML-escaped from the room: render it as text, never as HTML. */
   sendChat(text) {
     if (typeof text === "string" && text.trim()) this.sendMsg({ type: "chat", text: text.slice(0, 280) });
+  }
+
+  /** The person on this device switched profile: new name / picture for everyone. */
+  setProfile(name, avatar = null) {
+    this.name = name;
+    this.avatar = avatar;
+    this.sendMsg({ type: "profile", name: name || "", avatar: avatar || null });
   }
 
   get isHost() {

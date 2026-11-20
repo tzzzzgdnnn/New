@@ -81,6 +81,11 @@ export function createAndroidAdapter({ plugin, getKey, now = () => Date.now() } 
           text: String(m?.text ?? ""),
           ts: Number.isFinite(m?.ts) ? m.ts : 0,
           mine: !!m?.mine,
+          // Sender's picture: an image URL, else a gradient (two colours) with their initial.
+          avatarUrl: typeof m?.avatarUrl === "string" ? m.avatarUrl : "",
+          avatarFrom: String(m?.avatarFrom ?? "#8e8e93"),
+          avatarTo: String(m?.avatarTo ?? "#1c1c1e"),
+          initial: String(m?.initial ?? "").slice(0, 2),
         })),
       });
     },

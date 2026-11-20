@@ -36,9 +36,39 @@ export const CHAT_HISTORY = 50;
 export const CHAT_PER_10S = 5;
 export const RATE_BURST = 20;
 export const RATE_PER_S = 10;
+// Voice signalling (offer / answer / ICE trickle, mic + speaking flags) has its
+// own bucket: a mesh handshake sends dozens of ICE candidates at once, which
+// must neither be dropped nor eat the tokens Play / Pause / Seek need.
+export const SIGNAL_BURST = 200;
+export const SIGNAL_PER_S = 50;
+/** Largest data: URL avatar (a ~64 px JPEG thumbnail) a member may carry. */
+export const AVATAR_DATA_MAX = 8000;
+const AVATAR_HOSTS = ["image.tmdb.org", "static.tvmaze.com"];
+/**
+ * A profile picture every client can draw, or null: a built-in gradient id
+ * ("sp:ocean"), a TMDB image path ("/abc.jpg"), an https image on a known
+ * host, or a small base64 JPEG / PNG / WebP thumbnail. Anything else is dropped.
+ */
+export function cleanAvatar(a) {
+  if (typeof a !== "string") return null;
+  if (/^sp:[a-z]{1,16}$/.test(a)) return a;
+  if (/^\/[A-Za-z0-9_-]{1,64}\.(jpe?g|png|webp)$/.test(a)) return a;
+  if (a.length <= AVATAR_DATA_MAX && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(a)) return a;
+  if (a.length <= 300 && /^https:\/\/[^\s"'<>\\]+$/.test(a)) {
+    try {
+      const u = new URL(a);
+      if (u.protocol === "https:" && AVATAR_HOSTS.includes(u.hostname) && !u.username && !u.password && !u.port) return a;
+    } catch {}
+  }
+  return null;
+}
 export function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
+
+/** Display name: one line, no control characters, at most 24 characters. */
+export const cleanName = (n) =>
+  typeof n === "string" ? n.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 24) : "";
 
 export class RoomCore {
   /**
@@ -106,14 +136,17 @@ export class RoomCore {
   }
 
   // ── Members ─────────────────────────────────────────────────────────────
-  join(id, { platform, name } = {}) {
+  join(id, { platform, name, avatar } = {}) {
     const known = this.members.get(id);
     // Up to MAX_MEMBERS seats; a dropped member keeps theirs until prune() (grace) frees it.
     if (!known && this.members.size >= MAX_MEMBERS) return { ok: false, error: "room-full", message: fullMessage() };
     const m = known || { id, joinedAt: this.now() };
     Object.assign(m, {
       platform: PLATFORMS.includes(platform) ? platform : "web",
-      name: String(name || m.name || "Guest").slice(0, 24),
+      name: cleanName(name) || m.name || "Guest",
+      avatar: cleanAvatar(avatar) || m.avatar || null,
+      mic: false, // a (re)connected device opens its mic again on its own
+      speaking: false,
       connected: true,
       droppedAt: null,
       ready: false,
@@ -194,7 +227,10 @@ export class RoomCore {
       m.cseq = msg.cseq;
     }
     // Rate limit: a token bucket per member (pings exempt; 20 burst, 10/s).
-    if (msg.type !== "ping" && msg.type !== "status" && !this.allow(m)) return; // status is an idempotent overwrite (sent every tick)
+    // Voice signalling has its own, larger bucket (see SIGNAL_BURST).
+    if (msg.type === "rtc" || msg.type === "voice") {
+      if (!this.allow(m, "sig", SIGNAL_BURST, SIGNAL_PER_S)) return;
+    } else if (msg.type !== "ping" && msg.type !== "status" && !this.allow(m)) return; // status is an idempotent overwrite (sent every tick)
     switch (msg.type) {
       case "ping":
         this.send(id, { type: "pong", t0: msg.t0, ts: this.now() });
@@ -217,6 +253,8 @@ export class RoomCore {
         return this.leave(id);
       case "chat":
         return this.chat(m, msg.text);
+      case "profile": // name + picture of the person on this device (sent on every connect, and when they switch profile)
+        return this.profile(m, msg);
       case "end":
         return this.end(id);
       case "rtc": // voice: WebRTC offer/answer/ICE relayed to one member, never inspected
@@ -224,9 +262,13 @@ export class RoomCore {
           this.send(msg.to, { type: "rtc", from: id, data: msg.data });
         return;
       case "voice": // mic state + speaking indicator, fanned out to everyone
-        m.mic = !!msg.mic;
-        m.speaking = !!msg.speaking && m.mic;
-        this.fanout({ type: "voice", id, mic: m.mic, speaking: m.speaking });
+        {
+          const micChanged = m.mic !== !!msg.mic;
+          m.mic = !!msg.mic;
+          m.speaking = !!msg.speaking && m.mic;
+          this.fanout({ type: "voice", id, mic: m.mic, speaking: m.speaking });
+          if (micChanged) this.broadcast(); // members[].mic tells every device whom to open voice to
+        }
         return;
       default:
     }
@@ -323,10 +365,10 @@ export class RoomCore {
     return true;
   }
 
-  allow(m) {
+  allow(m, kind = "bucket", burst = RATE_BURST, perS = RATE_PER_S) {
     const now = this.now();
-    const b = m.bucket || (m.bucket = { tokens: RATE_BURST, at: now });
-    b.tokens = Math.min(RATE_BURST, b.tokens + ((now - b.at) / 1000) * RATE_PER_S);
+    const b = m[kind] || (m[kind] = { tokens: burst, at: now });
+    b.tokens = Math.min(burst, b.tokens + ((now - b.at) / 1000) * perS);
     b.at = now;
     if (b.tokens < 1) return false;
     b.tokens -= 1;
@@ -344,9 +386,22 @@ export class RoomCore {
     if (m.chatTimes.length >= CHAT_PER_10S) return;
     m.chatTimes.push(now);
     this.chatSeq = (this.chatSeq || 0) + 1;
-    const entry = { id: this.chatSeq, from: m.id, name: escapeHtml(m.name), text: clean, ts: now };
+    // The picture travels with the message (so it stays after they leave),
+    // except a data: thumbnail, which clients take from members[] instead
+    // (kept out of the stored history to keep it small).
+    const avatar = m.avatar && !m.avatar.startsWith("data:") ? m.avatar : null;
+    const entry = { id: this.chatSeq, from: m.id, name: escapeHtml(m.name), avatar, text: clean, ts: now };
     this.chatLog = [...(this.chatLog || []), entry].slice(-CHAT_HISTORY);
     this.fanout({ type: "chat", ...entry });
+  }
+
+  profile(m, { name, avatar } = {}) {
+    const n = cleanName(name) || m.name;
+    const a = avatar === null ? null : cleanAvatar(avatar) ?? m.avatar ?? null;
+    if (n === m.name && a === m.avatar) return;
+    m.name = n;
+    m.avatar = a;
+    this.broadcast();
   }
 
   /** Recent chat for someone (re)joining. */
@@ -420,10 +475,12 @@ export class RoomCore {
       count: this.members.size,
       max: MAX_MEMBERS,
       waiting: this.waitingOn(),
-      members: [...this.members.values()].map(({ id, platform, name, connected, ready, buffering }) => ({
+      members: [...this.members.values()].map(({ id, platform, name, avatar, mic, connected, ready, buffering }) => ({
         id,
         platform,
         name,
+        avatar: avatar || null,
+        mic: !!mic && connected,
         connected,
         ready,
         buffering,

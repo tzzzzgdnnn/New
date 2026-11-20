@@ -18,6 +18,10 @@ import { registerPlugin } from "@capacitor/core";
 import { tmdbJson, imgUrl } from "../utils/api.js";
 import { startPresence } from "./presence.js";
 import { P2PHost, guestSocketClass, P2P_URL, NO_PARTY_MESSAGE } from "./p2p.js";
+import { partyAvatar, nativeAvatar, fallbackAvatar } from "./avatar.js";
+import { chatView, unescapeHtml as unescape } from "./chat.js";
+import { useProfiles } from "../platform/ios/profiles/ProfileContext.js";
+import ProfileAvatar from "../platform/ios/profiles/ProfileAvatar.jsx";
 import "./watch-party.css";
 
 // Android app: the built-in ExoPlayer (PlayerActivity) through the SbPlayer
@@ -27,7 +31,6 @@ const isAndroidNative = () => !!SbPlayer && !!window.Capacitor?.isNativePlatform
 
 const CONFIG_URL = "https://tzzzzgdnnn.github.io/New/watch/config.json";
 const CLIENT_ID_KEY = "sbWatchClientId";
-const NAME_KEY = "sbWatchName";
 
 /** fetch with a time limit (a dead server must never hang Start / Join). */
 async function fetchT(url, opts = {}, ms = 5000) {
@@ -79,21 +82,34 @@ const currentMedia = () => {
   return cleanMedia({ ...c, type: c.type === "tv" ? "tv" : "movie" });
 };
 
-const unescape = (s) =>
-  String(s || "")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, "&");
-
 const platform = () => (isIosNative() ? "ios" : isAndroidNative() || /Android/i.test(navigator.userAgent) ? "android" : "web");
 
-export function useWatchParty() {
+/**
+ * Who is watching on this device: the active profile's name and picture
+ * (the app has no separate party name). Desktop (no profiles): "Guest".
+ */
+function usePartyIdentity() {
+  const profile = useProfiles()?.profile || null;
+  const name = (profile?.name || "").trim() || "Guest";
+  const raw = profile?.avatar || null;
+  const [avatar, setAvatar] = useState(() => (raw && !raw.startsWith("data:") ? raw : null));
+  useEffect(() => {
+    let live = true;
+    partyAvatar(raw).then((a) => live && setAvatar(a));
+    return () => {
+      live = false;
+    };
+  }, [raw]);
+  return useMemo(() => ({ name, avatar: avatar || fallbackAvatar(name) }), [name, avatar]);
+}
+
+export function useWatchParty(identity = { name: "Guest", avatar: null }) {
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
   const [state, setState] = useState(null);
   const [status, setStatus] = useState("idle"); // idle | connecting | connected | reconnecting | ended | no-room | room-full | error
   const [notice, setNotice] = useState(null);
-  const [chat, setChat] = useState([]);
+  const [rawChat, setRawChat] = useState([]);
   const [unread, setUnread] = useState(0);
   const [speaking, setSpeaking] = useState(new Set());
   const [micOn, setMicOn] = useState(false);
@@ -114,7 +130,7 @@ export function useWatchParty() {
     hostRef.current = null;
     clientRef.current = null;
     setState(null);
-    setChat([]);
+    setRawChat([]);
     setUnread(0);
   }, []);
 
@@ -131,7 +147,7 @@ export function useWatchParty() {
 
   /** Opens the party; resolves with the first outcome ("connected", "no-room", "room-full", "ended", "timeout"). */
   const connect = useCallback(
-    async (code, name, transport) => {
+    async (code, transport) => {
       setStatus("connecting");
       setNotice(null);
       const outcome = new Promise((resolve) => {
@@ -150,16 +166,19 @@ export function useWatchParty() {
           : createWebAdapter({ getKey });
       adapterRef.current = adapter;
       const myId = clientId();
+      const { name, avatar } = identityRef.current;
       const client = new WatchClient({
         url: transport.url,
         WebSocketImpl: transport.WebSocketImpl,
         clientId: myId,
         platform: platform(),
         name,
+        avatar,
         adapter,
         onState: (st) => {
           setState(st);
           adapter.setParty?.({ code: st.code, count: st.count, max: st.max || MAX_MEMBERS, host: st.host === myId });
+          voiceRef.current?.sync(st);
         },
         onStatus: (s, info) => {
           if (s !== "reconnecting") {
@@ -167,27 +186,35 @@ export function useWatchParty() {
             settleRef.current = null;
           }
           setStatus(s);
+          if (s === "connected") voiceRef.current?.reconnected();
           if (info?.message) setNotice(info.message);
           if (s === "ended" || s === "no-room" || s === "room-full") leaveCleanup();
         },
         onChat: (list, msg) => {
-          const view = list.map((c) => ({ ...c, name: unescape(c.name), text: unescape(c.text), mine: c.from === myId }));
-          setChat(view);
-          // Native player unescapes on its own: hand it the raw (escaped) text.
-          adapter.setChat?.(list.map((c) => ({ ...c, mine: c.from === myId })));
+          setRawChat(list);
           if (msg && msg.from !== myId && !chatOpenRef.current) setUnread((n) => n + 1);
         },
-        onRtc: (m) => voiceRef.current?.onSignal(m),
+        onRtc: (m) => voiceRef.current?.onSignal(m).catch((e) => console.warn("[voice] signal failed", e)),
         onVoice: (m) => voiceRef.current?.onVoice(m),
       });
+      // Voice: every device listens from the start; its own mic is opt-in (toggleMic).
+      voiceRef.current?.stop();
+      voiceRef.current = typeof RTCPeerConnection === "undefined" ? null : new VoiceMesh({
+        client,
+        onSpeaking: setSpeaking,
+        onDuck: (level) => adapterRef.current?.setDuck?.(level),
+      });
+      if (voiceRef.current && !transport.url.startsWith("p2p:")) {
+        roomServer()
+          .then((base) => base && fetchT(`${base}/turn`, { method: "POST" }).then((r) => r.json()))
+          .then((d) => voiceRef.current?.setIceServers(d?.iceServers))
+          .catch(() => {});
+      }
       adapter.onChatSend = (text) => client.sendChat(text);
       adapter.roomPlaying = () => !!client.state && !client.state.playback?.paused;
       adapter.begin?.();
       clientRef.current = client;
       client.connect();
-      try {
-        localStorage.setItem(NAME_KEY, name);
-      } catch {}
       return outcome;
     },
     [leaveCleanup],
@@ -198,7 +225,7 @@ export function useWatchParty() {
   const guestTransport = (code) => ({ url: P2P_URL(code), WebSocketImpl: guestSocketClass(code) });
 
   const create = useCallback(
-    async (name) => {
+    async () => {
       try {
         const base = await roomServer();
         let code = null;
@@ -219,7 +246,7 @@ export function useWatchParty() {
           code = host.code;
           transport = { url: P2P_URL(code), WebSocketImpl: host.socketClass() };
         }
-        const res = await connect(code, name, transport);
+        const res = await connect(code, transport);
         if (res !== "connected") throw new Error("Couldn't start a party");
         // The title open on this phone is what the party watches.
         const media = currentMedia();
@@ -237,7 +264,7 @@ export function useWatchParty() {
   );
 
   const join = useCallback(
-    async (input, name) => {
+    async (input) => {
       const code = normalizeCode(input);
       if (!isValidCode(code)) {
         setNotice("Party codes are 6 letters and numbers");
@@ -254,7 +281,7 @@ export function useWatchParty() {
             // server unreachable: the party (if any) is peer-to-peer
           }
         }
-        const res = await connect(code, name, transport);
+        const res = await connect(code, transport);
         if (res === "connected") return true;
         if (res === "timeout") {
           clientRef.current?.close();
@@ -306,33 +333,25 @@ export function useWatchParty() {
         if (open) setUnread(0);
       },
       toggleMic: async () => {
-        const cl = c();
-        if (!cl) return;
+        const v = voiceRef.current;
+        if (!c() || !v) {
+          if (c()) setNotice("Voice isn't available here");
+          return;
+        }
         try {
-          if (!voiceRef.current) {
-            const base = hostRef.current || cl.url.startsWith("p2p:") ? null : await roomServer();
-            const ice = base
-              ? await fetchT(`${base}/turn`, { method: "POST" })
-                  .then((r) => r.json())
-                  .then((d) => d.iceServers)
-                  .catch(() => undefined)
-              : undefined;
+          if (!v.track) {
+            // Phones: route the call audio for talking while the movie plays (iOS
+            // play-and-record session, Android speaker / headset) before the mic opens.
             adapterRef.current?.setVoice?.(true);
-            const v = new VoiceMesh({
-              client: cl,
-              iceServers: ice,
-              onSpeaking: setSpeaking,
-              onDuck: (level) => adapterRef.current?.setDuck?.(level),
-            });
-            voiceRef.current = v;
             await v.start();
             setMicOn(true);
           } else {
-            const next = !voiceRef.current.muted;
-            voiceRef.current.setMuted(next);
-            setMicOn(!next);
+            const mute = !v.muted;
+            v.setMuted(mute);
+            setMicOn(!mute);
           }
         } catch (e) {
+          if (!v.track) adapterRef.current?.setVoice?.(false);
           setNotice(e?.name === "NotAllowedError" ? "Allow the microphone to talk in the party" : "Voice couldn't start");
         }
       },
@@ -351,35 +370,42 @@ export function useWatchParty() {
   );
 
   const myId = clientId();
-  return { state, status, notice, chat, unread, speaking, micOn, isHost: state?.host === myId, myId, ...api };
+  // Profile renamed / new picture while in a party: everyone sees the change.
+  useEffect(() => {
+    clientRef.current?.setProfile(identity.name, identity.avatar);
+  }, [identity.name, identity.avatar]);
+  const chat = useMemo(() => chatView(rawChat, state?.members, myId, fallbackAvatar), [rawChat, state?.members, myId]);
+  // The native players (iPhone / Android) draw the same chat, pictures included.
+  useEffect(() => {
+    if (!adapterRef.current?.setChat) return;
+    adapterRef.current.setChat(chat.map((m) => ({ id: m.id, name: m.rawName, text: m.rawText, ts: m.ts, mine: m.mine, ...nativeAvatar(m.avatar, m.name) })));
+  }, [chat]);
+  return { state, status, notice, chat, unread, speaking, micOn, identity, isHost: state?.host === myId, myId, ...api };
 }
 
 // ── UI ──────────────────────────────────────────────────────────────────
 
 function StartSheet({ party, onClose }) {
-  const [name, setName] = useState(() => {
-    try {
-      return localStorage.getItem(NAME_KEY) || "";
-    } catch {
-      return "";
-    }
-  });
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const media = currentMedia();
-  const who = name.trim() || "Guest";
   return (
     <div className="wp-sheet-backdrop" onClick={onClose}>
       <div className="wp-sheet" role="dialog" aria-label="Watch Party" onClick={(e) => e.stopPropagation()}>
         <div className="wp-sheet-title">Watch Party</div>
-        <div className="wp-sheet-sub">Up to {MAX_MEMBERS} people, iPhone and web, in sync.</div>
-        <input className="wp-input" placeholder="Your name" maxLength={24} value={name} onChange={(e) => setName(e.target.value)} />
+        <div className="wp-sheet-sub">Up to {MAX_MEMBERS} people, iPhone, Android and web, in sync.</div>
+        <div className="wp-me" aria-label="You join as">
+          <ProfileAvatar avatar={party.identity.avatar} name={party.identity.name} size={32} round />
+          <span>
+            Joining as <b>{party.identity.name}</b>
+          </span>
+        </div>
         <button
           className="wp-btn wp-btn-primary"
           disabled={busy}
           onClick={async () => {
             setBusy(true);
-            const ok = await party.create(who);
+            const ok = await party.create();
             setBusy(false);
             if (ok) onClose();
           }}
@@ -402,7 +428,7 @@ function StartSheet({ party, onClose }) {
             disabled={busy || normalizeCode(code).length !== 6}
             onClick={async () => {
               setBusy(true);
-              const ok = await party.join(code, who);
+              const ok = await party.join(code);
               setBusy(false);
               if (ok) onClose();
             }}
@@ -442,8 +468,11 @@ function ChatOverlay({ party, open, setOpen }) {
       {recent.length > 0 && (
         <div className="wp-chat-list" ref={listRef}>
           {recent.map((m) => (
-            <div key={m.id} className={"wp-chat-msg" + (m.mine ? " mine" : "")}>
-              <span className="wp-chat-name">{m.mine ? "You" : m.name}</span> {m.text}
+            <div key={m.id} className={"wp-chat-msg" + (m.mine ? " mine" : "")} data-from={m.from}>
+              <ProfileAvatar avatar={m.avatar} name={m.name} size={24} round className="wp-chat-avatar" />
+              <span className="wp-chat-body">
+                <span className="wp-chat-name">{m.mine ? "You" : m.name}</span> <span className="wp-chat-text">{m.text}</span>
+              </span>
             </div>
           ))}
         </div>
@@ -679,7 +708,8 @@ function PickSheet({ onClose, onPick }) {
  * shows on movie / show pages. `onOpenTitle(media)` opens the party's title.
  */
 export default function WatchParty({ page, onOpenTitle }) {
-  const party = useWatchParty();
+  const identity = usePartyIdentity();
+  const party = useWatchParty(identity);
   const [sheet, setSheet] = useState(false);
   const [toast, setToast] = useState(null);
   const inParty = !!party.state || party.status === "connecting" || party.status === "reconnecting";
