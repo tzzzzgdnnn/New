@@ -238,3 +238,183 @@ test("saveProblem explains what is missing", () => {
   assert.match(CS.saveProblem({ lists: { movies: true }, templates: { tv: "https://a/{tmdb}" } }), /movie link/);
   assert.equal(CS.saveProblem({ lists: { anime: true }, templates: { tv: "https://a/{tmdb}/{season}/{episode}" } }), null);
 });
+
+// ── Site adder: decoders ─────────────────────────────────────────────────
+
+const D = await import("../src/utils/customServers/decode.js");
+const S = await import("../src/utils/customServers/site.js");
+
+/** Dean Edwards-style packer (what sites ship), for building fixtures. */
+function pack(src, radix = 62) {
+  const words = [...new Set(src.match(/\b\w+\b/g))];
+  const enc = (c) => (c < radix ? "" : enc(Math.floor(c / radix))) + ((c = c % radix) > 35 ? String.fromCharCode(c + 29) : c.toString(36));
+  const index = new Map(words.map((w, i) => [w, enc(i)]));
+  const p = src.replace(/\b\w+\b/g, (w) => index.get(w)).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  return `eval(function(p,a,c,k,e,d){e=function(c){return(c<a?'':e(parseInt(c/a)))+((c=c%a)>35?String.fromCharCode(c+29):c.toString(36))};if(!''.replace(/^/,String)){while(c--){d[e(c)]=k[c]||e(c)}k=[function(e){return d[e]}];e=function(){return'\\\\w+'};c=1};while(c--){if(k[c]){p=p.replace(new RegExp('\\\\b'+e(c)+'\\\\b','g'),k[c])}}return p}('${p}',${radix},${words.length},'${words.join("|")}'.split('|'),0,{}))`;
+}
+
+test("decode: packer unpacks exactly like running it", () => {
+  const src = `jwplayer("vplayer").setup({sources:[{file:"https://cdn.example.org/hls/abc/master.m3u8",label:"720p"}],image:"https://cdn.example.org/p.jpg"});`;
+  const packed = pack(src);
+  assert.ok(D.isPacked(packed));
+  // The real packer function, run, gives the same text.
+  let ran = null;
+  new Function("eval", packed)((x) => (ran = x));
+  assert.equal(ran, src);
+  assert.equal(D.unpackAll(packed)[0], src);
+  const urls = D.findMediaUrls(`<script>${packed}</script>`, "https://site.example/watch/x");
+  assert.equal(urls[0].url, "https://cdn.example.org/hls/abc/master.m3u8");
+  assert.equal(urls[0].player, "jwplayer");
+  assert.equal(urls[0].label, "720p");
+});
+
+test("decode: radix 36 / 10 packers and nested packers inside base64", () => {
+  for (const radix of [10, 36]) {
+    const src = `var player=new Clappr.Player({source:"https://v.example.net/movie/out.mp4",parentId:"#p"});`;
+    assert.equal(D.unpackAll(pack(src, radix))[0], src);
+  }
+  const inner = pack(`var s="https://deep.example.com/x/index.m3u8";`);
+  const outer = pack(`eval(atob("${Buffer.from(inner).toString("base64")}"))`);
+  const urls = D.findMediaUrls(outer, "https://a.example/");
+  assert.deepEqual(urls.map((u) => u.url), ["https://deep.example.com/x/index.m3u8"]);
+});
+
+test("decode: base64, rot13, hex, \\u, char codes, reversed, JSON.parse, %-encoding", () => {
+  const u = "https://cdn.example.com/v/master.m3u8";
+  const cases = {
+    base64: `var src = atob("${Buffer.from(u).toString("base64")}");`,
+    bareBase64: `player.load("${Buffer.from(u).toString("base64")}")`,
+    rot13: `var s = "${D.rot13(u)}";`,
+    hex: `var s = "${[...u].map((c) => "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0")).join("")}";`,
+    unicode: `var s = "${[...u].map((c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")).join("")}";`,
+    charCodes: `var s = String.fromCharCode(${[...u].map((c) => c.charCodeAt(0)).join(",")});`,
+    reversed: `var s = "${[...u].reverse().join("")}".split("").reverse().join("");`,
+    reversedBare: `var s = "${[...u].reverse().join("")}";`,
+    jsonParse: `var cfg = JSON.parse('{"file":"${u.replace(/\//g, "\\\\/")}"}');`,
+    uriEncoded: `var s = decodeURIComponent("${encodeURIComponent(u)}");`,
+    base64OfRot13: `var s = atob("${Buffer.from(`x="${D.rot13(u)}"`).toString("base64")}");`,
+  };
+  for (const [name, js] of Object.entries(cases)) {
+    assert.deepEqual(D.findMediaUrls(js, "https://p.example/").map((x) => x.url), [u], name);
+  }
+});
+
+test("decode: player setups (JWPlayer, Video.js, Plyr, Clappr, DPlayer, JSON-in-script, <source>)", () => {
+  const base = "https://site.example/watch/movie-1/";
+  const pick = (t) => D.findMediaUrls(t, base).map((x) => x.url);
+  assert.deepEqual(pick(`jwplayer('p').setup({ playlist: [{ sources: [{ file: "/hls/1/master.m3u8", label: "1080p" }, { file: "/v/1-480.mp4", label: "480p" }] }] })`), [
+    "https://site.example/hls/1/master.m3u8",
+    "https://site.example/v/1-480.mp4",
+  ]);
+  assert.deepEqual(pick(`var p = videojs('v', {}); p.src({ type: 'application/x-mpegURL', src: 'https://c.example/a/playlist.m3u8' });`), ["https://c.example/a/playlist.m3u8"]);
+  assert.deepEqual(pick(`player.source = { type: 'video', sources: [{ src: 'https://c.example/b.mp4', type: 'video/mp4', size: 720 }] };`), ["https://c.example/b.mp4"]);
+  assert.deepEqual(pick(`new Clappr.Player({ source: "https://c.example/c/index.m3u8", parentId: "#player" })`), ["https://c.example/c/index.m3u8"]);
+  assert.deepEqual(pick(`new DPlayer({ container: el, video: { url: 'https://c.example/d.m3u8', type: 'hls' } })`), ["https://c.example/d.m3u8"]);
+  assert.deepEqual(pick(`<script type="application/json" id="cfg">{"streams":[{"url":"https:\\/\\/c.example\\/e\\/master.m3u8","quality":"auto"}]}</script>`), ["https://c.example/e/master.m3u8"]);
+  assert.deepEqual(pick(`<video controls><source src="/media/f.mp4" type="video/mp4" label="HD"></video>`), ["https://site.example/media/f.mp4"]);
+  const cfgs = D.extractPlayerConfigs(`jwplayer("a").setup({file:"x.m3u8", tracks:[{file:"y.vtt"}]}); new Plyr('#p', {});`);
+  assert.equal(cfgs[0].player, "jwplayer");
+  assert.match(cfgs[0].config, /^\{file:"x\.m3u8"/);
+});
+
+test("decode: HLS ranked over MP4, DASH last, ad links last", () => {
+  const t = `a="https://x.example/v.mpd" b="https://x.example/ads/preroll.m3u8" c="https://x.example/v.mp4" d="https://x.example/hls/master.m3u8"`;
+  assert.deepEqual(D.findMediaUrls(t).map((x) => x.url), ["https://x.example/hls/master.m3u8", "https://x.example/v.mp4", "https://x.example/v.mpd", "https://x.example/ads/preroll.m3u8"]);
+  assert.deepEqual(D.playableUrls(D.findMediaUrls(t)).map((x) => x.kind), ["hls", "mp4", "hls"]);
+});
+
+test("decode: DRM manifests are spotted, AES-128 is not DRM", () => {
+  assert.ok(D.isProtectedManifest('#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://abc",KEYFORMAT="com.apple.streamingkeydelivery"\n'));
+  assert.ok(D.isProtectedManifest('#EXTM3U\n#EXT-X-SESSION-KEY:METHOD=SAMPLE-AES-CTR,KEYFORMAT="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"'));
+  assert.ok(D.isProtectedManifest('<MPD><ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"/></MPD>'));
+  const aes = '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="/keys/k1.key",IV=0x1\n#EXTINF:6,\nseg0.ts\n';
+  assert.equal(D.isProtectedManifest(aes), false);
+  assert.deepEqual(D.aesKeyUris(aes, "https://c.example/hls/720/index.m3u8"), ["https://c.example/keys/k1.key"]);
+  assert.equal(D.firstSegment(aes, "https://c.example/hls/720/index.m3u8"), "https://c.example/hls/720/seg0.ts");
+});
+
+test("decode: master variants best first", () => {
+  const m = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360\n360.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n1080.m3u8\n";
+  assert.deepEqual(D.masterVariants(m, "https://c.example/h/master.m3u8").map((v) => [v.height, v.url]), [
+    [1080, "https://c.example/h/1080.m3u8"],
+    [360, "https://c.example/h/360.m3u8"],
+  ]);
+});
+
+// ── Site adder: recipe matching ──────────────────────────────────────────
+
+test("site: title pattern learned from a page's links", () => {
+  const home = "https://old.example/";
+  const urls = [
+    "https://old.example/movies/the-general-1926/",
+    "https://old.example/movies/nosferatu-1922/",
+    "https://old.example/movies/metropolis-1927/",
+    "https://old.example/genre/horror/",
+    "https://old.example/category/silent/",
+    "https://other.example/movies/x-1/",
+  ];
+  const p = S.learnTitlePattern(urls, home);
+  assert.equal(p, "^/movies/[^/]+/?$");
+  assert.ok(S.isTitleUrl("https://old.example/movies/sherlock-jr-1924", p, home));
+  assert.ok(!S.isTitleUrl("https://old.example/genre/horror/", p, home));
+  assert.ok(!S.isTitleUrl("https://other.example/movies/a-b/", p, home));
+  // WordPress date permalinks.
+  const wp = S.learnTitlePattern(["/2019/05/a-b/", "/2019/06/c-d/", "/2020/01/e-f/"].map((x) => "https://w.example" + x), "https://w.example/");
+  assert.ok(S.isTitleUrl("https://w.example/2021/12/night-of-the-living-dead/", wp, "https://w.example/"));
+});
+
+test("site: titles from link text or slug, fuzzy match with year", () => {
+  assert.deepEqual(S.titleOf({ href: "https://a/movies/night-of-the-living-dead-1968/", text: "" }), { title: "night of the living dead 1968", year: 1968 });
+  assert.deepEqual(S.titleOf({ href: "https://a/watch/123", text: "Watch The General (1926) Full Movie Online Free" }), { title: "The General", year: 1926 });
+  const hits = [
+    { url: "u1", title: "The General", year: 1926 },
+    { url: "u2", title: "The General's Daughter", year: 1999 },
+    { url: "u3", title: "General Hospital", year: null },
+  ];
+  assert.equal(S.pickBest(hits, { title: "The General", year: 1926 }).url, "u1");
+  assert.equal(S.pickBest(hits, { title: "The General's Daughter", year: 1999 }).url, "u2");
+  assert.equal(S.pickBest(hits, { title: "Metropolis", year: 1927 }), null);
+  assert.equal(S.pickBest([{ url: "x", title: "Nosferatu", year: 1979 }], { title: "Nosferatu", year: 1922 }), null, "wrong year is not a match");
+  assert.ok(S.scoreMatch({ title: "Sherlock, Jr." }, { title: "sherlock jr 1924", year: 1924 }) >= S.MIN_MATCH);
+});
+
+test("site: search detection (form, OpenSearch, WordPress) and results", () => {
+  const html = `<html><head><link rel="search" type="application/opensearchdescription+xml" href="/os.xml"><link rel="https://api.w.org/" href="/wp-json/"></head>
+    <body><form action="/search" method="get"><input type="hidden" name="type" value="movie"><input name="keyword" placeholder="Search movies"></form></body></html>`;
+  const base = "https://s.example/";
+  assert.equal(S.searchFormTemplate(S.extractForms(html, base)), "https://s.example/search?type=movie&keyword={q}");
+  assert.equal(S.openSearchLink(html, base), "https://s.example/os.xml");
+  assert.equal(S.parseOpenSearch('<OpenSearchDescription><Url type="text/html" template="https://s.example/?s={searchTerms}&amp;post_type=movie"/></OpenSearchDescription>'), "https://s.example/?s={q}&post_type=movie");
+  assert.ok(S.isWordPress(html));
+  const wp = JSON.stringify([{ id: 1, title: "Nosferatu (1922)", url: "https://s.example/movies/nosferatu/", type: "post" }]);
+  assert.deepEqual(S.parseSearchResults(wp, base), [{ url: "https://s.example/movies/nosferatu/", title: "Nosferatu", year: 1922 }]);
+  const req = S.searchRequest({ type: "api", url: "https://s.example/api/search?q={q}&api_key=old", keyParam: "api_key" }, "the general", { apiKey: "K1" });
+  assert.equal(req.url, "https://s.example/api/search?q=the%20general&api_key=K1");
+  assert.equal(req.headers["X-API-Key"], "K1");
+});
+
+test("site: episodes, mirrors and Cloudflare pages", () => {
+  const links = [
+    { href: "https://t.example/show/x/season-1/episode-1/", text: "Ep 1" },
+    { href: "https://t.example/show/x/season-2/episode-3/", text: "Ep 3" },
+  ];
+  assert.equal(S.findEpisode(links, 2, 3), "https://t.example/show/x/season-2/episode-3/");
+  assert.equal(S.findEpisode([{ href: "https://t.example/a/one-piece-episode-12", text: "" }], 1, 12), "https://t.example/a/one-piece-episode-12");
+  assert.equal(S.findEpisode(links, 3, 1), null);
+  const page = `<ul><li data-link="${Buffer.from("https://embed.one/e/abc").toString("base64")}">Server 1</li><li data-video="//embed.two/v/xyz">Mirror</li></ul><iframe src="https://embed.three/p/1"></iframe><a data-src="https://t.example/genre/x">Genre</a>`;
+  assert.deepEqual(S.extractMirrors({ html: page }, "https://t.example/m/", { site: "t.example" }).map((m) => [m.label, m.url]), [
+    ["Server 1", "https://embed.one/e/abc"],
+    ["Mirror", "https://embed.two/v/xyz"],
+    ["embed.three", "https://embed.three/p/1"],
+  ]);
+  assert.ok(S.isChallenge({ status: 403, text: "<html><head><title>Just a moment...</title></head><body>cf-chl-</body></html>" }));
+  assert.ok(S.isInteractiveChallenge({ status: 403, text: "<title>Just a moment...</title><div class=cf-turnstile></div>" }));
+  assert.ok(!S.isChallenge({ status: 200, text: "<title>Old Movies</title>" }));
+});
+
+test("site: recipes are normalized and need a search", () => {
+  assert.equal(S.normalizeRecipe({ home: "https://a.example/x" }), null);
+  const r = S.normalizeRecipe({ home: "https://a.example/x", search: { type: "form", url: "https://a.example/?s={q}" }, player: { mode: "bogus" } });
+  assert.equal(r.home, "https://a.example/");
+  assert.equal(r.player.mode, "sniff");
+});
