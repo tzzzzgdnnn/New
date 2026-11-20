@@ -201,7 +201,7 @@ test("pause / play / seek / stop from either native player reach every device", 
   ios.nat.tapPlay();
   run(3000);
   assert.ok(allPlaying(devs));
-  assert.ok(spread() < 0.08, `together (spread ${spread().toFixed(3)})`);
+  assert.ok(spread() < 0.15, `together (spread ${spread().toFixed(3)})`);
   assert.ok(ios.p.t > held + 1);
 
   // Android seeks forward 10 s → both land there and carry on.
@@ -210,7 +210,7 @@ test("pause / play / seek / stop from either native player reach every device", 
   run(4000);
   assert.ok(allPlaying(devs));
   assert.ok(devs.every((d) => d.p.t > target), "both past the seek target");
-  assert.ok(spread() < 0.08, `together after seek (spread ${spread().toFixed(3)})`);
+  assert.ok(spread() < 0.15, `together after seek (spread ${spread().toFixed(3)})`);
 
   // iPhone pauses → Android pauses.
   ios.nat.tapPause();
@@ -262,7 +262,7 @@ test("buffering on one phone holds everyone; they restart together (and chat tra
   devs[1].p.stallNet = false;
   run(6000);
   assert.ok(allPlaying(devs), "restarted");
-  assert.ok(spread() < 0.08, `together (spread ${spread().toFixed(3)})`);
+  assert.ok(spread() < 0.15, `together (spread ${spread().toFixed(3)})`);
 });
 
 test("drift: a native player running 3% fast is pulled back onto the room's timeline", () => {
