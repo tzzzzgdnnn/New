@@ -41,10 +41,13 @@ Live web app: https://tzzzzgdnnn.github.io/New/ (gh-pages, built by `.github/wor
 - Android used the web server list because Android builds with VITE_WEB=1 (+VITE_ANDROID=1).
 
 ## Still owed / half-done
-- Web Auto test (local build, WebKit): Auto still ended on vidrift for Avatar after 2 silent skips
-  (MAX_SILENT_SKIPS=2 in webview.js `armStartWatch`) — Cinezo loads its player but waits for a tap, so the 8 s
-  no-start watch skips it. Next: check `src/platform/ios/autoRank.js` order on web and let a loaded-but-waiting
-  player stay (or count Cinezo's PLAYER_EVENT messages as alive).
+- DONE 362bf26/cfe10a3: web had NO server failover at all (did-fail-load only cleared a spinner); `nextServer`
+  (was Android-only) now also drives web Auto (`webAutoNext` in webview.js). Verified LIVE in WebKit iPhone:
+  Avatar Aang Auto -> Cinejoy (no stream) -> Cinezo (waits for tap, skipped) -> Vidfast PLAYS. Breaking Bad
+  S1E1 Auto -> Cinejoy direct stream loaded. Dragon Ball Super: Beerus (anime) Auto -> Vidfast plays.
+  Live scroll check: last row bottom 518 px < Watch Party button top 539 < tab bar 610 (iPhone 15 Pro viewport).
+- Cinezo plays when tapped but is skipped by Auto's 8 s no-start watch (it waits for a tap); could count its
+  `PLAYER_EVENT` messages as alive.
 - Flixer site embed loads on web but its video stays readyState 0 in WebKit (unverified on a real iPhone).
 - vidrift/7Movies/aether render blank in headless Linux WebKit, so they can't be verified here.
 - Android per-server status: compiled only (CI), not run on a device/emulator. Untested: SbDns intents on Samsung
@@ -57,7 +60,9 @@ Live web app: https://tzzzzgdnnn.github.io/New/ (gh-pages, built by `.github/wor
   Rive, Movy (no CORS → need relay), ani.pm (relay), custom/site servers (need native hidden web view).
 
 ## CI (latest)
-- Android 44835617107 (apk-port 1b8a2cf), iOS 44835682224, web deploy 44835682400, room server 44835682598 (ccd322d).
+- Android 44836321236 (apk-port 362bf26) success; Android 44835991866 (ef5e201) success.
+- iOS 44836346653 (ipa-test-build cfe10a3) in progress at handoff; earlier iOS runs were cancelled by newer pushes.
+- Web deploy 44836346636 (cfe10a3) success, live bundle index-MBXqgvGn.js.
   https://github.com/tzzzzgdnnn/New/actions
 
 ## Test tools
