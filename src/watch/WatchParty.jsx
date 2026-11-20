@@ -117,7 +117,8 @@ export function useWatchParty() {
         onChat: (list, msg) => {
           const view = list.map((c) => ({ ...c, name: unescape(c.name), text: unescape(c.text), mine: c.from === myId }));
           setChat(view);
-          adapter.setChat?.(view);
+          // Native player unescapes on its own: hand it the raw (escaped) text.
+          adapter.setChat?.(list.map((c) => ({ ...c, mine: c.from === myId })));
           if (msg && msg.from !== myId && !chatOpenRef.current) setUnread((n) => n + 1);
         },
         onRtc: (m) => voiceRef.current?.onSignal(m),

@@ -768,6 +768,12 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
 // StreambertPlayerViewController is presented full screen. If every server
 // fails, JS is told to show the visible web player instead.
 
+/// Watch Together voice chat owns the audio session while it is on, so the
+/// player must not drop it back to plain playback when a stream loads.
+enum WatchAudio {
+    static var voiceOn = false
+}
+
 final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMessageHandler {
 
     private var context: [String: Any] = [:]
@@ -788,6 +794,15 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     private var playingDownload = false
     /// Resolve token in flight when the last player started closing.
     private var closingToken: String?
+    /// Watch Together: a party session is on (state is pushed to JS).
+    private var watchOn = false
+    /// mediaKey JS gave for what this player has loaded (begin / setKey).
+    private var watchKey: String?
+    private var watchTimer: Timer?
+    /// Watch Together chat: the recent messages and party info JS last sent,
+    /// kept here so a player opened mid-session shows them at once.
+    private var watchChat: [[String: Any]] = []
+    private var watchParty: [String: Any]?
 
     override func capacitorDidLoad() {
         super.capacitorDidLoad()
@@ -806,6 +821,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         ucc.add(WeakBridgeHandler(self), name: "sbResolve")
         ucc.add(WeakBridgeHandler(self), name: "sbPrefs")
         ucc.add(WeakBridgeHandler(self), name: "sbUpNext")
+        ucc.add(WeakBridgeHandler(self), name: "sbWatch")
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         installWebProcessRecovery(wv)
         ucc.addScriptMessageHandler(DownloadMessageHandler(self), contentWorld: .page, name: "sbDownload")
@@ -990,6 +1006,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     }
 
     deinit {
+        watchTimer?.invalidate()
         if let o = memoryObserver { NotificationCenter.default.removeObserver(o) }
         lifecycleTokens.forEach { NotificationCenter.default.removeObserver($0) }
     }
@@ -1014,7 +1031,148 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         case "sbUpNext":
             upNextInfo = (body["clear"] as? Bool) == true ? nil : body
             if !playingDownload { playerVC?.setUpNext(upNextInfo) }
+        case "sbWatch":
+            handleWatch(body)
         default: break
+        }
+    }
+
+    // MARK: Watch Together (sbWatch)
+
+    private static func num(_ v: Any?) -> Double? {
+        guard let n = v as? NSNumber else { return nil }
+        let d = n.doubleValue
+        return d.isFinite ? d : nil
+    }
+
+    private func handleWatch(_ body: [String: Any]) {
+        let cmd = body["cmd"] as? String ?? ""
+        let pos = Self.num(body["pos"])
+        switch cmd {
+        case "begin":
+            watchKey = body["key"] as? String
+            watchOn = true
+            attachWatchIntent()
+            if let vc = playerVC { pushWatchChat(to: vc) }
+            startWatchTimer()
+            pushWatchState()
+        case "end":
+            watchOn = false
+            stopWatchTimer()
+            playerVC?.onWatchIntent = nil
+            watchChat = []
+            watchParty = nil
+            playerVC?.onWatchChatSend = nil
+            playerVC?.setWatchChatActive(false)
+        case "chat":
+            let list = (body["messages"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
+            watchChat = Array(list.suffix(50))
+            if watchOn { playerVC?.setWatchChat(watchChat) }
+        case "party":
+            var info: [String: Any] = [:]
+            for k in ["code", "count", "max", "host"] { if let v = body[k] { info[k] = v } }
+            watchParty = info
+            if watchOn { playerVC?.setWatchParty(info) }
+        case "setKey":
+            watchKey = body["key"] as? String
+            pushWatchState()
+        case "pause":
+            if let p = pos { playerVC?.watchPause(p) }
+        case "playAt":
+            guard let p = pos, let at = Self.num(body["atMs"]) else { return }
+            playerVC?.watchPlayAt(p, atMs: at, rate: Float(Self.num(body["rate"]) ?? 1))
+        case "setRate":
+            if let r = Self.num(body["rate"]), r > 0 { playerVC?.watchSetRate(Float(r)) }
+        case "seek":
+            if let p = pos { playerVC?.watchSeek(p) }
+        case "voice":
+            setWatchVoice(on: (body["on"] as? Bool) == true)
+        default:
+            sbLog("sbWatch: unknown cmd \(cmd)")
+        }
+    }
+
+    /// Explicit control taps in the native player go to the party while a
+    /// session is on. Re-attached each tick so a newly opened player gets it.
+    private func attachWatchIntent() {
+        guard watchOn, let vc = playerVC, vc.onWatchIntent == nil else { return }
+        vc.onWatchIntent = { [weak self] action, pos, rate in
+            // JSONSerialization rejects NaN/Infinity, so never send one.
+            let p = pos.isFinite ? max(0, pos) : 0
+            let r = rate.isFinite && rate > 0 ? Double(rate) : 1
+            self?.sendToJS("__sbWatchIntent", ["action": action, "pos": p, "rate": r])
+        }
+        // Newly attached player (maybe opened mid-session): give it the chat.
+        pushWatchChat(to: vc)
+    }
+
+    /// Hand the party chat state to a player and route its Send to JS.
+    private func pushWatchChat(to vc: StreambertPlayerViewController) {
+        guard watchOn else { return }
+        vc.onWatchChatSend = { [weak self] text in self?.sendWatchChat(text) }
+        vc.setWatchParty(watchParty)
+        vc.setWatchChat(watchChat)
+        vc.setWatchChatActive(true)
+    }
+
+    /// `window.__sbWatchChatSend(text)`; the text goes as a JSON string.
+    private func sendWatchChat(_ text: String) {
+        guard let wv = bridge?.webView,
+              let data = try? JSONSerialization.data(withJSONObject: [text]),
+              let arr = String(data: data, encoding: .utf8) else {
+            sbLog("could not encode chat text")
+            return
+        }
+        wv.evaluateJavaScript("window.__sbWatchChatSend && window.__sbWatchChatSend(\(arr)[0])") { _, error in
+            if let error = error { sbLog("__sbWatchChatSend failed: \(error.localizedDescription)") }
+        }
+    }
+
+    private func startWatchTimer() {
+        stopWatchTimer()
+        let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            guard let self = self, self.watchOn else { return }
+            self.attachWatchIntent()
+            self.pushWatchState()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        watchTimer = t
+    }
+
+    private func stopWatchTimer() {
+        watchTimer?.invalidate()
+        watchTimer = nil
+    }
+
+    private func pushWatchState() {
+        guard watchOn else { return }
+        var s: [String: Any]
+        if let vc = playerVC, !vc.isClosing {
+            s = vc.watchState()
+            s["key"] = watchKey ?? NSNull()
+        } else {
+            s = ["key": NSNull(), "pos": 0, "rate": 1, "status": "paused", "ready": false, "seeking": false]
+        }
+        s["sampledAt"] = Date().timeIntervalSince1970 * 1000
+        sendToJS("__sbWatchState", s)
+    }
+
+    /// Voice chat needs the mic: play-and-record while it is on, plain
+    /// movie playback again when it is off.
+    private func setWatchVoice(on: Bool) {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            if on {
+                try session.setCategory(.playAndRecord, mode: .default,
+                                        options: [.mixWithOthers, .allowBluetooth, .defaultToSpeaker])
+            } else {
+                try session.setCategory(.playback, mode: .moviePlayback)
+            }
+            try session.setActive(true)
+            WatchAudio.voiceOn = on
+            sbLog("watch voice \(on ? "on" : "off")")
+        } catch {
+            sbLog("watch voice audio session failed: \(error.localizedDescription)")
         }
     }
 
@@ -1710,6 +1868,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         setupGestures()
         setupSubtitles()
         setupUpNext()
+        setupWatchChat()
         loadSkipTimes()
         observeAppLifecycle()
         // Online subtitle search waits for the first frame (see firstFrameShown),
@@ -1774,11 +1933,20 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     /// Landscape: video fills the screen. Portrait: 16:9, full width, centered.
     private func applyVideoLayout() {
         let portrait = isPortrait
+        let split = chatSplitActive
         applyVideoGravity()
-        guard portrait != portraitLayoutActive else { return }
+        let orientationChanged = portrait != portraitLayoutActive
+        guard orientationChanged || split != chatSplitApplied else { return }
         portraitLayoutActive = portrait
-        NSLayoutConstraint.deactivate(portrait ? landscapeVideoConstraints : portraitVideoConstraints)
-        NSLayoutConstraint.activate(portrait ? portraitVideoConstraints : landscapeVideoConstraints)
+        // Layout only: nothing here touches the player, so rotating or
+        // switching the party split never pauses playback.
+        if split || chatSplitApplied {
+            applyChatSplitLayout(portrait: portrait, split: split)
+        } else {
+            NSLayoutConstraint.deactivate(portrait ? landscapeVideoConstraints : portraitVideoConstraints)
+            NSLayoutConstraint.activate(portrait ? portraitVideoConstraints : landscapeVideoConstraints)
+        }
+        if !orientationChanged { return }
         applyControlsLayout(portrait: portrait)
         let symbol = portrait ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left"
         rotateButton.setImage(UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
@@ -1955,6 +2123,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         statusObs?.invalidate()
         lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
         if let o = upNextEndObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = chatKeyboardObserver { NotificationCenter.default.removeObserver(o) }
         firstFrameObs?.invalidate()
         upNextTimer?.invalidate()
         healthMonitor.stop()
@@ -1996,7 +2165,9 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     }
 
     private func startPlayback(_ url: URL) {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        if !WatchAudio.voiceOn {
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        }
         try? AVAudioSession.sharedInstance().setActive(true)
         var opts: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": headers]
         if !cookies.isEmpty { opts[AVURLAssetHTTPCookiesKey] = cookies }
@@ -2524,6 +2695,9 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     }
 
     @objc private func handleSingleTap() {
+        // A tap on the movie while composing only closes the chat bar
+        // (never touches playback or the controls).
+        if chatField.isFirstResponder { chatField.resignFirstResponder(); return }
         let action = PlayerTap.singleTap(controlsShown: controlsShown,
                                          sinceShown: CACurrentMediaTime() - controlsShownAt,
                                          hidePending: tapHideWork != nil)
@@ -2557,7 +2731,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
     private func applyVideoGravity() {
         let portrait = isPortrait
-        videoView.playerLayer.videoGravity = (prefersFill && !portrait) ? .resizeAspectFill : .resizeAspect
+        videoView.playerLayer.videoGravity = (prefersFill && !portrait && !chatSplitActive) ? .resizeAspectFill : .resizeAspect
     }
 
     @objc private func handleVideoPinch(_ g: UIPinchGestureRecognizer) {
@@ -2572,6 +2746,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         let forward = x > view.bounds.width / 2
         let now = player?.currentTime().seconds ?? 0
         seek(to: now + (forward ? 10 : -10))
+        onWatchIntent?("seek", max(0, now + (forward ? 10 : -10)), speed)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         ripple(at: g.location(in: view), text: forward ? "+10s" : "-10s")
         if controlsShown { scheduleHide() }
@@ -2683,10 +2858,29 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         skipButton.isHidden = true
         spinner.stopAnimating()
         hideUpNext()
+        view.endEditing(true)
     }
 
     @objc private func playTapped() {
         guard let p = player else { return }
+        if let intent = onWatchIntent {
+            // Party: Play waits for the room's shared start (playAt); Pause is
+            // applied here at once and sent to the room. This explicit tap is
+            // the only place a party pause comes from.
+            let t = p.currentTime().seconds
+            let pos = t.isFinite ? t : 0
+            if p.timeControlStatus == .paused {
+                intent("play", pos, speed)
+            } else {
+                userPaused = true
+                watchPlayWork?.cancel(); watchPlayWork = nil
+                p.pause()
+                reportProgress()
+                intent("pause", pos, speed)
+            }
+            scheduleHide()
+            return
+        }
         if p.timeControlStatus == .paused {
             userPaused = false
             p.playImmediately(atRate: speed)
@@ -2708,7 +2902,143 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     @objc private func scrubEnded() {
         seek(to: Double(slider.value))
         isScrubbing = false
+        onWatchIntent?("seek", Double(slider.value), speed)
         scheduleHide()
+    }
+
+    // MARK: Watch Together (driven by the bridge's sbWatch handler)
+
+    /// Set while a Watch Together session is on: explicit taps on Play/Pause,
+    /// the scrubber, double-tap skip and Speed are sent to the party as
+    /// (action, pos, rate). Stalls, backgrounding and interruptions are never sent.
+    var onWatchIntent: ((String, Double, Float) -> Void)?
+
+    // Watch Together "party player" (UI in the WatchChat extension below):
+    // video + chat column (below the video in portrait, right 35% in
+    // landscape), or full screen with only a small unread badge.
+    /// Viewer pressed Send in the chat compose bar (trimmed, at most 280 chars).
+    var onWatchChatSend: ((String) -> Void)?
+    fileprivate var chatActive = false
+    fileprivate var chatFullScreen = false
+    fileprivate var chatMessages: [[String: Any]] = []
+    fileprivate var chatParty: [String: Any]?
+    fileprivate var chatSeenIds = Set<String>()
+    fileprivate var chatUnread = 0
+    /// The first list after the session/player started was shown (it does
+    /// not animate in or count as unread).
+    fileprivate var chatPrimed = false
+    fileprivate var chatUIReady = false
+    fileprivate var chatSplitApplied = false
+    fileprivate var chatKeyboardObserver: NSObjectProtocol?
+    fileprivate var chatKeyboardBottom: NSLayoutConstraint?
+    fileprivate var chatLabels: [String: UILabel] = [:]
+    /// Original control-bar constraints swapped out while the split is on.
+    fileprivate var chatOrigTopTrailing: NSLayoutConstraint?
+    fileprivate var chatOrigBarTrailing: NSLayoutConstraint?
+    fileprivate var chatOrigBarBottom: NSLayoutConstraint?
+    fileprivate var chatOrigSkipTrailing: NSLayoutConstraint?
+    fileprivate var chatSplitPortraitConstraints: [NSLayoutConstraint] = []
+    fileprivate var chatSplitLandscapeConstraints: [NSLayoutConstraint] = []
+    fileprivate let chatColumnBg = UIView()
+    fileprivate let chatColumn = UIView()
+    fileprivate let chatPill = PaddedLabel()
+    fileprivate let chatPanel = UIView()
+    fileprivate let chatStack = UIStackView()
+    fileprivate let chatCompose = UIView()
+    fileprivate let chatField = UITextField()
+    fileprivate let chatSendButton = UIButton(type: .system)
+    /// Full screen only: corner bubble with the unread count; tap = exit.
+    fileprivate let chatButton = UIButton(type: .system)
+    fileprivate let chatBadge = PaddedLabel()
+    /// In the top bar: Full Screen / Exit Full Screen (party only).
+    fileprivate let chatFullButton = UIButton(type: .system)
+    /// Scheduled shared start from playAt (cancelled by any newer command).
+    private var watchPlayWork: DispatchWorkItem?
+    /// Exact seeks this session issued that have not completed yet.
+    private var watchSeeksInFlight = 0
+
+    func watchState() -> [String: Any] {
+        guard let p = player, let item = p.currentItem else {
+            return ["pos": 0, "rate": Double(speed), "status": "paused", "ready": false, "seeking": false]
+        }
+        let t = p.currentTime().seconds
+        let status: String
+        switch p.timeControlStatus {
+        case .playing: status = "playing"
+        case .waitingToPlayAtSpecifiedRate: status = "waiting"
+        default: status = "paused"
+        }
+        let ready = item.status == .readyToPlay && item.isPlaybackLikelyToKeepUp
+        return [
+            "pos": t.isFinite ? t : 0,
+            "rate": Double(p.timeControlStatus == .paused ? speed : p.rate),
+            "status": status,
+            "ready": ready,
+            "seeking": watchSeeksInFlight > 0 || isScrubbing,
+        ]
+    }
+
+    private func watchExactSeek(_ pos: Double, then: (() -> Void)? = nil) {
+        guard let p = player else { return }
+        watchSeeksInFlight += 1
+        p.seek(to: CMTime(seconds: max(0, pos), preferredTimescale: 600),
+               toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.watchSeeksInFlight = max(0, self.watchSeeksInFlight - 1)
+                then?()
+            }
+        }
+    }
+
+    func watchPause(_ pos: Double) {
+        watchPlayWork?.cancel(); watchPlayWork = nil
+        userPaused = true
+        player?.pause()
+        watchExactSeek(pos)
+    }
+
+    /// Lands exactly on `pos`, then starts at `rate` when the wall clock
+    /// reaches `atMs` (JS Date.now() epoch ms). A start already in the past
+    /// plays at once; the sync engine corrects the small lateness.
+    func watchPlayAt(_ pos: Double, atMs: Double, rate: Float) {
+        watchPlayWork?.cancel(); watchPlayWork = nil
+        guard let p = player else { return }
+        userPaused = false
+        applyWatchSpeed(rate > 0 ? rate : 1)
+        p.pause()
+        watchExactSeek(pos) { [weak self] in
+            guard let self = self, !self.isClosing, !self.userPaused else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self = self, !self.isClosing, !self.userPaused else { return }
+                self.player?.playImmediately(atRate: self.speed)
+            }
+            self.watchPlayWork = work
+            let delay = atMs / 1000 - Date().timeIntervalSince1970
+            if delay > 0 {
+                DispatchQueue.main.asyncAfter(wallDeadline: .now() + delay, execute: work)
+            } else {
+                work.perform()
+            }
+        }
+    }
+
+    func watchSetRate(_ rate: Float) { applyWatchSpeed(rate) }
+
+    func watchSeek(_ pos: Double) {
+        guard let p = player else { return }
+        let wasPlaying = p.timeControlStatus != .paused
+        watchExactSeek(pos) { [weak self] in
+            if wasPlaying, let self = self, !self.userPaused { self.player?.playImmediately(atRate: self.speed) }
+        }
+    }
+
+    private func applyWatchSpeed(_ r: Float) {
+        speed = r
+        if #available(iOS 16.0, *) { player?.defaultRate = r }
+        if player?.timeControlStatus != .paused { player?.rate = r }
+        pill(speedButton, symbol: UIImage(systemName: "gauge.with.dots.needle.67percent") == nil ? "speedometer" : "gauge.with.dots.needle.67percent",
+             title: r == 1 ? "Speed" : String(format: "%gx", r))
     }
 
     /// Stay open and let the page resolve the picked server; the bridge then
@@ -3415,6 +3745,7 @@ extension StreambertPlayerViewController {
                 self.speed = r
                 if #available(iOS 16.0, *) { self.player?.defaultRate = r }
                 if self.player?.timeControlStatus != .paused { self.player?.rate = r }
+                self.onWatchIntent?("rate", self.player?.currentTime().seconds ?? 0, r)
                 self.pill(self.speedButton, symbol: UIImage(systemName: "gauge.with.dots.needle.67percent") == nil ? "speedometer" : "gauge.with.dots.needle.67percent",
                           title: r == 1 ? "Speed" : String(format: "%gx", r))
             }
@@ -3835,6 +4166,8 @@ extension StreambertPlayerViewController: UIGestureRecognizerDelegate {
             if cur is UIControl { return false }
             if cur === upNextCard && !upNextCard.isHidden { return false }
             if cur === failureView && !failureView.isHidden { return false }
+            // Party chat overlay: its taps never reach tap-to-show / double-tap seek.
+            if cur === chatColumn || cur === chatColumnBg { return false }
             v = cur.superview
         }
         return true
@@ -3844,5 +4177,455 @@ extension StreambertPlayerViewController: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         true
+    }
+}
+
+
+// MARK: - Watch Together party player (chat beside / below the video)
+//
+// While a party session is on the player is split: video + chat column
+// (below the video in portrait, right ~35% in landscape). Full Screen hides
+// the chat (a corner bubble shows the unread count). Everything here is
+// layout and text only: nothing calls the player or onWatchIntent, so
+// opening chat, typing, the keyboard, sending, rotating and toggling full
+// screen never pause playback or send a pause to the party.
+
+extension StreambertPlayerViewController: UITextFieldDelegate {
+
+    fileprivate static let chatMaxLength = 280
+    fileprivate static let chatShownMessages = 30
+
+    /// Split layout (video + chat) is on.
+    fileprivate var chatSplitActive: Bool { chatActive && !chatFullScreen }
+
+    // MARK: Bridge API
+
+    func setWatchChatActive(_ on: Bool) {
+        guard on != chatActive else { refreshChatUI(); return }
+        chatActive = on
+        chatFullScreen = false // a party starts in video + chat
+        chatUnread = 0
+        if !on {
+            chatMessages = []
+            chatParty = nil
+            chatSeenIds = []
+            chatPrimed = false
+            if isViewLoaded {
+                chatField.resignFirstResponder()
+                chatField.text = ""
+            }
+        }
+        renderChatMessages(animated: false)
+        refreshChatUI()
+        relayoutForChat()
+    }
+
+    /// Full recent list, latest last (text HTML-escaped by the server).
+    func setWatchChat(_ messages: [[String: Any]]) {
+        let first = !chatPrimed
+        chatPrimed = true
+        chatMessages = Array(messages.suffix(50))
+        for m in chatMessages {
+            let id = Self.chatId(m)
+            guard !chatSeenIds.contains(id) else { continue }
+            chatSeenIds.insert(id)
+            // Unread only counts what arrives while the chat is hidden.
+            if !first, chatFullScreen, (m["mine"] as? Bool) != true { chatUnread += 1 }
+        }
+        renderChatMessages(animated: !first)
+        refreshChatUI()
+    }
+
+    func setWatchParty(_ info: [String: Any]?) {
+        chatParty = info
+        refreshChatUI()
+    }
+
+    // MARK: Setup
+
+    fileprivate func setupWatchChat() {
+        let safe = view.safeAreaLayoutGuide
+
+        // The control-bar constraints the split swaps out (all to the safe area).
+        func original(_ item: UIView, _ attr: NSLayoutConstraint.Attribute) -> NSLayoutConstraint? {
+            view.constraints.first {
+                $0.isActive && ($0.firstItem as? UIView) === item && $0.firstAttribute == attr
+                    && $0.relation == .equal && $0.secondItem is UILayoutGuide
+            }
+        }
+        chatOrigTopTrailing = original(topBar, .trailing)
+        chatOrigBarTrailing = original(bottomBar, .trailing)
+        chatOrigBarBottom = original(bottomBar, .bottom)
+        chatOrigSkipTrailing = original(skipButton, .trailing)
+        if chatOrigTopTrailing == nil || chatOrigBarTrailing == nil || chatOrigBarBottom == nil || chatOrigSkipTrailing == nil {
+            sbLog("party chat: control constraints not found, split may overlap")
+        }
+
+        chatColumnBg.translatesAutoresizingMaskIntoConstraints = false
+        chatColumnBg.backgroundColor = UIColor(white: 0.07, alpha: 1)
+        chatColumnBg.isHidden = true
+        view.addSubview(chatColumnBg)
+
+        chatColumn.translatesAutoresizingMaskIntoConstraints = false
+        chatColumn.isHidden = true
+        chatColumn.layer.cornerRadius = 14
+        chatColumn.clipsToBounds = true
+        view.addSubview(chatColumn)
+
+        chatPill.translatesAutoresizingMaskIntoConstraints = false
+        chatPill.insets = UIEdgeInsets(top: 3, left: 10, bottom: 3, right: 10)
+        chatPill.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        chatPill.textColor = .white
+        chatPill.backgroundColor = UIColor(white: 1, alpha: 0.12)
+        chatPill.layer.cornerRadius = 12
+        chatPill.clipsToBounds = true
+        chatPill.isUserInteractionEnabled = false
+        chatColumn.addSubview(chatPill)
+
+        chatPanel.translatesAutoresizingMaskIntoConstraints = false
+        chatPanel.clipsToBounds = true
+        chatColumn.addSubview(chatPanel)
+        chatStack.translatesAutoresizingMaskIntoConstraints = false
+        chatStack.axis = .vertical
+        chatStack.spacing = 5
+        chatStack.alignment = .fill
+        chatStack.isUserInteractionEnabled = false
+        chatPanel.addSubview(chatStack)
+
+        chatCompose.translatesAutoresizingMaskIntoConstraints = false
+        chatCompose.backgroundColor = UIColor(white: 1, alpha: 0.1)
+        chatCompose.layer.cornerRadius = 20
+        chatColumn.addSubview(chatCompose)
+
+        chatField.translatesAutoresizingMaskIntoConstraints = false
+        chatField.delegate = self
+        chatField.textColor = .white
+        chatField.tintColor = red
+        chatField.font = .systemFont(ofSize: 15)
+        chatField.returnKeyType = .send
+        chatField.enablesReturnKeyAutomatically = true
+        chatField.keyboardAppearance = .dark
+        chatField.attributedPlaceholder = NSAttributedString(
+            string: "Message the party",
+            attributes: [.foregroundColor: UIColor(white: 1, alpha: 0.45)])
+        chatCompose.addSubview(chatField)
+
+        chatSendButton.translatesAutoresizingMaskIntoConstraints = false
+        chatSendButton.setTitle("Send", for: .normal)
+        chatSendButton.setTitleColor(red, for: .normal)
+        chatSendButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+        chatSendButton.setContentHuggingPriority(.required, for: .horizontal)
+        chatSendButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        chatSendButton.addTarget(self, action: #selector(chatSendTapped), for: .touchUpInside)
+        chatCompose.addSubview(chatSendButton)
+
+        // Full screen: corner bubble with unread badge (tap = back to chat).
+        chatButton.translatesAutoresizingMaskIntoConstraints = false
+        chatButton.setImage(UIImage(systemName: "bubble.left.fill",
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)),
+                            for: .normal)
+        chatButton.tintColor = .white
+        chatButton.backgroundColor = UIColor(white: 0, alpha: 0.55)
+        chatButton.layer.cornerRadius = 18
+        chatButton.accessibilityLabel = "Show party chat"
+        chatButton.isHidden = true
+        chatButton.addTarget(self, action: #selector(chatFullScreenTapped), for: .touchUpInside)
+        view.addSubview(chatButton)
+
+        chatBadge.translatesAutoresizingMaskIntoConstraints = false
+        chatBadge.insets = UIEdgeInsets(top: 1, left: 5, bottom: 1, right: 5)
+        chatBadge.font = .systemFont(ofSize: 11, weight: .bold)
+        chatBadge.textColor = .white
+        chatBadge.textAlignment = .center
+        chatBadge.backgroundColor = red
+        chatBadge.layer.cornerRadius = 9
+        chatBadge.clipsToBounds = true
+        chatBadge.isUserInteractionEnabled = false
+        chatBadge.isHidden = true
+        chatButton.addSubview(chatBadge)
+
+        // Top bar: Full Screen / Exit Full Screen (party only).
+        chatFullButton.tintColor = .white
+        chatFullButton.isHidden = true
+        chatFullButton.addTarget(self, action: #selector(chatFullScreenTapped), for: .touchUpInside)
+        if let stack = rotateButton.superview as? UIStackView,
+           let i = stack.arrangedSubviews.firstIndex(of: rotateButton) {
+            stack.insertArrangedSubview(chatFullButton, at: i)
+            chatFullButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        }
+
+        // Column bottom: on the safe area, lifted above the keyboard.
+        let kb = chatColumn.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -6)
+        kb.priority = UILayoutPriority(999)
+        chatKeyboardBottom = kb
+        let rest = chatColumn.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -6)
+        rest.priority = UILayoutPriority(700)
+        let minHeight = chatColumn.heightAnchor.constraint(greaterThanOrEqualToConstant: 110)
+        minHeight.priority = UILayoutPriority(800)
+        let stackTop = chatStack.topAnchor.constraint(greaterThanOrEqualTo: chatPanel.topAnchor, constant: 4)
+        stackTop.priority = .defaultLow // overflow: the oldest lines clip off the top
+        NSLayoutConstraint.activate([
+            kb, rest, minHeight,
+            chatColumn.bottomAnchor.constraint(lessThanOrEqualTo: safe.bottomAnchor, constant: -6),
+
+            chatPill.topAnchor.constraint(equalTo: chatColumn.topAnchor, constant: 8),
+            chatPill.leadingAnchor.constraint(equalTo: chatColumn.leadingAnchor, constant: 10),
+            chatPill.trailingAnchor.constraint(lessThanOrEqualTo: chatColumn.trailingAnchor, constant: -10),
+            chatPill.heightAnchor.constraint(equalToConstant: 24),
+
+            chatPanel.topAnchor.constraint(equalTo: chatPill.bottomAnchor, constant: 6),
+            chatPanel.leadingAnchor.constraint(equalTo: chatColumn.leadingAnchor),
+            chatPanel.trailingAnchor.constraint(equalTo: chatColumn.trailingAnchor),
+            chatPanel.bottomAnchor.constraint(equalTo: chatCompose.topAnchor, constant: -6),
+            chatStack.leadingAnchor.constraint(equalTo: chatPanel.leadingAnchor, constant: 12),
+            chatStack.trailingAnchor.constraint(equalTo: chatPanel.trailingAnchor, constant: -12),
+            chatStack.bottomAnchor.constraint(equalTo: chatPanel.bottomAnchor, constant: -4),
+            stackTop,
+
+            chatCompose.leadingAnchor.constraint(equalTo: chatColumn.leadingAnchor, constant: 8),
+            chatCompose.trailingAnchor.constraint(equalTo: chatColumn.trailingAnchor, constant: -8),
+            chatCompose.bottomAnchor.constraint(equalTo: chatColumn.bottomAnchor, constant: -8),
+            chatCompose.heightAnchor.constraint(equalToConstant: 40),
+            chatField.leadingAnchor.constraint(equalTo: chatCompose.leadingAnchor, constant: 14),
+            chatField.topAnchor.constraint(equalTo: chatCompose.topAnchor),
+            chatField.bottomAnchor.constraint(equalTo: chatCompose.bottomAnchor),
+            chatField.trailingAnchor.constraint(equalTo: chatSendButton.leadingAnchor, constant: -8),
+            chatSendButton.trailingAnchor.constraint(equalTo: chatCompose.trailingAnchor, constant: -12),
+            chatSendButton.centerYAnchor.constraint(equalTo: chatCompose.centerYAnchor),
+
+            chatButton.widthAnchor.constraint(equalToConstant: 36),
+            chatButton.heightAnchor.constraint(equalToConstant: 36),
+            chatButton.topAnchor.constraint(equalTo: safe.topAnchor, constant: 40),
+            chatButton.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -12),
+            chatBadge.topAnchor.constraint(equalTo: chatButton.topAnchor, constant: -5),
+            chatBadge.trailingAnchor.constraint(equalTo: chatButton.trailingAnchor, constant: 5),
+            chatBadge.heightAnchor.constraint(equalToConstant: 18),
+            chatBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 18),
+        ])
+
+        // Split, portrait: video at the top (under the top bar), the control
+        // bar right under the picture, chat in the black space below.
+        let fullWidth = videoView.widthAnchor.constraint(equalTo: view.widthAnchor)
+        fullWidth.priority = .defaultHigh
+        let columnUnderBar = chatColumn.topAnchor.constraint(equalTo: bottomBar.bottomAnchor, constant: 8)
+        columnUnderBar.priority = .defaultHigh // yields to the keyboard (column may cover the faded bar)
+        chatSplitPortraitConstraints = [
+            videoView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            fullWidth,
+            videoView.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor),
+            videoView.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 4),
+            videoView.heightAnchor.constraint(equalTo: videoView.widthAnchor, multiplier: 9.0 / 16.0),
+            videoView.heightAnchor.constraint(lessThanOrEqualTo: safe.heightAnchor, multiplier: 0.4),
+            bottomBar.topAnchor.constraint(equalTo: videoView.bottomAnchor, constant: 6),
+            chatColumn.topAnchor.constraint(greaterThanOrEqualTo: videoView.bottomAnchor, constant: 6),
+            columnUnderBar,
+            chatColumn.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 10),
+            chatColumn.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -10),
+            chatColumnBg.leadingAnchor.constraint(equalTo: chatColumn.leadingAnchor),
+            chatColumnBg.trailingAnchor.constraint(equalTo: chatColumn.trailingAnchor),
+            chatColumnBg.topAnchor.constraint(equalTo: chatColumn.topAnchor),
+            chatColumnBg.bottomAnchor.constraint(equalTo: chatColumn.bottomAnchor),
+        ]
+        // Split, landscape: video on the left 65%, chat column on the right;
+        // the control bars stay over the video only.
+        chatSplitLandscapeConstraints = [
+            videoView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            videoView.topAnchor.constraint(equalTo: view.topAnchor),
+            videoView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            videoView.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.65),
+            chatColumnBg.leadingAnchor.constraint(equalTo: videoView.trailingAnchor),
+            chatColumnBg.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            chatColumnBg.topAnchor.constraint(equalTo: view.topAnchor),
+            chatColumnBg.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            chatColumn.leadingAnchor.constraint(equalTo: videoView.trailingAnchor, constant: 6),
+            chatColumn.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -6),
+            chatColumn.topAnchor.constraint(equalTo: safe.topAnchor, constant: 8),
+            topBar.trailingAnchor.constraint(equalTo: videoView.trailingAnchor, constant: -12),
+            bottomBar.trailingAnchor.constraint(equalTo: videoView.trailingAnchor, constant: -12),
+            skipButton.trailingAnchor.constraint(equalTo: videoView.trailingAnchor, constant: -20),
+        ]
+
+        // The light and the Up Next card stay above the landscape chat column.
+        view.bringSubviewToFront(healthDot)
+        view.bringSubviewToFront(upNextCard)
+
+        chatKeyboardObserver = NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main
+        ) { [weak self] n in self?.chatKeyboardChanged(n) }
+
+        chatUIReady = true
+        renderChatMessages(animated: false)
+        refreshChatUI()
+        if chatActive { view.setNeedsLayout() }
+    }
+
+    // MARK: Layout
+
+    /// Called from applyVideoLayout when the orientation or the split changes.
+    fileprivate func applyChatSplitLayout(portrait: Bool, split: Bool) {
+        guard chatUIReady else { return }
+        NSLayoutConstraint.deactivate(landscapeVideoConstraints + portraitVideoConstraints
+                                      + chatSplitPortraitConstraints + chatSplitLandscapeConstraints)
+        let originals = [chatOrigTopTrailing, chatOrigBarTrailing, chatOrigBarBottom, chatOrigSkipTrailing]
+        NSLayoutConstraint.activate(originals.compactMap { $0 })
+        if !split {
+            NSLayoutConstraint.activate(portrait ? portraitVideoConstraints : landscapeVideoConstraints)
+        } else if portrait {
+            chatOrigBarBottom?.isActive = false
+            NSLayoutConstraint.activate(chatSplitPortraitConstraints)
+        } else {
+            [chatOrigTopTrailing, chatOrigBarTrailing, chatOrigSkipTrailing].forEach { $0?.isActive = false }
+            NSLayoutConstraint.activate(chatSplitLandscapeConstraints)
+        }
+        chatColumn.backgroundColor = portrait ? UIColor(white: 0.07, alpha: 1) : .clear
+        chatColumn.layer.cornerRadius = portrait ? 14 : 0
+        chatColumnBg.alpha = portrait ? 0 : 1
+        chatSplitApplied = split
+    }
+
+    /// Re-run the layout (video frame + chat) in place; playback is untouched.
+    fileprivate func relayoutForChat() {
+        guard isViewLoaded, chatUIReady else { return }
+        view.setNeedsLayout()
+        UIView.animate(withDuration: 0.3, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.view.layoutIfNeeded()
+        }
+    }
+
+    fileprivate func refreshChatUI() {
+        guard chatUIReady else { return }
+        let split = chatSplitActive
+        chatColumn.isHidden = !split
+        chatColumnBg.isHidden = !split
+        chatButton.isHidden = !(chatActive && chatFullScreen)
+        chatBadge.isHidden = chatUnread == 0 || chatButton.isHidden
+        chatBadge.text = chatUnread > 9 ? "9+" : "\(chatUnread)"
+        chatFullButton.isHidden = !chatActive
+        let fullSymbol = chatFullScreen ? "rectangle.split.2x1" : "rectangle.expand.vertical"
+        let cfg = UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
+        let image = UIImage(systemName: fullSymbol, withConfiguration: cfg)
+            ?? UIImage(systemName: chatFullScreen ? "bubble.left.and.bubble.right" : "viewfinder", withConfiguration: cfg)
+        chatFullButton.setImage(image, for: .normal)
+        chatFullButton.accessibilityLabel = chatFullScreen ? "Exit Full Screen" : "Full Screen"
+
+        var parts: [String] = []
+        if let code = chatParty?["code"] as? String, !code.isEmpty { parts.append(code) }
+        if let n = (chatParty?["count"] as? NSNumber)?.intValue {
+            if let m = (chatParty?["max"] as? NSNumber)?.intValue { parts.append("\(n)/\(m)") } else { parts.append("\(n)") }
+        }
+        let host = (chatParty?["host"] as? Bool) == true
+        chatPill.text = parts.isEmpty ? "Party" : parts.joined(separator: " · ")
+        chatPill.accessibilityLabel = "Party \(chatPill.text ?? "")\(host ? ", you are the host" : "")"
+    }
+
+    // MARK: Messages
+
+    fileprivate static func chatId(_ m: [String: Any]) -> String {
+        if let v = m["id"], !(v is NSNull) { return "\(v)" }
+        return "\(m["ts"] ?? "")|\(m["name"] ?? "")|\(m["text"] ?? "")"
+    }
+
+    /// The server HTML-escapes chat text; show it as plain text.
+    fileprivate static func chatUnescape(_ s: String) -> String {
+        var t = s
+        for (a, b) in [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&#x27;", "'"), ("&amp;", "&")] {
+            t = t.replacingOccurrences(of: a, with: b)
+        }
+        return t
+    }
+
+    fileprivate func makeChatLabel(_ m: [String: Any]) -> UILabel {
+        let name = Self.chatUnescape(m["name"] as? String ?? "")
+        let text = Self.chatUnescape(m["text"] as? String ?? "")
+        let mine = (m["mine"] as? Bool) == true
+        let s = NSMutableAttributedString(
+            string: name.isEmpty ? "" : name + ": ",
+            attributes: [.font: UIFont.systemFont(ofSize: 14, weight: .bold),
+                         .foregroundColor: mine ? red : UIColor(white: 1, alpha: 0.75)])
+        s.append(NSAttributedString(string: text, attributes: [.font: UIFont.systemFont(ofSize: 14),
+                                                                .foregroundColor: UIColor.white]))
+        let l = UILabel()
+        l.attributedText = s // plain text, never HTML
+        l.numberOfLines = 0
+        l.lineBreakMode = .byWordWrapping
+        l.isUserInteractionEnabled = false
+        return l
+    }
+
+    fileprivate func renderChatMessages(animated: Bool) {
+        guard chatUIReady else { return }
+        let shown = Array(chatMessages.suffix(Self.chatShownMessages))
+        for v in chatStack.arrangedSubviews {
+            chatStack.removeArrangedSubview(v)
+            v.removeFromSuperview()
+        }
+        var keep: [String: UILabel] = [:]
+        for m in shown {
+            let id = Self.chatId(m)
+            let isNew = chatLabels[id] == nil
+            let label = chatLabels[id] ?? makeChatLabel(m)
+            keep[id] = label
+            chatStack.addArrangedSubview(label)
+            if isNew && animated {
+                label.alpha = 0
+                UIView.animate(withDuration: 0.3, delay: 0, options: [.allowUserInteraction]) { label.alpha = 1 }
+            } else {
+                label.alpha = 1
+            }
+        }
+        chatLabels = keep
+    }
+
+    // MARK: Actions
+
+    @objc fileprivate func chatFullScreenTapped() {
+        guard chatActive else { return }
+        chatFullScreen.toggle()
+        if chatFullScreen {
+            chatField.resignFirstResponder()
+        } else {
+            chatUnread = 0
+        }
+        refreshChatUI()
+        relayoutForChat()
+        scheduleHide()
+    }
+
+    @objc fileprivate func chatSendTapped() {
+        let t = (chatField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        onWatchChatSend?(String(t.prefix(Self.chatMaxLength)))
+        chatField.text = ""
+    }
+
+    fileprivate func chatKeyboardChanged(_ n: Notification) {
+        guard chatUIReady, let kb = chatKeyboardBottom,
+              let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+        // Keyboard frame is in screen coordinates; the player is full screen.
+        let local = view.convert(end, from: nil)
+        let overlap = max(0, view.bounds.maxY - local.minY)
+        kb.constant = -(overlap + 6)
+        let duration = (n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
+        UIView.animate(withDuration: duration, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.view.layoutIfNeeded()
+        }
+    }
+
+    // MARK: UITextFieldDelegate
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        if textField === chatField { chatSendTapped() }
+        return false // keep the keyboard up for the next message
+    }
+
+    func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange,
+                   replacementString string: String) -> Bool {
+        guard textField === chatField else { return true }
+        let current = textField.text ?? ""
+        guard let r = Range(range, in: current) else { return false }
+        let next = current.replacingCharacters(in: r, with: string)
+        if next.count <= Self.chatMaxLength { return true }
+        textField.text = String(next.prefix(Self.chatMaxLength))
+        return false
     }
 }

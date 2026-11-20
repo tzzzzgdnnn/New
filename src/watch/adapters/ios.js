@@ -40,6 +40,9 @@ export function createIosAdapter({ getKey } = {}) {
     /** Set by the room client: called with {action, pos, rate} on local taps. */
     onIntent: null,
 
+    /** Set by the room client: called with the text the viewer sent from the native chat bar. */
+    onChatSend: null,
+
     read() {
       if (!last) return { ...EMPTY };
       return {
@@ -88,6 +91,32 @@ export function createIosAdapter({ getKey } = {}) {
     setVoice(on) {
       post({ cmd: "voice", on: !!on });
     },
+
+    /** Full recent chat list, latest last: [{id, name, text, ts, mine}]. */
+    setChat(messages) {
+      const list = Array.isArray(messages) ? messages : [];
+      post({
+        cmd: "chat",
+        messages: list.map((m) => ({
+          id: m?.id ?? null,
+          name: String(m?.name ?? ""),
+          text: String(m?.text ?? ""),
+          ts: Number.isFinite(m?.ts) ? m.ts : 0,
+          mine: !!m?.mine,
+        })),
+      });
+    },
+
+    /** Party info for the native pill: code · count/max. */
+    setParty({ code, count, max, host } = {}) {
+      post({
+        cmd: "party",
+        code: String(code ?? ""),
+        count: Number(count) || 0,
+        max: Number(max) || 0,
+        host: !!host,
+      });
+    },
   };
 
   function onState(s) {
@@ -107,14 +136,25 @@ export function createIosAdapter({ getKey } = {}) {
     }
   }
 
+  function onChatSend(text) {
+    if (typeof text !== "string" || !text.trim()) return;
+    try {
+      adapter.onChatSend?.(text);
+    } catch (e) {
+      console.error("watch chat send handler failed", e);
+    }
+  }
+
   function install() {
     window.__sbWatchState = onState;
     window.__sbWatchIntent = onIntent;
+    window.__sbWatchChatSend = onChatSend;
   }
 
   function uninstall() {
     if (window.__sbWatchState === onState) delete window.__sbWatchState;
     if (window.__sbWatchIntent === onIntent) delete window.__sbWatchIntent;
+    if (window.__sbWatchChatSend === onChatSend) delete window.__sbWatchChatSend;
   }
 
   // Hooks are live as soon as the adapter exists, so state pushed right

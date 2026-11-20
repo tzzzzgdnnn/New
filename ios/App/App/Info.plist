@@ -62,6 +62,8 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Super Player uses the microphone for voice chat in Watch Together parties.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
