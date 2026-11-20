@@ -364,7 +364,7 @@ test("site: title pattern learned from a page's links", () => {
 });
 
 test("site: titles from link text or slug, fuzzy match with year", () => {
-  assert.deepEqual(S.titleOf({ href: "https://a/movies/night-of-the-living-dead-1968/", text: "" }), { title: "night of the living dead 1968", year: 1968 });
+  assert.deepEqual(S.titleOf({ href: "https://a/movies/night-of-the-living-dead-1968/", text: "" }), { title: "night of the living dead", year: 1968 });
   assert.deepEqual(S.titleOf({ href: "https://a/watch/123", text: "Watch The General (1926) Full Movie Online Free" }), { title: "The General", year: 1926 });
   const hits = [
     { url: "u1", title: "The General", year: 1926 },
@@ -417,4 +417,16 @@ test("site: recipes are normalized and need a search", () => {
   const r = S.normalizeRecipe({ home: "https://a.example/x", search: { type: "form", url: "https://a.example/?s={q}" }, player: { mode: "bogus" } });
   assert.equal(r.home, "https://a.example/");
   assert.equal(r.player.mode, "sniff");
+});
+
+test("site: the site's own no-reuse / no-AI rules are respected", () => {
+  assert.equal(S.reusePolicy({ robots: "User-agent: *\nDisallow: /admin\nSitemap: https://a/s.xml", html: "<p>Watch free</p>" }), null);
+  assert.match(S.reusePolicy({ robots: "User-agent: *\nDisallow: /" }), /all automated tools/);
+  assert.match(S.reusePolicy({ robots: "User-agent: GPTBot\nUser-agent: ClaudeBot\nDisallow: /\n\nUser-agent: *\nAllow: /" }), /AI agents/);
+  assert.equal(S.reusePolicy({ robots: "User-agent: Googlebot\nDisallow: /\n\nUser-agent: *\nAllow: /" }), null);
+  assert.match(S.reusePolicy({ robots: "User-agent: *\nContent-Signal: search=yes, ai-train=no, ai-input=no\nAllow: /" }), /ai-input=no/);
+  assert.match(S.reusePolicy({ html: '<meta name="tdm-reservation" content="1">' }), /data mining/);
+  assert.match(S.reusePolicy({ html: "<footer>Scraping and AI agents are not authorized to access this site.</footer>" }), /aren't authorized/);
+  assert.match(S.reusePolicy({ html: "<p>We prohibit reuse of our streams.</p>" }), /aren't authorized/);
+  assert.equal(S.reusePolicy({ html: "<p>Our AI picks are great. Bots love us.</p>" }), null);
 });

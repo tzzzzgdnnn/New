@@ -241,6 +241,7 @@ export function titleOf(link) {
   const year = Number(YEAR_RE.exec(text)?.[1] || YEAR_RE.exec(slug)?.[1]) || null;
   const title = text
     .replace(/\((?:19|20)\d{2}\)/g, " ")
+    .replace(/[\s\-–(]+(?:19|20)\d{2}\)?\s*$/, " ")
     .replace(/\b(?:watch|online|free|full movie|full|movie|hd|1080p|720p|480p|stream(?:ing)?|english sub(?:bed)?|subbed|dubbed)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -273,7 +274,7 @@ export function pickBest(hits, want, min = MIN_MATCH) {
 
 /** Words to search a site for a title with (short: many old sites search by phrase). */
 export function searchQuery(title, words = QUERY_WORDS) {
-  const w = String(title || "").replace(/[:(].*$/, "").trim().split(/\s+/).filter(Boolean);
+  const w = String(title || "").replace(/[:(].*$/, "").replace(/\s+(?:19|20)\d{2}\s*$/, "").trim().split(/\s+/).filter(Boolean);
   return (w.length > words ? w.slice(0, words) : w).join(" ") || String(title || "");
 }
 
@@ -478,6 +479,7 @@ export function streamsOf(render, base) {
   };
   for (const m of render?.media || []) add(m.url, m.page, m.how);
   for (const a of render?.api || []) for (const u of playableUrls(findMediaUrls(a.body, a.url))) add(u.url, a.page, "api");
+  for (const f of render?.frames || []) for (const v of f.videos || []) add(v, f.url, "element");
   for (const p of pageTexts(render)) for (const u of playableUrls(findMediaUrls(p.text, p.url))) add(u.url, p.url, "decoded");
   return out;
 }
@@ -574,6 +576,47 @@ async function getPage(net, url, { render = false, play = false, search = null, 
  * @param {{ net, apiKey?, onStep?: (id, state, detail) => void }} opts
  * @returns {Promise<{ ok: true, recipe, name, ms } | { ok: false, step, error }>}
  */
+/**
+ * The site's own word on reuse. Returns why the adder must leave the site
+ * alone, or null. Only explicit statements count: robots.txt shutting out
+ * every crawler or naming AI agents, AI content signals set to "no", a TDM
+ * reservation, or page text saying scraping / reuse / AI agents aren't
+ * authorized. Nothing here is worked around.
+ */
+export function reusePolicy({ robots = "", html = "" } = {}) {
+  const r = String(robots || "");
+  // robots.txt groups: "User-agent: *" (or an AI agent) with "Disallow: /".
+  let agents = [];
+  let inRules = false;
+  for (const raw of r.split(/\r?\n/)) {
+    const line = raw.replace(/#.*/, "").trim();
+    const m = /^([a-z-]+)\s*:\s*(.*)$/i.exec(line);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const val = m[2].trim();
+    if (key === "user-agent") {
+      if (inRules) agents = [];
+      inRules = false;
+      agents.push(val.toLowerCase());
+    } else if (key === "disallow" || key === "allow") {
+      inRules = true;
+      if (key === "disallow" && val === "/" && agents.some((a) => a === "*" || AI_AGENT_RE.test(a))) {
+        return agents.includes("*") ? "The site's robots.txt asks all automated tools to stay out." : "The site's robots.txt shuts out AI agents.";
+      }
+    } else if (key === "content-signal" && /ai-input\s*=\s*no/i.test(val)) {
+      return "The site says its content isn't for AI tools (ai-input=no).";
+    }
+  }
+  const h = String(html || "");
+  if (/<meta[^>]+name=["']tdm-reservation["'][^>]+content=["']1["']/i.test(h)) return "The site reserves its content from text and data mining.";
+  if (/<meta[^>]+name=["']robots["'][^>]+content=["'][^"']*\bnoai\b/i.test(h)) return "The site asks AI tools not to use its pages (noai).";
+  const text = stripTags(h.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ")).replace(/\s+/g, " ");
+  if (NO_REUSE_RE.test(text)) return "The site says scraping, reuse or AI agents aren't authorized.";
+  return null;
+}
+const AI_AGENT_RE = /gptbot|chatgpt|claude|anthropic|perplexity|google-extended|ccbot|bytespider|applebot-extended|ai2bot|cohere|meta-externalagent|omgili|diffbot/i;
+const NO_REUSE_RE = /\b(?:scraping|scrapers?|crawling|automated (?:access|tools|agents)|bots|ai (?:agents?|tools|crawlers|bots)|artificial intelligence|reuse|re-use|republish(?:ing)?|embedding)\b[^.]{0,80}\b(?:(?:is|are) (?:strictly )?(?:prohibited|forbidden|not (?:allowed|permitted|authori[sz]ed))|not (?:allowed|permitted|authori[sz]ed))|\b(?:prohibit(?:s|ed)?|forbid(?:s|den)?|not authori[sz]e[sd]?)\b[^.]{0,40}\b(?:scraping|crawling|ai agents?|automated access|reuse|re-use)\b/i;
+
 export async function discoverSite(link, { net, apiKey = null, onStep = () => {} } = {}) {
   const t0 = Date.now();
   const origin = originOf(link);
@@ -592,6 +635,10 @@ export async function discoverSite(link, { net, apiKey = null, onStep = () => {}
     let render = page.via === "render";
     if (page.error === "challenge") throw new StepError("site", "The site's security check didn't finish. Open the site once in Safari, then try again.");
     if (!page.html && !page.links) throw new StepError("site", page.error ? `The site answered ${page.error}.` : "The site didn't load.");
+    // The site's own rules come first: an explicit no means no.
+    const robotsRes = await net.fetch(`${origin}/robots.txt`, { timeoutMs: 6000 }).catch(() => null);
+    const refusal = reusePolicy({ robots: robotsRes?.ok ? robotsRes.text : "", html: page.html || "" });
+    if (refusal) throw new StepError("site", `${refusal} Super Player won't add it.`);
     let links = page.links || extractLinks(page.html, page.url);
     // A JavaScript-built home page: render it to see its links.
     if (!render && links.length < 10) {
@@ -617,6 +664,16 @@ export async function discoverSite(link, { net, apiKey = null, onStep = () => {}
     const titles = parseSearchResults("", page.url, { pattern, home, links }).filter(
       (h) => titleWords(h.title).length && (pattern || /[-_+]/.test(segments(h.url).pop() || "")),
     );
+    let sitemapLinks = null;
+    if (!titles.length) {
+      // Nothing to go on from the home page: the sitemap lists the titles.
+      const locs = await sitemapFor(net, origin);
+      if (locs.length) {
+        if (!pattern) pattern = learnTitlePattern(locs.slice(0, 3000), home);
+        sitemapLinks = locs.filter((u) => isTitleUrl(u, pattern, home)).map((u) => ({ url: u, ...titleOf({ href: u }) }));
+        titles.push(...sitemapLinks.slice(0, 8));
+      }
+    }
     const samples = (pastedPath && isTitleUrl(pastedPath, pattern, home) ? [{ url: pastedPath, ...titleOf({ href: pastedPath }) }] : []).concat(titles).slice(0, 4);
     if (!samples.length) throw new StepError("search", "Couldn't find any movie or show pages on the site.");
     const sample = samples.find((s) => titleWords(s.title).length >= 1 && s.title.length >= 3) || samples[0];
@@ -636,7 +693,12 @@ export async function discoverSite(link, { net, apiKey = null, onStep = () => {}
       }
       const text = search.render ? (await getPage(net, req.url, { render: true })).html : r?.ok ? r.text : "";
       const hits = parseSearchResults(text, req.url, { pattern, home });
-      return found(hits) ? { search, hits } : null;
+      if (!found(hits)) return null;
+      // A search that answers every query with the same list (a home page
+      // ignoring ?s=) isn't a search: a made-up query must not find the title.
+      const nreq = searchRequest(search, "zqxv wkjh", { apiKey });
+      const n = search.render ? (await getPage(net, nreq.url, { render: true })).html : (await net.fetch(nreq.url, { headers: nreq.headers, method: nreq.method, body: nreq.body, timeoutMs: 12000 }))?.text;
+      return found(parseSearchResults(n || "", nreq.url, { pattern, home })) ? null : { search, hits };
     };
     const methods = [];
     if (apiKey || isWordPress(html)) methods.push(() => run({ type: "wp", url: `${origin}/wp-json/wp/v2/search?search={q}&per_page=20&subtype=any` }));
