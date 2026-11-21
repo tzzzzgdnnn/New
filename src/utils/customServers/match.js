@@ -298,8 +298,10 @@ export async function matchSample(sample, { tmdb, anilist, arm, page = null, pre
       },
       { tmdb, t, a },
     );
-  const forTemplate = (h) =>
-    h.viaMal ? { ...h, ids: { mal: h.ids.mal } } : h.viaKitsu ? { ...h, ids: { kitsu: h.ids.kitsu } } : h.viaTvdb ? { ...h, ids: { tvdb: h.ids.tvdb } } : h;
+  // The match keeps every id; its template only the one the link holds.
+  const forTemplate = (h) => (h.viaMal ? { ...h, ids: { mal: h.ids.mal } } : h);
+  const detectFor = (h) =>
+    detectTemplate(sample, h.viaKitsu ? { ...h, ids: { kitsu: h.ids.kitsu } } : h.viaTvdb ? { ...h, ids: { tvdb: h.ids.tvdb } } : h);
 
   // The best hit whose template actually places the title in the link.
   for (const r of ranked) {
@@ -321,15 +323,22 @@ export async function matchSample(sample, { tmdb, anilist, arm, page = null, pre
         }
       }
     }
-    const detected = detectTemplate(sample, hit);
+    const detected = detectFor(hit);
     if (detected.ok) return done(r, hit, detected);
+    // A slug with a site id whose words are spelled differently from the
+    // title ("avengers-endgam-2019-5iu40l", same year): the whole segment is {site}.
+    if (a.siteId && a.slugSegment && !r.idInLink && a.yearGuess && a.yearGuess === hit.year && closeness(a.titleGuess, hit) >= 0.8) {
+      const m = { ...hit, siteValue: a.slugSegment };
+      const det = detectTemplate(sample, m);
+      if (det.ok) return done(r, m, det, { siteId: a.slugSegment });
+    }
   }
 
   // The page's own title / ids, when the link's words weren't enough.
   const fromPage = page || pageTitle ? await pageHits() : [];
   for (const r of fromPage) {
     const hit = forTemplate(r.hit);
-    let detected = detectTemplate(sample, hit);
+    let detected = detectFor(hit);
     let extra = { via: "page title" };
     if (!detected.ok) {
       // The link holds the site's own id for the title, not TMDB's: {site}.
