@@ -12,9 +12,9 @@
 // {site}: the site's own path for a title ("family-guy-y6bs3k"): slug plus a
 // per-title site id that TMDB can't give; looked up through the site's own
 // search (the server's `lookup` recipe) when a title plays.
-export const PLACEHOLDERS = Object.freeze(["tmdb", "imdb", "anilist", "mal", "title", "slug", "site", "year", "season", "episode", "absolute", "lang"]);
+export const PLACEHOLDERS = Object.freeze(["tmdb", "imdb", "tvdb", "anilist", "mal", "kitsu", "title", "slug", "site", "year", "season", "episode", "absolute", "lang"]);
 /** Placeholders that identify the title (a template needs one of them). */
-export const ID_PLACEHOLDERS = Object.freeze(["tmdb", "imdb", "anilist", "mal", "title", "slug", "site"]);
+export const ID_PLACEHOLDERS = Object.freeze(["tmdb", "imdb", "tvdb", "anilist", "mal", "kitsu", "title", "slug", "site"]);
 
 /**
  * A per-title site id at the end of a slug ("family-guy-y6bs3k" -> "y6bs3k",
@@ -49,6 +49,7 @@ const KIND_WORDS = {
 const NOISE_WORDS = new Set([
   "watch", "embed", "player", "play", "stream", "streaming", "video", "videos", "v", "e", "s", "ep", "html", "htm",
   "php", "aspx", "en", "online", "free", "full", "hd", "sub", "dub", "id", "media", "tmdb", "imdb", "www", "index",
+  "tvdb", "thetvdb", "themoviedb", "kitsu", "details",
   ...KIND_WORDS.anime, ...KIND_WORDS.tv, ...KIND_WORDS.movie,
 ]);
 
@@ -209,7 +210,9 @@ export function analyzeUrl(url) {
   let slugAt = -1;
   parts.forEach((part, i) => {
     const sp = splitSlug(part);
-    const run = sp.words.filter((w) => /[a-z]/i.test(w) && !/^tt\d+$/i.test(w) && !NOISE_WORDS.has(w.toLowerCase())).join(" ");
+    const kept = sp.words.filter((w) => /[a-z]/i.test(w) && !/^tt\d+$/i.test(w) && !NOISE_WORDS.has(w.toLowerCase()));
+    // A lone short word next to a token ("rn-6665a44c", m-zone's watch token) is not a title.
+    const run = kept.length === 1 && kept[0].length <= 2 && (sp.siteId || /\d/.test(part)) ? "" : kept.join(" ");
     if (run.length > titleGuess.length) {
       titleGuess = run;
       siteId = sp.siteId;
@@ -255,9 +258,15 @@ export function detectTemplate(sample, match) {
   };
   const num = (n) => new RegExp(`(?<![0-9])${n}(?![0-9])`, "g");
 
+  // 0. The site's own id for the title (an internal number or token, found
+  //    through its search): {site}.
+  if (match?.siteValue != null && String(match.siteValue) !== "") {
+    const v = String(match.siteValue);
+    take(spansOf(tail, new RegExp(`(?<![a-z0-9])${escapeRe(v)}(?![a-z0-9])`, "gi"), "site"));
+  }
   // 1. Title ids: exact numbers / IMDb id, never inside a longer number.
   if (ids.imdb) take(spansOf(tail, new RegExp(escapeRe(String(ids.imdb)), "g"), "imdb"));
-  for (const ph of ["tmdb", "anilist", "mal"]) {
+  for (const ph of ["tmdb", "tvdb", "anilist", "mal", "kitsu"]) {
     if (ids[ph] != null && String(ids[ph]) !== "") take(spansOf(tail, num(String(ids[ph])), ph));
   }
   // 2. Season / episode written out: s01e05, 1x05, season-2, ep=7, episode/7.
@@ -368,7 +377,7 @@ export function validateTemplate(template) {
   const used = templatePlaceholders(template);
   const unknown = used.filter((p) => !PLACEHOLDERS.includes(p));
   if (unknown.length) return `Unknown placeholder {${unknown[0]}}`;
-  if (!used.some((p) => ID_PLACEHOLDERS.includes(p))) return "Add {tmdb}, {imdb}, {anilist}, {mal}, {title} or {slug}";
+  if (!used.some((p) => ID_PLACEHOLDERS.includes(p))) return "Add {tmdb}, {imdb}, {tvdb}, {anilist}, {mal}, {kitsu}, {title} or {slug}";
   if (hasDuplicateId(template)) return "A title id is in the link twice";
   return null;
 }
@@ -385,8 +394,10 @@ export function buildUrl(template, v = {}) {
   const values = {
     tmdb: v.tmdb,
     imdb: v.imdb,
+    tvdb: v.tvdb,
     anilist: v.anilist,
     mal: v.mal,
+    kitsu: v.kitsu,
     title: v.title ? encodeURIComponent(v.title) : null,
     slug: v.title ? slugify(v.title, v.slugStyle || DEFAULT_SLUG_STYLE) || null : null,
     year: v.year,
@@ -433,13 +444,18 @@ export function deriveTemplate(template, from, to) {
   let p = out.join("/");
   let q = query;
   if (to === "tv") {
-    if (!templatePlaceholders(template).includes("episode")) p = p.replace(/\/?$/, "/{season}/{episode}");
+    if (!templatePlaceholders(template).some((x) => x === "episode" || x === "absolute")) p = p.replace(/\/?$/, "/{season}/{episode}");
   } else {
-    p = p.replace(/\/\{season\}/g, "").replace(/\/\{episode\}/g, "");
+    p = p.replace(/\/\{(season|episode|absolute)\}/g, "");
     q = q
       .split("&")
-      .filter((kv) => !/\{(season|episode)\}/.test(kv))
+      .filter((kv) => !/\{(season|episode|absolute)\}/.test(kv))
       .join("&");
   }
-  return origin + p + (q ? `?${q}` : "");
+  const out2 = origin + p + (q ? `?${q}` : "");
+  // Never a broken guess: one title id once, and a movie link without episode numbers.
+  if (hasDuplicateId(out2)) return null;
+  if (to === "movie" && /\{(season|episode|absolute)\}/.test(out2)) return null;
+  if (!templatePlaceholders(out2).some((x) => ID_PLACEHOLDERS.includes(x))) return null;
+  return out2;
 }
