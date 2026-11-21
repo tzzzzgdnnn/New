@@ -491,7 +491,7 @@ function upgrade(wv) {
   // after EMBED_READY_MS, or on an error message, the next server takes over
   // (Auto) or our own "not available" card shows.
   const GATE = BROWSER_ONLY;
-  const EMBED_READY_MS = 25000;
+  const EMBED_READY_MS = window.__sbEmbedReadyMs || 30000; // (tests shorten it)
   let embedReady = !GATE;
   let readyTimer = null;
   cleanups.push(() => clearTimeout(readyTimer));
@@ -502,6 +502,10 @@ function upgrade(wv) {
     // Covered by our own card (on top of it), not hidden: a hidden frame is
     // treated as off screen by WebKit and players wait to start.
     showCard("Finding the stream…", false);
+    // The page hides the whole player box until "did-finish-load"; our card is
+    // the loading screen now, so the box shows at once and the embed loads in a
+    // visible frame (a hidden one never started Cinezo's player in WebKit).
+    queueMicrotask(() => { fire("dom-ready"); fire("did-finish-load"); });
     readyTimer = setTimeout(() => embedFailed("it didn't load"), EMBED_READY_MS);
   };
   const revealEmbed = () => {
@@ -1080,7 +1084,11 @@ function upgrade(wv) {
     stopWeb();
     fire("dom-ready");
     fire("did-finish-load");
-    if (import.meta.env.VITE_WEB) armStartWatch();
+    // Web (GATE): the ready window decides instead: an embed that said it has
+    // the title waits for the viewer's tap; one that never says so is dropped
+    // after EMBED_READY_MS. (An 8 s watch from the load event cut Cinezo off
+    // before its player had reported in.)
+    if (import.meta.env.VITE_WEB && !GATE) armStartWatch();
   });
 
   Object.defineProperty(wv, "src", {

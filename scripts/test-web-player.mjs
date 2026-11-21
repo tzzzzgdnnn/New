@@ -10,7 +10,7 @@
 //    started, so the 8 s no-start watch keeps it
 // Bundled by scripts/run-ios-tests.sh with VITE_WEB=1. Not shipped.
 import assert from "node:assert/strict";
-import { test, mock } from "node:test";
+import { test } from "node:test";
 import { Window } from "happy-dom";
 
 const win = new Window({ url: "https://tzzzzgdnnn.github.io/New/", settings: { disableIframePageLoading: true, disableJavaScriptFileLoading: true, disableCSSFileLoading: true } });
@@ -119,28 +119,31 @@ test("#19: prewarm player is dropped while an embed plays, and not re-created", 
   assert.ok(warmVideo(), "prewarm works again after");
 });
 
-// Auto no-start watch: run with fake timers.
-async function watchRun({ src, message, rounds = 1, stored = null, foreign = false }) {
+// Ready window shortened for the tests (30 s in the app).
+win.__sbEmbedReadyMs = 300;
+const urlFor = (id, ctx) => {
+  const s = PLAYER_SOURCES.find((p) => p.id === id);
+  return ctx.type === "tv" ? s.tvUrl(ctx.tmdbId, ctx.season, ctx.episode) : s.movieUrl(ctx.tmdbId);
+};
+// Mounts `src`, optionally posts `message` from the embed, and plays the page's
+// part: an automatic server switch swaps the <webview> src like the page does.
+async function watchRun({ src, message, stored = null, foreign = false, follow = false, waitMs = 450 }) {
   localStorage.clear();
   if (stored) localStorage.setItem("streambert_playerSource", JSON.stringify(stored));
   win.__sbCtx = { type: "movie", tmdbId: 550 + Math.floor(Math.random() * 1e6), progressKey: null };
   const wv = await mount(src);
   const iframe = wv.querySelector("iframe");
   const picks = [];
-  const onPick = (e) => picks.push(e.detail);
+  const onPick = (e) => {
+    picks.push(e.detail);
+    if (follow) { localStorage.setItem("streambert_playerSource", JSON.stringify(e.detail)); setTimeout(() => wv.setAttribute("src", urlFor(e.detail, win.__sbCtx)), 5); }
+  };
   win.addEventListener("sb-select-server", onPick);
   let fails = 0;
   wv.addEventListener("did-fail-load", () => fails++);
-  mock.timers.enable({ apis: ["setTimeout"] });
-  try {
-    for (let r = 0; r < rounds; r++) {
-      iframe.dispatchEvent(new win.Event("load"));
-      if (message) win.dispatchEvent(new win.MessageEvent("message", { data: message, source: foreign ? win : iframe.contentWindow }));
-      mock.timers.tick(8_500);
-    }
-  } finally {
-    mock.timers.reset();
-  }
+  iframe.dispatchEvent(new win.Event("load"));
+  if (message) win.dispatchEvent(new win.MessageEvent("message", { data: message, source: foreign ? win : iframe.contentWindow }));
+  await tick(waitMs);
   win.removeEventListener("sb-select-server", onPick);
   const text = wv.querySelector(".sb-native-card")?.textContent || "";
   await unmount(wv);
@@ -174,11 +177,13 @@ test("Auto: an embed with no sign of playback moves to the next server", async (
 
 test("#19: web Auto failover is bounded (no loop), also with 'auto' stored as the pick", async () => {
   for (const stored of [null, "auto"]) {
-    const r = await watchRun({ src: VIDFAST, rounds: 12, stored });
+    const r = await watchRun({ src: VIDFAST, stored, follow: true, waitMs: 4000 });
     const n = PLAYER_SOURCES.length;
     assert.ok(r.picks.length <= n, `${r.picks.length} switches <= ${n} servers (stored ${stored})`);
     assert.equal(new Set(r.picks).size, r.picks.length, `no server picked twice: ${r.picks}`);
     assert.ok(!r.picks.includes("auto"));
+    assert.ok(r.picks.length >= 1, "it did fail over");
+    assert.match(r.text, /No other server worked/, `ends on our own card: ${r.picks}`);
   }
 });
 
