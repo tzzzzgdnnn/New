@@ -170,6 +170,54 @@ export function extractStream(text, extract, base) {
   return u && /^https?:$/.test(u.protocol) ? u.href : null;
 }
 
+/** At most this many streams from one answer are tried (the extracted one first). */
+export const MAX_STREAMS = 4;
+/** Per-stream headers an API may name for its CDN (never Cookie or auth). */
+const STREAM_HEADER = new Set(["referer", "origin", "user-agent"]);
+
+/** The Referer / Origin / User-Agent an API answer gives one stream. */
+function streamHeadersOf(entry) {
+  const out = {};
+  const h = entry && typeof entry === "object" && !Array.isArray(entry) ? entry.headers : null;
+  for (const [k, v] of Object.entries(h && typeof h === "object" ? h : {})) {
+    if (STREAM_HEADER.has(k.toLowerCase()) && typeof v === "string" && v) out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Every stream an answer offers for the title, the extracted one first, each
+ * with the headers the answer names for it. A path into a list
+ * ("streams.0.url") also yields the list's other entries in the API's order
+ * (fmfau: a 2160p rendition its CDN has removed, then a working 1080p one).
+ * @returns {Array<{ url: string, headers: object }>}
+ */
+export function extractStreams(text, extract, base) {
+  const first = extractStream(text, extract, base);
+  if (!first) return [];
+  if (extract.type !== "path") return [{ url: first, headers: {} }];
+  const json = parseJson(text);
+  const parts = splitPath(extract.path);
+  const at = parts.findLastIndex((p) => typeof p === "number");
+  if (at < 0) return [{ url: first, headers: streamHeadersOf(getPath(json, parts.slice(0, -1).join("."))) }];
+  const list = getPath(json, parts.slice(0, at).join("."));
+  if (!Array.isArray(list)) return [{ url: first, headers: {} }];
+  const rest = parts.slice(at + 1).join(".");
+  const order = [parts[at], ...list.keys()].filter((i, n, a) => a.indexOf(i) === n);
+  const out = [];
+  for (const i of order) {
+    const entry = list[i];
+    const raw = rest ? getPath(entry, rest) : entry;
+    const u = typeof raw === "string" ? urlOrNull(unescapeText(raw).trim(), base) : null;
+    if (!u || !/^https?:$/.test(u.protocol) || out.some((x) => x.url === u.href)) continue;
+    // The headers sit on the list entry (or on the object holding the link).
+    const holder = rest.includes(".") ? getPath(entry, rest.split(".").slice(0, -1).join(".")) : entry;
+    out.push({ url: u.href, headers: { ...streamHeadersOf(entry), ...streamHeadersOf(holder) } });
+    if (out.length >= MAX_STREAMS) break;
+  }
+  return out;
+}
+
 // ── Request templates ─────────────────────────────────────────────────────
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -672,10 +720,12 @@ function serverListsIn(obj, current, out = [], depth = 0) {
  * @param {string[]} texts answers to look in for a server list
  */
 export function apiServersFrom(req, others = [], texts = []) {
-  const pairs = queryPairs(req?.url);
+  const body = parseJson(req?.body);
+  const bodyPairs = body && typeof body === "object" && !Array.isArray(body) ? Object.entries(body).filter(([, v]) => typeof v === "string") : [];
+  const pairs = [...queryPairs(req?.url), ...bodyPairs.map(([k, v]) => [k, v, "body"])];
   const hit = pairs.find(([k, v]) => SERVER_KEY.test(k) && SERVER_VALUE.test(v) && !NOT_SERVER.test(v) && !/^\d+$/.test(v));
   if (!hit) return null;
-  const [param, current] = hit;
+  const [param, current, where] = hit;
   const seen = new Map([[current.toLowerCase(), current]]);
   const add = (v) => {
     if (typeof v === "string" && SERVER_VALUE.test(v) && !NOT_SERVER.test(v) && !seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v);
@@ -683,12 +733,14 @@ export function apiServersFrom(req, others = [], texts = []) {
   for (const o of others) {
     if (!o?.url || pathOf(o.url) !== pathOf(req.url)) continue;
     for (const [k, v] of queryPairs(o.url)) if (k === param) add(v);
+    const ob = parseJson(o.body);
+    if (where && ob && typeof ob[param] === "string") add(ob[param]);
   }
   for (const t of texts) {
     const json = parseJson(String(t || "").slice(0, MAX_TEXT));
     if (json) for (const list of serverListsIn(json, current)) list.forEach(add);
   }
-  return { param, current, list: [...seen.values()].slice(0, MAX_API_SERVERS) };
+  return { param, current, list: [...seen.values()].slice(0, MAX_API_SERVERS), ...(where ? { in: "body" } : {}) };
 }
 
 const replaceParam = (url, param, value) =>
@@ -697,8 +749,15 @@ const replaceParam = (url, param, value) =>
 /** A direct definition with another of the API's servers picked, or null. */
 export function directServerVariant(def, value) {
   if (!def?.url || !def.server?.param || value == null) return null;
+  const same = String(value).toLowerCase() === String(def.server.current).toLowerCase();
+  if (def.server.in === "body") {
+    const re = new RegExp(`("${escapeRe(def.server.param)}"\\s*:\\s*")${escapeRe(def.server.current)}(")`);
+    const body = String(def.body || "").replace(re, (_, a, b) => a + JSON.stringify(String(value)).slice(1, -1) + b);
+    if (body === def.body && !same) return null;
+    return { ...def, body, server: { ...def.server, current: String(value) } };
+  }
   const url = replaceParam(def.url, def.server.param, value);
-  if (url === def.url && String(value).toLowerCase() !== String(def.server.current).toLowerCase()) return null;
+  if (url === def.url && !same) return null;
   return { ...def, url, server: { ...def.server, current: String(value) } };
 }
 
@@ -726,6 +785,15 @@ export function deriveDirect(def, from, to) {
     }
     return all;
   });
+  // a JSON body's {"type":"movie"}
+  let body = def.body;
+  if (!switched && body) {
+    const b2 = body.replace(/"([A-Za-z_]+)"(\s*:\s*)"([A-Za-z]+)"/g, (all, k, sep, v) => (MEDIA_KEY.test(k) && v.toLowerCase() === word[from] ? `"${k}"${sep}"${word[to]}"` : all));
+    if (b2 !== body) {
+      body = b2;
+      switched = "body";
+    }
+  }
   // /movie/{tmdb} <-> /tv/{tmdb}/{season}/{episode}
   if (!switched) {
     const re = from === "movie" ? /\/movies?\/(\{(?:tmdb|imdb)\})(?![^/]*\{)/ : /\/tv\/(\{(?:tmdb|imdb)\})\/\{season\}\/\{episode\}/;
@@ -740,10 +808,9 @@ export function deriveDirect(def, from, to) {
     if (to === "movie") q = q.split("&").filter((p) => !/=\{(season|episode)\}$/.test(p)).join("&");
   }
   url = q ? `${path}?${q}` : path;
-  let body = def.body;
-  if (body && to === "tv" && !/\{episode\}/.test(body)) {
-    const json = parseJson(body);
-    if (json && typeof json === "object" && !Array.isArray(json)) body = body.replace(/\}\s*$/, `,"season":{season},"episode":{episode}}`);
+  if (switched === "body" && to === "movie") body = body.replace(/,\s*"(season|episode)"\s*:\s*\{(season|episode)\}/g, "");
+  if (body && switched !== "path" && to === "tv" && !/\{episode\}/.test(body + url)) {
+    if (/^\s*\{[\s\S]*\}\s*$/.test(body)) body = body.replace(/\}\s*$/, `,"season":{season},"episode":{episode}}`);
   }
   return { ...def, url, body, derived: from };
 }
@@ -764,4 +831,18 @@ function buildOptional(url, values) {
   // still needs an id
   if (!templatePlaceholders(rest).some((p) => ID_PLACEHOLDERS.includes(p))) return null;
   return buildUrl(rest, values);
+}
+
+/** Arrays of names written in a script (["vortex","nebula"] or [{id:"vortex"},…]) as JSON texts, for apiServersFrom. */
+export function jsonArraysIn(script) {
+  const out = [];
+  const re = /\[\s*(?:(?:"[\w.-]{2,32}"|'[\w.-]{2,32}')\s*,\s*){1,15}(?:"[\w.-]{2,32}"|'[\w.-]{2,32}')\s*,?\s*\]/g;
+  for (const m of String(script || "").slice(0, MAX_TEXT * 4).matchAll(re)) out.push(m[0].replace(/'/g, '"').replace(/,\s*\]$/, "]"));
+  // [{id:"vortex",name:"Vortex"},…] / [{value:'nova'}]: the name fields as a plain list
+  const objRe = /\[\s*\{[^\[\]]{0,4000}\}\s*\]/g;
+  for (const m of String(script || "").slice(0, MAX_TEXT * 4).matchAll(objRe)) {
+    const names = [...m[0].matchAll(/["']?(?:id|key|value|slug|server|code|name)["']?\s*:\s*["']([\w.-]{2,32})["']/g)].map((x) => x[1]);
+    if (names.length > 1) out.push(JSON.stringify(names));
+  }
+  return out;
 }

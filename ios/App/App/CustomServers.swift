@@ -245,14 +245,26 @@ final class ServerTestMessageHandler: NSObject, WKScriptMessageHandlerWithReply 
             out["stream"] = ["ok": true, "url": r.url.absoluteString, "kind": kind, "ms": ms,
                              "headers": r.headers.filter { $0.key.lowercased() != "cookie" },
                              "page": r.page.map { $0.absoluteString as Any } ?? NSNull()]
-            let check = PlayabilityCheck()
-            self?.runs[id]?.check = check
-            check.run(url: r.url, headers: r.headers, cookies: r.cookies) { ok, detail in
-                out["playable"] = ok ? ["ok": true, "detail": detail] : ["ok": false, "error": detail]
-                sbLog("test \(cand.id): stream \(kind) in \(ms) ms, playable \(ok)")
-                self?.finishRun(id)
-                done(out)
+            // The stream, then the page's other playlists in order: the first that opens counts.
+            let urls = [r.url] + Array(r.alternates.prefix(3))
+            var attempt: ((Int, String?) -> Void)? = nil
+            attempt = { n, firstError in
+                let check = PlayabilityCheck()
+                self?.runs[id]?.check = check
+                check.run(url: urls[n], headers: r.headers, cookies: r.cookies) { ok, detail in
+                    if !ok, n + 1 < urls.count { attempt?(n + 1, firstError ?? detail); return }
+                    attempt = nil
+                    if ok, n > 0, var st = out["stream"] as? [String: Any] {
+                        st["url"] = urls[n].absoluteString
+                        out["stream"] = st
+                    }
+                    out["playable"] = ok ? ["ok": true, "detail": detail] : ["ok": false, "error": firstError ?? detail]
+                    sbLog("test \(cand.id): stream \(kind) in \(ms) ms, playable \(ok) (\(n + 1)/\(urls.count))")
+                    self?.finishRun(id)
+                    done(out)
+                }
             }
+            attempt?(0, nil)
         }
     }
 

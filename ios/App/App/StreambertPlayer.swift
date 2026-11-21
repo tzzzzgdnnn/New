@@ -679,6 +679,9 @@ struct SniffResult {
     var page: URL? = nil
     /// Learn mode: the page's API calls and scripts ({ requests, scripts }).
     var learn: [String: Any]? = nil
+    /// Other playlists the page fetched (not audio), in order: a Test tries
+    /// them when `url` doesn't open (fmfau lists a removed 2160p first).
+    var alternates: [URL] = []
 }
 
 private final class WeakHandler: NSObject, WKScriptMessageHandler {
@@ -1027,6 +1030,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         let learnLog: [String: Any]? = cand.learn
             ? ["requests": slot.learnRequests, "scripts": slot.learnScripts] : nil
         let streamPage = best.page
+        let alternates = hls.map { $0.url }.filter { $0 != best.url && !$0.absoluteString.lowercased().contains("audio") }
         // The winner stays loaded (late subtitles); every other page goes.
         for other in slots.values where other !== slot { drop(other) }
         slots = [:]
@@ -1041,7 +1045,8 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             guard let self = self else { return }
             self.startLingering()
             self.deliver(SniffResult(candidateIndex: i, server: cand, url: best.url, headers: headers,
-                                     cookies: cookies, subtitles: subtitles, page: streamPage, learn: learnLog))
+                                     cookies: cookies, subtitles: subtitles, page: streamPage, learn: learnLog,
+                                     alternates: alternates))
         }
         slot.webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { all in
             done(all.filter { c in

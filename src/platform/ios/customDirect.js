@@ -7,10 +7,13 @@
 import { CapacitorHttp } from "@capacitor/core";
 import {
   buildDirectRequest,
+  apiServersFrom,
   checkAnswer,
   directServerVariant,
+  jsonArraysIn,
+  MAX_API_SERVERS,
   endpointCandidates,
-  extractStream,
+  extractStreams,
   extractorFor,
   learnFromLog,
   pageHeaders,
@@ -73,7 +76,9 @@ const within = (p, ms, what) =>
  * @param {object} def { url, method, headers, body, extract, streamHeaders }
  * @param {object} values the title's values (TMDB ids, title, season, episode…)
  * @param {object|null} want TMDB's idea of the title, for the answer check
- * @returns {Promise<{ ok, stream?, status?, check?, error?, request? }>}
+ * @returns {Promise<{ ok, stream?, streams?, status?, check?, error?, request? }>}
+ *   streams: every stream the answer offers, `stream` first, each with the
+ *   headers to play it with (the definition's, then the ones the API names)
  */
 export async function resolveDirect(def, values, want = null, { timeoutMs = DIRECT_TIMEOUT_MS } = {}) {
   const request = buildDirectRequest(def, values);
@@ -87,9 +92,10 @@ export async function resolveDirect(def, values, want = null, { timeoutMs = DIRE
   if (res.status < 200 || res.status >= 300) return { ok: false, request, status: res.status, error: `The API answered HTTP ${res.status}` };
   const check = want ? checkAnswer(res.text, want) : "unknown";
   if (check === "mismatch") return { ok: false, request, status: res.status, check, error: "The API answered for a different title." };
-  const stream = extractStream(res.text, def.extract, res.url || request.url);
-  if (!stream) return { ok: false, request, status: res.status, check, error: "No stream in the API's answer." };
-  return { ok: true, request, status: res.status, check, stream };
+  const found = extractStreams(res.text, def.extract, res.url || request.url);
+  if (!found.length) return { ok: false, request, status: res.status, check, error: "No stream in the API's answer." };
+  const streams = found.map((x) => ({ url: x.url, headers: { ...(def.streamHeaders || {}), ...x.headers } }));
+  return { ok: true, request, status: res.status, check, stream: streams[0].url, streams };
 }
 
 // ── Play: cached lookups, like Cinejoy's prefetch ────────────────────────
@@ -172,6 +178,11 @@ export async function learnDirect({ kind, values, want, stream, streamHeaders = 
   });
   // 1. A request the page made held the stream: replay it to be sure.
   const fromLog = learnFromLog(log, { stream, values, kind });
+  if (fromLog.ok && fromLog.def.server) {
+    // More of the API's servers from the page's scripts (a list next to the one the page used).
+    const more = apiServersFrom({ ...fromLog.def, ...(buildDirectRequest(fromLog.def, values) || {}) }, [], (await scriptTexts(log)).map(jsonArraysIn).flat());
+    if (more) fromLog.def.server = { ...fromLog.def.server, list: [...new Set([...fromLog.def.server.list, ...more.list])].slice(0, MAX_API_SERVERS) };
+  }
   if (fromLog.ok) {
     const r = await resolveDirect(fromLog.def, values, want);
     if (r.ok) return keep(fromLog.def, "page");
@@ -228,11 +239,24 @@ export async function testDirect(def, values, want, { playable = null } = {}) {
     label: "Direct: stream URL found",
     detail: r.ok ? r.stream : r.check === "mismatch" ? "The API answered for a different title (skipped)" : r.error,
   });
+  // Each stream the API offers, in its order, with the headers play uses: the first that opens wins.
   let play = { ok: false, error: "Skipped: no stream" };
-  if (r.ok && playable) play = await playable(r.stream, def.streamHeaders || {});
-  else if (r.ok) play = { ok: false, error: "Checking playback needs the iPhone app." };
+  let stream = r.stream || null;
+  if (r.ok && playable) {
+    const failed = [];
+    for (const s of r.streams) {
+      play = await playable(s.url, s.headers);
+      if (play.ok) {
+        stream = s.url;
+        if (failed.length) play = { ...play, detail: `${play.detail || "Ready to play"} · ${s.url} (${failed.length} earlier stream${failed.length > 1 ? "s" : ""} failed: ${failed[0]})` };
+        break;
+      }
+      failed.push(play.error);
+    }
+    if (!play.ok && r.streams.length > 1) play = { ok: false, error: `None of the API's ${r.streams.length} streams opened: ${failed.join("; ")}` };
+  } else if (r.ok) play = { ok: false, error: "Checking playback needs the iPhone app." };
   steps.push({ id: "d-playable", ok: !!play.ok, label: "Direct: stream playable", detail: play.ok ? play.detail || "Ready to play" : play.error });
-  return { ok: steps.every((s) => s.ok), steps, stream: r.stream || null };
+  return { ok: steps.every((s) => s.ok), steps, stream };
 }
 
 /**

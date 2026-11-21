@@ -794,3 +794,149 @@ test("Test tries every API server, not only the first that works; each that play
   setDirectHttp(null);
   await CS.deleteCustomServer(s.id);
 });
+
+// ── fmfau.com: the API lists a removed 2160p first (lightspeed.st answers 404 "Removed") ──
+
+test("fmfau Direct: a 404 on the API's first stream moves on to its next one, with the headers the API names", async () => {
+  const D = await import("../src/utils/customServers/direct.js");
+  const CD = await import("../src/platform/ios/customDirect.js");
+  const hls = (q) => `https://lightspeed.st/hls/0ef437a0-dcfb-4720-91a1-2a342408ef45/1/${q}/playlist.m3u8`;
+  const cdn = { Referer: "https://cinejoy.pk/", Origin: "https://cinejoy.pk", "User-Agent": "Chrome/122" };
+  // The shape fmfau's /api/sources/leibniz answered on 2026-11-21 (trimmed).
+  const answer = JSON.stringify({
+    ok: true,
+    provider: "direct",
+    streams: [
+      { url: hls("2160p"), quality: 2160, type: "hls", headers: { ...cdn, Cookie: "x=1" }, name: "Vortex 01" },
+      { url: hls("1080p"), quality: 1080, type: "hls", headers: cdn, name: "Vortex 01" },
+    ],
+    audioOptions: [{ id: "lang-en", url: "https://img1.fcxmb.com/hls/abc/720/index_266.m3u8", headers: { Referer: "https://player.vidzee.wtf/" } }],
+  });
+  // Learned from the page: the stream it played is the first one, read at streams.0.url.
+  const extract = D.extractorFor(answer, hls("2160p"));
+  assert.deepEqual(extract, { type: "path", path: "streams.0.url" });
+
+  const def = {
+    url: "https://fmfau.com/api/sources/leibniz?tmdbId={tmdb}&mediaType=movie",
+    method: "GET",
+    headers: { Referer: "https://fmfau.com/", Origin: "https://fmfau.com" },
+    extract,
+    streamHeaders: { Referer: "https://fmfau.com/", Origin: "https://fmfau.com", "User-Agent": CD.SAFARI_UA },
+  };
+  CD.setDirectHttp(async (req) => ({ status: 200, text: answer, url: req.url }));
+  const tried = [];
+  // lightspeed.st: 2160p is gone whatever the headers; 1080p opens.
+  const playable = async (url, headers) => {
+    tried.push({ url, headers });
+    return /2160p/.test(url) ? { ok: false, error: "The requested URL was not found on this server." } : { ok: true, detail: "Ready to play (92 min)" };
+  };
+  try {
+    const t = await CD.testDirect(def, { tmdb: 1560520 }, null, { playable });
+    const step = (id) => t.steps.find((s) => s.id === id);
+    assert.equal(step("d-stream").ok, true);
+    assert.equal(step("d-playable").ok, true, step("d-playable").detail);
+    assert.match(step("d-playable").detail, /1080p.*1 earlier stream failed: The requested URL was not found/);
+    assert.equal(t.ok, true);
+    assert.equal(t.stream, hls("1080p"), "Test reports the stream that played");
+    assert.deepEqual(tried.map((x) => x.url), [hls("2160p"), hls("1080p")]);
+    // The check uses play's headers: the API's for its CDN over the page's.
+    assert.equal(tried[1].headers.Referer, "https://cinejoy.pk/");
+    assert.equal(tried[1].headers["User-Agent"], "Chrome/122");
+    // Play gets the same streams and headers, in the same order.
+    const r = await CD.resolveDirect(def, { tmdb: 1560520 });
+    assert.deepEqual(r.streams.map((s) => [s.url, s.headers.Referer]), tried.map((x) => [x.url, x.headers.Referer]));
+    // Nothing opens: one clear failure naming each stream's error.
+    const none = await CD.testDirect(def, { tmdb: 1560520 }, null, { playable: async () => ({ ok: false, error: "HTTP 404" }) });
+    assert.match(none.steps.at(-1).detail, /None of the API's 2 streams opened: HTTP 404; HTTP 404/);
+  } finally {
+    CD.setDirectHttp(null);
+  }
+  const streams = D.extractStreams(answer, extract, "https://fmfau.com/api/sources/leibniz");
+  assert.deepEqual(streams.map((s) => s.url), [hls("2160p"), hls("1080p")], "the API's streams in order, no audio track");
+  assert.deepEqual(streams[0].headers, cdn, "the API's per-stream headers, never its Cookie");
+  // Other extract shapes keep working: one stream, no list.
+  assert.deepEqual(D.extractStreams(`{"file":"${hls("720p")}"}`, { type: "path", path: "file" }, "https://x.test/"), [{ url: hls("720p"), headers: {} }]);
+  assert.deepEqual(D.extractStreams(`src: "${hls("720p")}"`, { type: "regex" }, "https://x.test/"), [{ url: hls("720p"), headers: {} }]);
+});
+
+test("API servers learned from the site's own scripts (no list in the answer), learn time up to 15 min", async () => {
+  assert.equal(CS.LEARN_TIME.max, 15 * 60000);
+  assert.equal(CS.LEARN_TIME.def, 5 * 60000);
+  assert.equal(CS.LINK_WAIT.max, 5 * 60000);
+  assert.equal(CS.LINK_WAIT.def, 45000);
+  clearDirectCache();
+  // The answer names no other servers; the player bundle does (generic: any site, any key name).
+  setDirectHttp(async (req) => {
+    const u = new URL(req.url);
+    const sub = u.searchParams.get("sub");
+    return { status: 200, url: req.url, text: JSON.stringify({ title: "Inception", year: 2010, sources: [{ file: `https://cdn.x.test/${u.searchParams.get("tmdbId")}/${sub}/index.m3u8` }] }) };
+  });
+  const url = `${FM_API}?tmdbId=27205&mediaType=movie&title=Inception&year=2010&sub=vortex`;
+  const log = {
+    requests: [{ url, method: "GET", headers: {}, status: 200, text: JSON.stringify({ title: "Inception", year: 2010, sources: [{ file: "https://cdn.x.test/27205/vortex/index.m3u8" }] }), page: "https://fmfau.com/movie/27205" }],
+    scripts: [{ text: 'var a=1;const PROVIDERS=[{id:"vortex",label:"Vortex"},{id:"nebula",label:"Nebula"},{id:"solara",label:"Solara"}];const Q=["orbit","orbitbak","solis"];' }],
+  };
+  const { learnDirect } = await import("../src/platform/ios/customDirect.js");
+  const r = await learnDirect({ kind: "movie", values: fmValues, want: null, stream: "https://cdn.x.test/27205/vortex/index.m3u8", log, page: "https://fmfau.com/movie/27205" });
+  assert.equal(r.ok, true, r.reason);
+  assert.deepEqual(r.def.server.list.slice(0, 3), ["vortex", "nebula", "solara"]);
+  assert.ok(!r.def.server.list.includes("orbit"), "a list without the current server isn't the server list");
+  setDirectHttp(null);
+});
+
+// ── A Cinejoy-shaped API (POST, server picked in the body, server list only in the player bundle,
+//    per-stream headers in the answer), fully mapped by the generic learner. Plain JSON stands in for
+//    Cinejoy's sealed requests, which the learner rightly refuses (encrypted answers).
+test("generic learner maps a Cinejoy-shaped API: body server, bundle list, every server tried, recipe for all titles", async () => {
+  for (const s of CS.listCustomServers()) await CS.deleteCustomServer(s.id);
+  clearDirectCache();
+  const API = "https://api.cine.test/g";
+  const names = { 27205: ["Inception", 2010], 1399: ["Game of Thrones", 2011], 603: ["The Matrix", 1999] };
+  const answer = (b) => {
+    const [title, year] = names[b.tmdb] || ["?", 0];
+    if (b.server === "Polaris") return { status: 500, text: "{}" };
+    if (b.server === "Sirius") return { status: 200, text: JSON.stringify({ title, year, streams: [] }) };
+    const ep = b.type === "tv" ? `/${b.season}x${b.episode}` : "";
+    return { status: 200, text: JSON.stringify({ title, year, streams: [{ url: `https://edge.cine.test/${b.type}/${b.tmdb}${ep}/${b.server.toLowerCase()}/1080.m3u8`, headers: { Referer: "https://cine.test/", Origin: "https://cine.test" } }] }) };
+  };
+  const calls = [];
+  setDirectHttp(async (req) => {
+    const b = JSON.parse(req.body || "{}");
+    calls.push(b);
+    return { url: req.url, ...answer(b) };
+  });
+  const body = JSON.stringify({ path: "/sources", tmdb: 27205, type: "movie", server: "Light" });
+  const log = {
+    requests: [{ url: API, method: "POST", headers: { "Content-Type": "application/json" }, body, status: 200, text: answer(JSON.parse(body)).text, page: "https://cine.test/movie/27205" }],
+    scripts: [{ text: 'const UPSTREAMS=["Light","Nebula","Sirius","Rigel","Polaris"];function pick(i){return UPSTREAMS[i]}' }],
+  };
+  const values = { tmdb: 27205, title: "Inception", year: 2010 };
+  const s = await CS.saveCustomServer({
+    name: "Cine",
+    sample: "https://cine.test/movie/27205",
+    templates: { movie: "https://cine.test/movie/{tmdb}", tv: "https://cine.test/tv/{tmdb}/{season}/{episode}" },
+    lists: { anime: false, movies: true, tv: true },
+    match: inception,
+  });
+  window.webkit = { messageHandlers: { sbServerTest: { postMessage: async (m) => (m.playable ? { ok: true } : { ok: false }) } } };
+  const d = await CS.directSteps(s, "movie", { url: "https://cine.test/movie/27205", values, want: { title: "Inception", year: 2010, kind: "movie" } }, {
+    stream: { ok: true, url: "https://edge.cine.test/movie/27205/light/1080.m3u8", headers: {} },
+    learn: log,
+  });
+  delete window.webkit;
+  assert.ok(d.def, d.note);
+  assert.equal(d.def.body, '{"path":"/sources","tmdb":{tmdb},"type":"movie","server":"Light"}', "a template for every title");
+  assert.deepEqual(d.def.server.list, ["Light", "Nebula", "Sirius", "Rigel", "Polaris"], "server list read from the bundle");
+  for (const v of d.def.server.list) assert.ok(calls.some((c) => c.server === v), `${v} tried`);
+  assert.deepEqual(d.def.server.works, ["Light", "Nebula", "Rigel"], "every working server, not only the first");
+  await CS.recordDirect(s.id, "movie", d.def, d.note);
+  assert.deepEqual(CS.customPlayerSources().filter((x) => CS.baseCustomId(x.id) === s.id).map((x) => x.label), ["Cine", "Cine · Light", "Cine · Nebula", "Cine · Rigel"]);
+  // Another movie and a TV episode from the same recipe, with the API's own per-stream headers.
+  const movie = await CS.customCandidates({ type: "movie", tmdbId: 603, title: "The Matrix", year: 1999 });
+  assert.deepEqual(movie.filter((c) => c.direct).map((c) => c.url.split("/").slice(3, 7).join("/")), ["movie/603/light/1080.m3u8#sb-direct", "movie/603/light/1080.m3u8#sb-direct", "movie/603/nebula/1080.m3u8#sb-direct", "movie/603/rigel/1080.m3u8#sb-direct"]);
+  assert.equal(movie[0].headers.Referer, "https://cine.test/");
+  const tv = await CS.customCandidates({ type: "tv", tmdbId: 1399, tmdbSeason: 2, tmdbEpisode: 4, title: "Game of Thrones", year: 2011 });
+  assert.ok(tv.some((c) => c.url === "https://edge.cine.test/tv/1399/2x4/nebula/1080.m3u8#sb-direct"), "TV from the movie recipe (body type switched, season/episode added)");
+  setDirectHttp(null);
+  await CS.deleteCustomServer(s.id);
+});

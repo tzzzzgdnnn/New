@@ -37,8 +37,8 @@ export const CUSTOM_SNIFF_TIMEOUT_MS = 25000;
  */
 export const TEST_SNIFF_TIMEOUT_MS = 45000;
 /** "Learn site" time limits, set per site (Add Site sheet): the whole learn / Test, and each link. */
-export const LEARN_TIME = Object.freeze({ min: 60000, max: 300000, step: 15000, def: 180000 });
-export const LINK_WAIT = Object.freeze({ min: 15000, max: 120000, step: 5000, def: TEST_SNIFF_TIMEOUT_MS });
+export const LEARN_TIME = Object.freeze({ min: 60000, max: 900000, step: 15000, def: 300000 });
+export const LINK_WAIT = Object.freeze({ min: 15000, max: 300000, step: 5000, def: TEST_SNIFF_TIMEOUT_MS });
 export const clampMs = (v, lim) => Math.min(lim.max, Math.max(lim.min, Math.round((Number(v) || lim.def) / 1000) * 1000));
 
 /** At most this many of a site's own servers are kept per site. */
@@ -216,7 +216,7 @@ function normalizeApiServer(x) {
   if (!x || typeof x.param !== "string" || typeof x.current !== "string" || !/^[\w.-]{1,32}$/.test(x.param)) return null;
   const list = [...new Set([x.current, ...(Array.isArray(x.list) ? x.list : [])].filter((v) => typeof v === "string" && /^[\w.-]{1,32}$/.test(v)))].slice(0, MAX_API_SERVERS);
   const works = Array.isArray(x.works) ? list.filter((v) => x.works.includes(v)) : null;
-  return { param: x.param, current: x.current, list, ...(works ? { works } : {}) };
+  return { param: x.param, current: x.current, list, ...(works ? { works } : {}), ...(x.in === "body" ? { in: "body" } : {}) };
 }
 
 // Only string headers, never Cookie or Authorization (nothing session-bound is kept).
@@ -627,18 +627,19 @@ export async function customCandidates(ctx, opts = {}) {
             diag("custom", `${s.name}: its API answered for another title than ${ctx.title}; skipped`);
             return [];
           }
-          if (r.ok) list.push({ id, label, url: `${r.stream}#sb-direct`, headers: def.streamHeaders, direct: true });
+          // Every stream the API offers, in its order, each with its own headers: the player moves on when one fails.
+          if (r.ok) for (const x of r.streams) list.push({ id, label, url: `${x.url}#sb-direct`, headers: x.headers, direct: true });
           // Every server the site's API offers, its own entry: the same recipe with that server picked.
           const suffix = dubbable ? `:${dubMode}` : "";
           const extra = await Promise.all(
             (def.server ? apiServersOf(s) : []).map(async (x) => {
               const v = directServerVariant(def, x.value);
-              if (!v) return null;
+              if (!v) return [];
               const rv = await cachedResolve(`${s.id}:${x.value}:${url}`, v, values, want, { timeoutMs: directTimeoutMs });
-              return rv.ok ? { id: x.id + suffix, label: x.label, url: `${rv.stream}#sb-direct`, headers: def.streamHeaders, direct: true } : null;
+              return rv.ok ? rv.streams.map((st) => ({ id: x.id + suffix, label: x.label, url: `${st.url}#sb-direct`, headers: st.headers, direct: true })) : [];
             }),
           );
-          list.push(...extra.filter(Boolean));
+          list.push(...extra.flat());
         }
         if (s.mode !== "direct" || !def || def.derived) {
           const learn = s.mode !== "page" && (!def || def.derived) && Date.now() - (s.learnTried?.[kind] || 0) > LEARN_RETRY_MS;
