@@ -631,13 +631,14 @@ function TestPanel({ server, autoStart, onVerified }) {
     const iv = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(iv);
   }, [state?.running]);
-  const run = useCallback(async () => {
+  const run = useCallback(async (full = false) => {
     setState({ running: true, kinds: {} });
     t0.current = Date.now();
     const ctl = new AbortController();
     stop.current = ctl;
     const result = await testServer(listCustomServers().find((x) => x.id === server.id) || server, {
       signal: ctl.signal,
+      full: full === true,
       onStep: ({ kind, steps }) => setState((s) => ({ ...s, kinds: { ...s.kinds, [kind]: steps } })),
     });
     setState({ running: false, kinds: Object.fromEntries(result.kinds.map((k) => [k.kind, k.steps])), result });
@@ -678,7 +679,8 @@ function TestPanel({ server, autoStart, onVerified }) {
         />
       )}
       {state?.running && <Row label="Stop" center chevron={false} onClick={() => stop.current?.abort()} />}
-      {!state?.running && <Row label={state ? "Test Again" : "Test"} center chevron={false} onClick={run} />}
+      {!state?.running && <Row label={state ? "Test Again" : "Test"} center chevron={false} onClick={() => run(false)} />}
+      {!state?.running && (state || server.lastTest) && <Row label="Test Everything" detail="Also re-checks links that worked before" center chevron={false} onClick={() => run(true)} />}
       {state?.result?.playable && <Row label="Play Test" center chevron={false} onClick={() => playTest(server, state.result.playable.url)} />}
     </Group>
   );

@@ -603,3 +603,44 @@ test("whole-site play: the page's stream goes to the native player with Referer/
   assert.equal(other.Cookie, undefined, "never hand the site's cookies to another host");
   assert.equal(other["User-Agent"], "UA-9");
 });
+
+test("Test: retest memory keeps links that worked; Stop keeps what works", async () => {
+  const opened = [];
+  let answer = () => ({ page: { ok: true, url: "https://rt.test/" }, stream: { ok: true, kind: "hls", ms: 10 }, playable: { ok: true } });
+  window.webkit = { messageHandlers: { sbServerTest: { postMessage: async (m) => (m.candidate ? (opened.push(m.candidate.url), answer(m)) : { ok: true }) } } };
+  const s = await CS.saveCustomServer({ name: "RT", mode: "page", templates: { movie: "https://rt.test/embed/movie/{tmdb}" }, lists: { movies: true } });
+  assert.equal(s.learnMs, CS.LEARN_TIME.def);
+  assert.equal(s.linkWaitMs, CS.LINK_WAIT.def);
+  assert.equal(CS.clampMs(10, CS.LEARN_TIME), CS.LEARN_TIME.min);
+  assert.equal(CS.clampMs(9e9, CS.LINK_WAIT), CS.LINK_WAIT.max);
+  const r1 = await CS.testServer(s, { retest: false });
+  assert.ok(r1.playable && !r1.stopped);
+  await CS.recordTestResult(s.id, { ...r1, ok: false, summary: "Works for movie" });
+  let saved = CS.listCustomServers().find((x) => x.id === s.id);
+  assert.ok(CS.keptKind(saved, "movie"), "worked kind remembered");
+  // Retest: the movie link is kept without opening a page.
+  opened.length = 0;
+  const r2 = await CS.testServer(saved, { retest: true });
+  assert.equal(opened.length, 0);
+  assert.match(r2.kinds[0].steps.at(-1).detail, /Kept/);
+  // Test Everything opens it again.
+  await CS.testServer(saved, { retest: true, full: true });
+  assert.ok(opened.length > 0);
+  // A changed template is new: tried again.
+  assert.equal(CS.keptKind({ ...saved, templates: { movie: "https://rt.test/v/{tmdb}" } }, "movie"), false);
+  // Stop: the page never answers; the run ends and keeps what worked.
+  answer = () => new Promise(() => {});
+  const ctl = new AbortController();
+  const p = CS.testServer(saved, { retest: false, signal: ctl.signal });
+  setTimeout(() => ctl.abort(), 20);
+  const r3 = await p;
+  assert.equal(r3.stopped, "stop");
+  assert.equal(r3.summary, "Working · stopped early");
+  saved = CS.listCustomServers().find((x) => x.id === s.id);
+  assert.ok(CS.keptKind(saved, "movie"), "Stop doesn't forget a working link");
+  // A stopped run that found nothing leaves the last result alone.
+  const last = saved.lastTest;
+  await CS.recordTestResult(s.id, { ok: false, stopped: "stop", summary: "Stopped" });
+  assert.deepEqual(CS.listCustomServers().find((x) => x.id === s.id).lastTest, last);
+  delete window.webkit;
+});

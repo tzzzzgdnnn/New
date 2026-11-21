@@ -139,6 +139,10 @@ export function normalizeServer(s) {
     learnTried: Object.fromEntries(TEMPLATE_KINDS.filter((k) => Number(s.learnTried?.[k])).map((k) => [k, Number(s.learnTried[k])])),
     slugStyle: s.slugStyle ? normalizeSlugStyle(s.slugStyle) : null,
     learnMs: clampMs(s.learnMs, LEARN_TIME),
+    // Retest memory: when each kind's link last passed its Test (kept on a Retest).
+    worked: Object.fromEntries(
+      TEMPLATE_KINDS.filter((k) => Number(s.worked?.[k]?.at) > 0 && typeof s.worked[k].tpl === "string").map((k) => [k, { at: Number(s.worked[k].at), tpl: s.worked[k].tpl.slice(0, 500) }]),
+    ),
     linkWaitMs: clampMs(s.linkWaitMs, LINK_WAIT),
     // Recipe: the button the page needs pressed before it streams ("Start playback").
     tap: typeof s.tap === "string" && s.tap.trim() ? s.tap.trim().slice(0, 60) : null,
@@ -274,7 +278,8 @@ export async function saveCustomServer(server) {
   const list = listCustomServers();
   const i = list.findIndex((x) => x.id === s.id);
   if (i < 0 && list.length >= MAX_SERVERS) throw new Error(`You can add up to ${MAX_SERVERS} custom servers.`);
-  if (i >= 0) list[i] = { ...s, createdAt: list[i].createdAt };
+  // Retest memory belongs to the Test: an open sheet's older copy never overwrites it.
+  if (i >= 0) list[i] = { ...s, worked: list[i].worked || s.worked, createdAt: list[i].createdAt };
   else list.push(s);
   await writeAll(list);
   return s;
@@ -292,18 +297,24 @@ export async function recordTestResult(id, result) {
   const list = listCustomServers();
   const s = list.find((x) => x.id === id);
   if (!s) return;
+  // A stopped run that found nothing new leaves the last full result in place.
+  if (result.stopped && s.lastTest && !result.ok) return;
   s.lastTest = { ok: !!result.ok, at: Date.now(), summary: result.summary || "" };
   await writeAll(list);
 }
 
 /** Store the recipe the Test learned: the button to press and the site's servers. */
-export async function recordRecipe(id, { tap, siteServers, verified = [] } = {}) {
+export async function recordRecipe(id, { tap, siteServers, verified = [], failed = [] } = {}) {
   const list = listCustomServers();
   const s = list.find((x) => x.id === id);
   if (!s) return;
   if (tap !== undefined) s.tap = tap || null;
   if (siteServers) s.siteServers = normalizeSiteServers(siteServers);
   Object.assign(s, withVerified(s, verified));
+  // Retest memory: when each kind's link passed, with the template it passed on.
+  s.worked = { ...s.worked };
+  for (const k of failed) delete s.worked[k];
+  for (const k of verified) if (s.templates?.[k]) s.worked[k] = { at: Date.now(), tpl: s.templates[k] };
   await writeAll(list);
 }
 
@@ -988,7 +999,7 @@ export async function directSteps(server, kind, link, r) {
  * blocked, then Direct mode (learned from the page) and its own test.
  * Learned APIs are saved on the server.
  */
-export async function testServer(server, { onStep, retest = !!server.lastTest, signal: outer = null } = {}) {
+export async function testServer(server, { onStep, retest = !!server.lastTest, full = false, signal: outer = null } = {}) {
   // The site's own time limits: the whole run (learn time) and each link.
   const learnMs = clampMs(server.learnMs, LEARN_TIME);
   const waitMs = clampMs(server.linkWaitMs, LINK_WAIT);
@@ -1001,10 +1012,17 @@ export async function testServer(server, { onStep, retest = !!server.lastTest, s
   const nativeTry = (srv, url, o = {}) =>
     signal.aborted ? Promise.resolve({ ok: false, error: "Stopped" }) : Promise.race([nativeTryRaw(srv, url, { timeoutMs: waitMs, ...o }), stopped]);
   try {
-    return await testServerRun(server, { onStep, retest, signal, nativeTry, waitMs });
+    const r = await testServerRun(server, { onStep, retest: retest && !full, signal, nativeTry, waitMs });
+    return { ...r, stopped: signal.aborted && !outer?.aborted ? "time" : signal.aborted ? "stop" : false };
   } finally {
     clearTimeout(budget);
   }
+}
+
+/** Whether a kind's link passed its last Test with the template it has now. */
+export function keptKind(server, kind) {
+  const w = server?.worked?.[kind];
+  return !!(w && w.at > 0 && w.tpl && w.tpl === server.templates?.[kind]);
 }
 
 async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs }) {
@@ -1015,12 +1033,20 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
   const seenServers = [];
   let serversKind = null;
   const verified = [];
+  const failed = [];
   for (const kind of kinds) {
     const steps = [];
     const push = (...s) => {
       steps.push(...s);
       onStep?.({ kind, steps: steps.slice() });
     };
+    const keptBefore = keptKind(server, kind);
+    // Stop (or the learn time running out): the kinds not reached yet stay as they were.
+    if (signal?.aborted) {
+      push({ id: "stopped", ok: keptBefore, neutral: true, label: "Stopped", detail: keptBefore ? "Kept: worked before" : "Not tried" });
+      results.push({ kind, steps });
+      continue;
+    }
     // A live "still looking… 12 s" line while a page is being tried; the try ends at the first stream.
     const looking = async (label, job) => {
       const t0 = Date.now();
@@ -1053,14 +1079,28 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
       results.push({ kind, steps });
       continue;
     }
+    // Retest memory: a link that passed before (same template) is kept; only failed or new ones are tried again.
+    if (retest && keptBefore) {
+      push({ id: "playable", ok: true, label: "Plays", detail: "Kept: worked before (Test Everything checks it again)" });
+      if (!playable) playable = { kind, url: link.url };
+      if (!serversKind) serversKind = { kind, link, steps, push };
+      results.push({ kind, steps });
+      continue;
+    }
     const t0 = Date.now();
     let r = await looking(`Trying ${link.title}`, () => nativeTry(server, link.url, { learn: server.mode !== "page" }));
     // One more try in a fresh hidden page (slow first load, a flaky server), unless a check blocks it.
     if (!r?.stream?.ok && !r?.page?.humanCheck && !r?.page?.wall && r?.page?.ok) {
       r = await looking(`Trying ${link.title} again`, () => nativeTry(server, link.url, { learn: server.mode !== "page" }));
     }
-    push(...pageSteps(r, { title: link.title, want: link.want, site: server.name, t0 }));
     const works = !!r?.stream?.ok && !!r?.playable?.ok;
+    if (!works && signal?.aborted) {
+      // Stopped mid-try: nothing learned is overwritten.
+      push({ id: "stopped", ok: keptBefore, neutral: true, label: "Stopped", detail: keptBefore ? "Kept: worked before" : "Stopped before a stream showed" });
+      results.push({ kind, steps });
+      continue;
+    }
+    push(...pageSteps(r, { title: link.title, want: link.want, site: server.name, t0 }));
     // Recipe: the last button pressed before the stream showed.
     if (works && r?.page?.taps?.length) tap = r.page.taps[r.page.taps.length - 1];
     for (const l of r?.page?.servers || []) if (!seenServers.includes(l)) seenServers.push(l);
@@ -1071,7 +1111,7 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
     }
     if (works && !playable) playable = { kind, url: link.url };
     // More titles, so the link is known to work for every title, not only this one.
-    if (works) {
+    if (works && !signal?.aborted) {
       const extra = await extraTitlesFor(server, kind);
       const tries = await looking(`Trying ${extra.map((x) => x.title).join(", ")}`, () =>
         Promise.all(extra.map(async (x) => ({ x, r: await nativeTry({ ...server, tap }, x.url, { learn: false }) }))),
@@ -1090,6 +1130,7 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
     }
     if (works && !serversKind) serversKind = { kind, link, steps, push };
     if (works) verified.push(kind);
+    else failed.push(kind);
     results.push({ kind, steps });
   }
   // The site's own servers: each one tried with only its button pressed. On a
@@ -1127,7 +1168,7 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
   } else {
     siteServers.push(...before);
   }
-  await recordRecipe(server.id, { tap, siteServers, verified });
+  await recordRecipe(server.id, { tap, siteServers, verified, failed });
   const ok = results.length > 0 && results.every((k) => k.steps.every((s) => s.ok));
   const working = results.filter((k) => k.steps.some((s) => (s.id === "playable" || s.id === "d-playable") && s.ok)).map((k) => k.kind);
   const nServers = siteServers.filter((x) => x.works).length;
@@ -1135,7 +1176,7 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
     ? "Working"
     : working.length
       ? `Works for ${working.join(", ")}`
-      : results.flatMap((k) => k.steps).find((s) => !s.ok)?.detail || "Not working") + (nServers ? ` · ${nServers} site server${nServers === 1 ? "" : "s"}` : "");
+      : results.flatMap((k) => k.steps).find((s) => !s.ok)?.detail || "Not working") + (signal?.aborted ? " · stopped early" : "") + (nServers ? ` · ${nServers} site server${nServers === 1 ? "" : "s"}` : "");
   return { ok, kinds: results, summary, playable, tap, siteServers, verified };
 }
 
