@@ -1881,8 +1881,12 @@ export default function TVPage({
       anilistEpisode,
       dubMode,
       progressKey: currentProgressKey,
+      // Minutes (web: a server's video far longer than this is the wrong one).
+      runtime: selectedEp?.runtime || details?.episode_run_time?.[0] || null,
     });
   }, [
+    selectedEp?.runtime,
+    details?.episode_run_time,
     currentProgressKey,
     item.name,
     item.title,
