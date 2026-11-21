@@ -931,6 +931,9 @@ test("generic learner maps a Cinejoy-shaped API: body server, bundle list, every
   assert.deepEqual(d.def.server.works, ["Light", "Nebula", "Rigel"], "every working server, not only the first");
   await CS.recordDirect(s.id, "movie", d.def, d.note);
   assert.deepEqual(CS.customPlayerSources().filter((x) => CS.baseCustomId(x.id) === s.id).map((x) => x.label), ["Cine", "Cine · Light", "Cine · Nebula", "Cine · Rigel"]);
+  const stored = CS.listCustomServers().find((x) => x.id === s.id);
+  assert.equal(CS.serverCountText(CS.serverCount(stored)), "3 of 5 servers work", "count for the Test summary and the site row");
+  assert.equal(CS.serverCountText(CS.serverCount({ ...stored, siteServers: [{ label: "A", works: true }, { label: "B", works: false }] })), "4 of 7 servers work", "site buttons counted too");
   // Another movie and a TV episode from the same recipe, with the API's own per-stream headers.
   const movie = await CS.customCandidates({ type: "movie", tmdbId: 603, title: "The Matrix", year: 1999 });
   assert.deepEqual(movie.filter((c) => c.direct).map((c) => c.url.split("/").slice(3, 7).join("/")), ["movie/603/light/1080.m3u8#sb-direct", "movie/603/light/1080.m3u8#sb-direct", "movie/603/nebula/1080.m3u8#sb-direct", "movie/603/rigel/1080.m3u8#sb-direct"]);

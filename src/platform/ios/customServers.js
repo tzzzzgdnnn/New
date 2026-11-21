@@ -1219,14 +1219,26 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
   await recordRecipe(server.id, { tap, siteServers, verified, failed });
   const ok = results.length > 0 && results.every((k) => k.steps.every((s) => s.ok));
   const working = results.filter((k) => k.steps.some((s) => (s.id === "playable" || s.id === "d-playable") && s.ok)).map((k) => k.kind);
-  const nServers = siteServers.filter((x) => x.works).length;
+  const count = serverCount({ ...(listCustomServers().find((x) => x.id === server.id) || server), siteServers });
   const summary = (ok
     ? "Working"
     : working.length
       ? `Works for ${working.join(", ")}`
-      : results.flatMap((k) => k.steps).find((s) => !s.ok)?.detail || "Not working") + (signal?.aborted ? " · stopped early" : "") + (nServers ? ` · ${nServers} site server${nServers === 1 ? "" : "s"}` : "");
+      : results.flatMap((k) => k.steps).find((s) => !s.ok)?.detail || "Not working") + (signal?.aborted ? " · stopped early" : "") + (count.total ? ` · ${serverCountText(count)}` : "");
   return { ok, kinds: results, summary, playable, tap, siteServers, verified };
 }
+
+/** How many of a site's servers work: its own server buttons and its API's servers, each counted once. */
+export function serverCount(s) {
+  const site = (s.siteServers || []).filter((x) => typeof x.works === "boolean");
+  const api = new Map();
+  for (const d of Object.values(s.direct || {})) {
+    if (!d?.server?.works) continue;
+    for (const v of d.server.list || []) api.set(v.toLowerCase(), api.get(v.toLowerCase()) || d.server.works.includes(v));
+  }
+  return { works: site.filter((x) => x.works).length + [...api.values()].filter(Boolean).length, total: site.length + api.size };
+}
+export const serverCountText = ({ works, total }) => `${works} of ${total} server${total === 1 ? "" : "s"} work${total === 1 && works === 1 ? "s" : ""}`;
 
 /** The extra titles a kind is checked with (links built from the server's template). */
 export async function extraTitlesFor(server, kind) {

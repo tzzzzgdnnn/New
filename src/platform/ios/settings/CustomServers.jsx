@@ -21,6 +21,8 @@ import {
   saveProblem,
   testServer,
   withVerified,
+  serverCount,
+  serverCountText,
 } from "../customServers";
 import { smartAdd, SMART_STEPS } from "../customSmartAdd";
 import { isLocalAddress, originOf, validateTemplate } from "../../../utils/customServers/template";
@@ -114,7 +116,7 @@ export default function CustomServersPage({ apiKey }) {
           <Row
             key={s.id}
             label={<SiteLabel server={s} />}
-            detail={`${listsText(s.lists)}${s.lastTest ? ` · ${s.lastTest.ok ? "Working" : s.lastTest.summary}` : ""}`}
+            detail={`${listsText(s.lists)}${s.lastTest ? ` · ${s.lastTest.ok ? "Working" : s.lastTest.summary.split(" · ")[0]}` : ""}${serverCount(s).total ? ` · ${serverCountText(serverCount(s))}` : ""}`}
             onClick={() => setEditing({ server: s, autoTest: false })}
           />
         ))}
