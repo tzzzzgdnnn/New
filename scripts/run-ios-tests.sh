@@ -24,3 +24,11 @@ for t in test-web-player; do
     --external:happy-dom --log-level=warning --outfile="$OUT/$t.mjs"
   node "$OUT/$t.mjs"
 done
+# Site corpus (#27): offline fixtures, report only. Known-failing sites are
+# listed in the output and never fail the run.
+npx esbuild scripts/site-corpus/run.mjs --bundle --platform=node --format=esm \
+  --loader:.json=json --loader:.js=jsx --loader:.css=empty --jsx=automatic \
+  --define:import.meta.env='{"VITE_TARGET":"ios","VITE_TMDB_TOKEN":""}' \
+  --define:process.env.NODE_ENV='"development"' \
+  --external:happy-dom --log-level=warning --outfile="$OUT/site-corpus.mjs"
+node "$OUT/site-corpus.mjs" || echo "site corpus: harness error (report only)"
