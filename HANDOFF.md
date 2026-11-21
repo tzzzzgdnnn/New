@@ -1,8 +1,34 @@
-# HANDOFF — Super Player (2026-11-20, 18:20 ET)
+# HANDOFF — Super Player (2026-11-20, 22:50 ET)
 
 Branches: `apk-port` (Android + all shared JS), `ipa-test-build` (iOS IPA + web Pages deploy). Shared JS is
 copied file-by-file from apk-port to ipa-test-build (worktree pattern; never merge the Android folder there).
 Live web app: https://tzzzzgdnnn.github.io/New/ (gh-pages, built by `.github/workflows/deploy-web.yml` on push to ipa-test-build).
+
+## 22:50 ET session 7 — WHERE I STOPPED (read first)
+- PUSHED apk-port 9b442cb / ipa-test-build 29deb24 (shared JS copied file-by-file; the 4 files were identical before):
+  - Cinezo skipped for Baddies: `TITLE_SERVER_BLOCKS` / `serverBlockedFor(id, ctx)` in src/utils/api.js (16 Baddies TMDB ids
+    from girlsnight.json + any TV title matching /baddies/i). Applied in webview.js `serverListFor` (native menu + web/Android
+    Auto failover), `buildCandidateList` (iPhone native candidates, also a hand-picked Cinezo), `loadUrl` (a Cinezo page for a
+    blocked title is never shown: Auto -> nextServer, hand pick -> our card "Cinezo plays the wrong episodes for this show"),
+    and ServerSheet.jsx (not offered). Add more titles/servers to TITLE_SERVER_BLOCKS.
+    Note: on web a Baddies title now has only Cinejoy direct + Vidfast (Cinejoy's Baddies playlists 404 from the sandbox).
+  - Vidfast retry (rebuilt; the earlier one was lost): webview.js `retryVidfast(why)` at the top of `embedFailed` and
+    `nextServer`: a failed Vidfast page gets ONE fresh load per episode before the next server (not for status 404 / wrong
+    video / refused). Android resets the sniffed-stream state (`onFreshLoad`). iPhone native: `withVidfastRetry(candidates)`
+    inserts one Vidfast retry candidate 3 slots after the original (sniffer runs 3 pages in parallel).
+  - scripts/test-web-player.mjs: +3 tests (15/15 pass). Other suites unchanged (known failures: test-search, test-kids,
+    test-downloads-group). `npx vite build --mode ios` OK (local node_modules needed `npm install` for peerjs).
+- Titles 21-58 (Girls Night Shows tab, row order: Zeus Network #21-35, Now That's TV #36-43, Girls Night Shows #44-58):
+  API-level check only (/workspace/work/titlecheck, results-*.json). Cinejoy has a playable stream for S1E1 only for
+  Grey's Anatomy and Jane the Virgin (Polaris); the others' upstream playlists 404 or none. Vidfast/Cinezo pages answer
+  200 for every id (single-page apps) so their streams could NOT be verified: Playwright WebKit and Chromium both fail to
+  launch in this sandbox (missing host libraries). No saved list of the 58 titles was found; this order is my reconstruction.
+- Not pushed: /workspace/work/sp-holidays (ipa-holidays, uncommitted) still applies cleanly on ipa-test-build 29deb24.
+- Unverified on a device: Baddies -> Auto skipping Cinezo, Vidfast retry on iPhone native and web.
+- CI: iOS 44862036011 (ipa-test-build 29deb24) success, v2.7.88, artifact Super-Player-unsigned; install page
+  https://tzzzzgdnnn.github.io/New/get/a3a158950610bf718216/ shows 2.7.88. Android 44862019823 (apk-port 9b442cb) success.
+  Web deploy 44862036159 success. ipa-player-android-look (94f40ea, speed pill) is an ancestor of ipa-test-build, so the
+  install-page IPA already has the pill; that branch was not moved.
 
 ## 18:50 ET session 6 — WHERE I STOPPED (read first)
 - PUSHED: web server list cut to servers verified playing on web: Vidfast (Auto first), Cinejoy direct, Cinezo
