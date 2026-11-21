@@ -27,6 +27,8 @@ export const CUSTOM_SERVERS_KEY = "customServers";
 const KEYCHAIN_KEY = "customServers";
 /** Ids of custom servers start with this; their placeholder links use CUSTOM_HOST. */
 export const CUSTOM_ID_PREFIX = "custom-";
+/** Retest memory version: a kind is kept as "worked" only with this mark, set when its Plays check passed. */
+export const WORKED_PLAY_PASS = 2;
 const CUSTOM_HOST = "sp-custom.invalid";
 export const CHANGED_EVENT = "sb-custom-servers-changed";
 /** The hidden page of a custom site gets this long to show a stream when playing. */
@@ -158,9 +160,12 @@ export function normalizeServer(s) {
     learnTried: Object.fromEntries(TEMPLATE_KINDS.filter((k) => Number(s.learnTried?.[k])).map((k) => [k, Number(s.learnTried[k])])),
     slugStyle: s.slugStyle ? normalizeSlugStyle(s.slugStyle) : null,
     learnMs: clampMs(s.learnMs, LEARN_TIME),
-    // Retest memory: when each kind's link last passed its Test (kept on a Retest).
+    // Retest memory: when each kind's link last PLAYED in its Test (kept on a Retest).
+    // Only entries with the current play-pass mark count: a "worked" saved by an
+    // older build (where a found stream could pass without playing) is re-checked.
     worked: Object.fromEntries(
-      TEMPLATE_KINDS.filter((k) => Number(s.worked?.[k]?.at) > 0 && typeof s.worked[k].tpl === "string").map((k) => [k, { at: Number(s.worked[k].at), tpl: s.worked[k].tpl.slice(0, 500) }]),
+      TEMPLATE_KINDS.filter((k) => Number(s.worked?.[k]?.at) > 0 && typeof s.worked[k].tpl === "string" && s.worked[k].played === WORKED_PLAY_PASS)
+        .map((k) => [k, { at: Number(s.worked[k].at), tpl: s.worked[k].tpl.slice(0, 500), played: WORKED_PLAY_PASS }]),
     ),
     linkWaitMs: clampMs(s.linkWaitMs, LINK_WAIT),
     testRounds: clampRounds(s.testRounds),
@@ -353,8 +358,26 @@ export async function recordRecipe(id, { tap, siteServers, verified = [], failed
   // Retest memory: when each kind's link passed, with the template it passed on.
   s.worked = { ...s.worked };
   for (const k of failed) delete s.worked[k];
-  for (const k of verified) if (s.templates?.[k]) s.worked[k] = { at: Date.now(), tpl: s.templates[k] };
+  for (const k of verified) if (s.templates?.[k]) s.worked[k] = { at: Date.now(), tpl: s.templates[k], played: WORKED_PLAY_PASS };
   await writeAll(list);
+}
+
+/**
+ * The real player couldn't play this site's link (e.g. CoreMedia -12645 /
+ * 1718449215 on disguised pieces): it no longer counts as "worked", so the
+ * next Retest tries it again. kind: "movie" | "tv" | "anime" (null = all).
+ */
+export async function forgetWorked(id, kind = null) {
+  const list = listCustomServers();
+  const s = list.find((x) => x.id === baseCustomId(id));
+  if (!s?.worked) return false;
+  // Anime played through a site's TV link (no anime link of its own) forgets the TV one.
+  const kinds = !kind ? Object.keys(s.worked) : kind === "anime" && !s.templates?.anime ? ["tv"] : [kind];
+  if (!kinds.some((k) => s.worked[k])) return false;
+  s.worked = { ...s.worked };
+  for (const k of kinds) delete s.worked[k];
+  await writeAll(list);
+  return true;
 }
 
 /** A link that passed its Test is Verified, and its list turns on by itself: the new { lists, guessed }. */
@@ -1114,10 +1137,45 @@ export async function testServer(server, { onStep, retest = !!server.lastTest, f
   }
 }
 
+/**
+ * A hidden-page try ended with an answer: a stream (then checked), an error page
+ * (HTTP 4xx/5xx), a block, a page that didn't load, or Stop. Anything else that
+ * comes back before the link's wait is up ended early (the page was dropped).
+ */
+export function definiteTry(r) {
+  if (!r || typeof r !== "object") return false;
+  if (r.error === "Stopped") return true;
+  const p = r.page || {};
+  if (r.stream?.ok || blockOf(r) || p.status >= 400 || p.error || p.humanCheck) return true;
+  return false;
+}
+
+/**
+ * One link's try with its full wait (waitMs from t0): repeated, on the same clock,
+ * while it ends early with nothing definite. The native page reports how long
+ * it waited (stream.waitedMs); a page that waited its whole time is an answer.
+ */
+export async function tryFullWait(once, { waitMs, signal = null, t0 = Date.now(), pauseMs = 1000, minLeftMs = 3000 } = {}) {
+  let r;
+  for (let n = 0; n < 50; n++) {
+    const left = waitMs - (Date.now() - t0);
+    r = await once(Math.max(minLeftMs, left));
+    if (signal?.aborted || definiteTry(r)) return r;
+    const waited = Number(r?.stream?.waitedMs);
+    // Older native builds (and mocks) don't report the wait: their answer stands.
+    if (!Number.isFinite(waited)) return r;
+    const asked = Math.max(minLeftMs, left);
+    if (waited >= asked - Math.min(1000, asked / 10)) return r;
+    if (waitMs - (Date.now() - t0) < minLeftMs) return r;
+    await new Promise((res) => setTimeout(res, pauseMs));
+  }
+  return r;
+}
+
 /** Whether a kind's link passed its last Test with the template it has now. */
 export function keptKind(server, kind) {
   const w = server?.worked?.[kind];
-  return !!(w && w.at > 0 && w.tpl && w.tpl === server.templates?.[kind]);
+  return !!(w && w.at > 0 && w.played === WORKED_PLAY_PASS && w.tpl && w.tpl === server.templates?.[kind]);
 }
 
 async function testServerRun(server, { onStep, retest, retestServers = retest, signal, nativeTry, waitMs, keep = new Map() }) {
@@ -1161,8 +1219,7 @@ async function testServerRun(server, { onStep, retest, retestServers = retest, s
       continue;
     }
     // A live "still looking… 12 s" line while a page is being tried; the try ends at the first stream.
-    const looking = async (label, job) => {
-      const t0 = Date.now();
+    const looking = async (label, job, t0 = Date.now()) => {
       const tick = () => onStep?.({ kind, steps: [...steps, { id: "looking", running: true, ok: true, neutral: true, label, detail: `Still looking… ${Math.round((Date.now() - t0) / 1000)} s of ${Math.round(waitMs / 1000)} s` }] });
       tick();
       const iv = setInterval(tick, 1000);
@@ -1201,7 +1258,10 @@ async function testServerRun(server, { onStep, retest, retestServers = retest, s
       continue;
     }
     const t0 = Date.now();
-    let r = await looking(`Trying ${link.title}`, () => nativeTry(server, link.url, { learn: server.mode !== "page" }));
+    // The link gets its whole wait: a hidden page that ended early with no answer
+    // either way (nothing definite) is opened again on the same clock, so the
+    // round never moves on while this link still has time left.
+    let r = await looking(`Trying ${link.title}`, () => tryFullWait((left) => nativeTry(server, link.url, { learn: server.mode !== "page", timeoutMs: left }), { waitMs, signal, t0 }), t0);
     blocked = blockOf(r);
     // One more try in a fresh hidden page (slow first load, a flaky server), unless the site blocks it.
     if (!blocked && !r?.stream?.ok && r?.page?.ok) {

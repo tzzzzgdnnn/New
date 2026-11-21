@@ -400,7 +400,9 @@ final class ServerTestMessageHandler: NSObject, WKScriptMessageHandlerWithReply 
             ]
             if let learn = r?.learn { out["learn"] = learn }
             guard let r = r else {
-                var stream: [String: Any] = ["ok": false]
+                // How long the page really waited: JS gives the link the rest of its
+                // wait when it ended early with nothing definite (a dropped page).
+                var stream: [String: Any] = ["ok": false, "waitedMs": Int(Date().timeIntervalSince(started) * 1000)]
                 if let first = rep.redirectsBlocked.first {
                     stream["error"] = "The site tried to send the page to \(first) (blocked)"
                 }

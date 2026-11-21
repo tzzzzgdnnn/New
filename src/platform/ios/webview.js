@@ -25,7 +25,7 @@ import { riveCandidates, RIVE_IDS } from "./rivestream";
 import { playDirect, forceFullscreen, holdPrewarm, primeDirectVideo } from "../web/directPlayer";
 import { parseServerKey } from "../../utils/servers/catalog";
 import { diag } from "../../utils/diag";
-import { customCandidates, withCustom, pickedCustomId, isCustomPlaceholder } from "./customServers";
+import { customCandidates, withCustom, pickedCustomId, isCustomPlaceholder, forgetWorked, CUSTOM_ID_PREFIX } from "./customServers";
 
 const LOAD_TIMEOUT_MS = 8000;
 // Web app in a browser (not the Android app, which has native HTTP like iPhone).
@@ -967,6 +967,10 @@ function upgrade(wv) {
       if (shown) failed.add(menuId(shown.id, ctx));
     } catch {}
     failedServers.set(key, failed);
+    // A custom site's link that really failed to play no longer counts as
+    // "worked": its next Retest tries it again instead of keeping it.
+    const playKind = ctx?.isAnime ? "anime" : ctx?.type === "tv" ? "tv" : "movie";
+    for (const id of failed) if (String(id).startsWith(CUSTOM_ID_PREFIX)) forgetWorked(id, playKind).catch(() => {});
     const list = serverListFor(ctx).filter((s) => PLAYER_SOURCES.some((p) => p.id === parseServerKey(s.id).sourceId));
     const switches = autoSwitches.get(key) || 0;
     // Bounded: at most one automatic switch per listed server for a title, so

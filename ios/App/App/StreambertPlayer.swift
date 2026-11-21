@@ -1137,6 +1137,19 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             } else if [403, 503].contains(http.statusCode) && server.contains("ddos-guard") {
                 reports[slot.index, default: SniffReport()].wall = "DDoS-Guard"
             }
+            // Custom sites: an error page (404 "no page at this link", 403, 5xx) never
+            // plays and never counts, so the slot gives up now instead of waiting out
+            // its whole timeout ("Still looking… 12 s of 115 s" on a 404).
+            if http.statusCode >= 400, candidates.indices.contains(slot.index),
+               candidates[slot.index].lockHost != nil, slot.streams.isEmpty {
+                let status = http.statusCode
+                let id = candidates[slot.index].id
+                DispatchQueue.main.async { [weak self, weak slot] in
+                    guard let self = self, let slot = slot, self.slots[slot.index] === slot, slot.streams.isEmpty else { return }
+                    sbLog("HTTP \(status) page for \(id): no stream here, moving on")
+                    self.remove(slot)
+                }
+            }
         }
         decisionHandler(.allow)
     }

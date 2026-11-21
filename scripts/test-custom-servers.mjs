@@ -1094,3 +1094,84 @@ test("engine: playlists are followed master -> variant -> segment; disguised / r
   assert.match(cs, /DRM-protected; Super Player never plays around DRM/, "DRM is reported, never bypassed");
   assert.doesNotMatch(cs, /guard let \(/, "no tuple patterns in guard let (Swift rejects them)");
 });
+
+// ── Retest memory keeps only links that PLAYED; rounds give each link its whole wait ──
+test("retest memory: only a passed Plays check is kept; old-build 'worked' flags and play failures are re-tested", async () => {
+  const opened = [];
+  let answer = () => ({ page: { ok: true, status: 200, url: "https://pp.test/" }, stream: { ok: true, kind: "hls", ms: 5 }, playable: { ok: false, error: "The video pieces are disguised as PNG images" } });
+  window.webkit = { messageHandlers: { sbServerTest: { postMessage: async (m) => (m.candidate ? (opened.push(m.candidate.url), answer(m)) : { ok: true }) } } };
+  const tpl = "https://pp.test/movie/{tmdb}";
+  // A "worked" saved by an older build (no play-pass mark): never kept.
+  const s = await CS.saveCustomServer({ name: "PP", mode: "page", templates: { movie: tpl }, lists: { movies: true }, testRounds: 1, worked: { movie: { at: Date.now(), tpl } } });
+  assert.equal(CS.keptKind(s, "movie"), false, "old flag dropped");
+  assert.equal(CS.keptKind({ ...s, worked: { movie: { at: 1, tpl } } }, "movie"), false, "no play-pass field = re-test");
+  // Stream found but it doesn't play: not kept, the Retest tries it again (every round).
+  const r1 = await CS.testServer(s, { retest: true });
+  assert.equal(opened.length >= 1, true, "opened, not kept");
+  assert.deepEqual(r1.verified, []);
+  assert.doesNotMatch(JSON.stringify(r1.kinds[0].steps), /Kept: worked before/);
+  let saved = CS.listCustomServers().find((x) => x.id === s.id);
+  assert.equal(CS.keptKind(saved, "movie"), false, "sniffed-only stream never counts as worked");
+  opened.length = 0;
+  await CS.testServer(saved, { retest: true });
+  assert.ok(opened.length >= 1, "a link whose play failed is re-tested");
+  // It plays: kept with the mark.
+  answer = () => ({ page: { ok: true, status: 200, url: "https://pp.test/" }, stream: { ok: true, kind: "hls", ms: 5 }, playable: { ok: true } });
+  await CS.testServer(saved, { retest: true });
+  saved = CS.listCustomServers().find((x) => x.id === s.id);
+  assert.ok(CS.keptKind(saved, "movie"));
+  assert.equal(saved.worked.movie.played, CS.WORKED_PLAY_PASS);
+  // The real player failed on it: forgotten, tried again next time.
+  assert.equal(await CS.forgetWorked(s.id + "~x", "movie"), true);
+  assert.equal(CS.keptKind(CS.listCustomServers().find((x) => x.id === s.id), "movie"), false);
+  delete window.webkit;
+  await CS.deleteCustomServer(s.id);
+});
+
+test("rounds: a link's try that ends early with nothing definite keeps its clock and is retried in the same round", async () => {
+  // Unit: tryFullWait repeats on the same clock, stops on a definite answer.
+  let calls = [];
+  const early = { page: { ok: true, status: 200 }, stream: { ok: false, waitedMs: 5 }, playable: { ok: false } };
+  const t0 = Date.now();
+  let r = await CS.tryFullWait(async (left) => (calls.push(left), calls.length < 3 ? early : { page: { ok: true, status: 200 }, stream: { ok: true }, playable: { ok: true } }), { waitMs: 400, t0, pauseMs: 10, minLeftMs: 50 });
+  assert.equal(calls.length, 3, "retried while time was left");
+  assert.ok(calls[1] < calls[0] && calls[2] < calls[1], `same clock, not reset: ${calls}`);
+  assert.ok(r.stream.ok);
+  // Definite answers end it at once: 404 page, block, page error, a full wait.
+  for (const d of [{ page: { status: 404 } }, { page: { status: 403 } }, { page: { error: "offline" } }, { page: { ok: true, status: 200 }, stream: { ok: false, waitedMs: 10000 } }]) {
+    calls = [];
+    await CS.tryFullWait(async (left) => (calls.push(left), d), { waitMs: 400, pauseMs: 10, minLeftMs: 50 });
+    assert.equal(calls.length, 1, JSON.stringify(d));
+  }
+  // Time used up: gives up.
+  calls = [];
+  await CS.tryFullWait(async (left) => (calls.push(left), await new Promise((res) => setTimeout(res, 30)), early), { waitMs: 120, pauseMs: 10, minLeftMs: 50 });
+  assert.ok(calls.length >= 1 && calls.length <= 4, `bounded: ${calls.length}`);
+  // Engine: rounds don't advance while the link still has its wait left.
+  const seen = [];
+  let n = 0;
+  window.webkit = { messageHandlers: { sbServerTest: { postMessage: async (m) => {
+    if (!m.candidate) return { ok: true };
+    n++;
+    seen.push(m.candidate.timeoutMs);
+    return n < 2 ? early : { page: { ok: true, status: 200, url: "https://rw.test/" }, stream: { ok: true, kind: "hls", ms: 5 }, playable: { ok: true } };
+  } } } };
+  const s = await CS.saveCustomServer({ name: "RW", mode: "page", templates: { movie: "https://rw.test/m/{tmdb}" }, lists: { movies: true }, testRounds: 5 });
+  const rounds = [];
+  const t = await CS.testServer(s, { retest: false, onStep: (ev) => ev.round && rounds.push(ev.round) });
+  delete window.webkit;
+  assert.ok(t.playable, "found on the same link's second page");
+  assert.equal(t.rounds, 1, "still round 1: the round didn't advance mid-wait");
+  assert.ok(Math.max(...rounds) === 1);
+  assert.ok(seen[1] < seen[0], "the second page gets only the rest of the wait");
+  await CS.deleteCustomServer(s.id);
+});
+
+test("native: a custom site's HTTP 4xx/5xx page ends its hidden page at once; the wait is reported", async () => {
+  const { readFileSync } = await import("node:fs");
+  const sp = readFileSync("ios/App/App/StreambertPlayer.swift", "utf8");
+  assert.match(sp, /http\.statusCode >= 400, candidates\.indices\.contains\(slot\.index\),\s*candidates\[slot\.index\]\.lockHost != nil/);
+  assert.match(sp, /no stream here, moving on"\)\s*self\.remove\(slot\)/);
+  const cs = readFileSync("ios/App/App/CustomServers.swift", "utf8");
+  assert.match(cs, /"waitedMs": Int\(Date\(\)\.timeIntervalSince\(started\) \* 1000\)/);
+});
