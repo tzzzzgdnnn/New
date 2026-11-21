@@ -6,6 +6,8 @@ import { createPortal } from "react-dom";
 import { ChoiceList, Group, Row, SwitchRow } from "./cells";
 import ActionSheet from "../ActionSheet";
 import {
+  LEARN_TIME,
+  LINK_WAIT,
   LISTS,
   analyzeSample,
   canTestNatively,
@@ -23,6 +25,7 @@ import { smartAdd, SMART_STEPS } from "../customSmartAdd";
 import { isLocalAddress, originOf, validateTemplate } from "../../../utils/customServers/template";
 import { DEFAULT_STREAM_PATTERN, headerLines, parseHeaderLines, validateDirect } from "../../../utils/customServers/direct";
 import { registerBackHandler } from "../../../utils/navHistory";
+import { storage } from "../../../utils/storage";
 import "./custom-servers.css";
 
 const KIND_LABEL = { movie: "Movie", tv: "TV", anime: "Anime" };
@@ -156,7 +159,31 @@ const emptyDraft = () => ({
   directNotes: {},
   slugStyle: null,
   icon: null,
+  learnMs: LEARN_TIME.def,
+  linkWaitMs: LINK_WAIT.def,
 });
+
+const fmtMs = (ms) => (ms >= 60000 ? `${Math.floor(ms / 60000)} min${ms % 60000 ? ` ${Math.round((ms % 60000) / 1000)} s` : ""}` : `${Math.round(ms / 1000)} s`);
+
+/** Learn time and per-link wait for this site (used by the first learn and every Test). */
+function TimingGroup({ draft, patch }) {
+  const learn = draft.learnMs || LEARN_TIME.def;
+  const wait = draft.linkWaitMs || LINK_WAIT.def;
+  return (
+    <Group header="Learn Time" footer="How long Super Player may spend working the site out, and how long each link may take to start a stream. Both end early as soon as everything is found.">
+      <Row
+        label={`Learn site: up to ${fmtMs(learn)}`}
+        chevron={false}
+        accessory={<input type="range" aria-label="Learn time" min={LEARN_TIME.min} max={LEARN_TIME.max} step={LEARN_TIME.step} value={learn} onChange={(e) => patch({ learnMs: Number(e.target.value) })} />}
+      />
+      <Row
+        label={`Each link: up to ${fmtMs(wait)}`}
+        chevron={false}
+        accessory={<input type="range" aria-label="Wait per link" min={LINK_WAIT.min} max={LINK_WAIT.max} step={LINK_WAIT.step} value={wait} onChange={(e) => patch({ linkWaitMs: Number(e.target.value) })} />}
+      />
+    </Group>
+  );
+}
 
 function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
   const isNew = !server;
@@ -168,6 +195,9 @@ function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
   const [error, setError] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const runId = useRef(0);
+  const learnStop = useRef(null);
+  const timing = useRef({ learnMs: draft.learnMs, linkWaitMs: draft.linkWaitMs });
+  timing.current = { learnMs: draft.learnMs || LEARN_TIME.def, linkWaitMs: draft.linkWaitMs || LINK_WAIT.def };
   const sheetRef = useRef(null);
   const bodyRef = useRef(null);
   const touched = useRef(new Set()); // fields the viewer changed by hand: smart add leaves them
@@ -203,11 +233,14 @@ function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
         steps[stepId] = { state, detail: detail ?? null };
         setAnalysis({ steps: { ...steps } });
       };
-      smartAdd(url, { apiKey, onStep }).then(
+      learnStop.current?.abort();
+      const ctl = new AbortController();
+      learnStop.current = ctl;
+      smartAdd(url, { apiKey, onStep, signal: ctl.signal, budgetMs: timing.current.learnMs, probeMs: timing.current.linkWaitMs }).then(
         (r) => {
           if (id !== runId.current) return;
           if (!r.ok) return setAnalysis({ error: r.error, steps: { ...steps } });
-          setAnalysis({ summary: r.summary, titleIssues: r.titleIssues || [], steps: { ...steps } });
+          setAnalysis({ summary: r.summary, titleIssues: r.titleIssues || [], builtIn: r.builtIn || null, steps: { ...steps } });
           const keep = touched.current;
           setDraft((d) => ({
             ...d,
@@ -273,7 +306,10 @@ function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
           />
         </Group>
 
-        {analysis?.steps && !analysis.summary && <SmartAddProgress steps={analysis.steps} />}
+        {isNew && <TimingGroup draft={draft} patch={patch} />}
+        {analysis?.steps && !analysis.summary && !analysis.error && (
+          <SmartAddProgress steps={analysis.steps} limitMs={timing.current.learnMs} onStop={() => learnStop.current?.abort()} />
+        )}
         {analysis?.summary && <SummaryCard draft={draft} analysis={analysis} />}
 
         {(draft.templates.movie || draft.templates.tv || draft.templates.anime) && (
@@ -298,6 +334,7 @@ function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
             </Group>
             <TemplatesGroup draft={draft} setDraft={setDraft} apiKey={apiKey} />
             <AdvancedGroup draft={draft} patch={patch} />
+            {!isNew && <TimingGroup draft={draft} patch={patch} />}
           </>
         )}
 
@@ -348,7 +385,8 @@ function LinkStatus({ analysis, link }) {
 const STEP_ICON = { pending: "·", running: "", done: "✓", failed: "✕", skipped: "–" };
 
 /** Smart add's progress, one row per step. */
-function SmartAddProgress({ steps }) {
+function SmartAddProgress({ steps, limitMs, onStop }) {
+  const t0 = useRef(Date.now());
   // Seconds on the step that is running, so a slow site visibly keeps going.
   const since = useRef({});
   const [, tick] = useState(0);
@@ -361,7 +399,10 @@ function SmartAddProgress({ steps }) {
     if (cur?.state === "running" && !since.current[st.id]) since.current[st.id] = Date.now();
   }
   return (
-    <Group header="Checking the Site" footer="Slow sites can take up to two minutes: each link gets up to 30 s to start a stream, and stops as soon as one shows.">
+    <Group
+      header={`Learning the Site · ${Math.round((Date.now() - t0.current) / 1000)} s of up to ${fmtMs(limitMs || LEARN_TIME.def)}`}
+      footer="Ends early once everything is found. Stop keeps whatever already works."
+    >
       <div className="cs-test">
         {SMART_STEPS.map((st) => {
           const cur = steps[st.id] || { state: "pending" };
@@ -381,6 +422,7 @@ function SmartAddProgress({ steps }) {
           );
         })}
       </div>
+      {onStop && <Row label="Stop" center chevron={false} onClick={onStop} />}
     </Group>
   );
 }
@@ -392,6 +434,14 @@ function SummaryCard({ draft, analysis }) {
       <div className="cs-summary">
         <SiteLabel server={draft} />
         <div className="cs-summary-line">{analysis.summary}</div>
+        {analysis.builtIn && (
+          <div className="cs-summary-warn">
+            Already built in as {analysis.builtIn.label}.{" "}
+            <button type="button" className="cs-inline-btn" onClick={() => storage.set("playerSource", analysis.builtIn.id)}>
+              Use {analysis.builtIn.label}
+            </button>
+          </div>
+        )}
         {Object.entries(draft.switched || {}).map(([k, sw]) => (
           <div key={k} className="cs-summary-line">
             {KIND_LABEL[k]}: your link was an info page, so Super Player uses the site's player link {sw.to}
@@ -565,9 +615,21 @@ function TemplatesGroup({ draft, setDraft, apiKey }) {
 function TestPanel({ server, autoStart }) {
   const [state, setState] = useState(null); // { running, kinds, result }
   const started = useRef(false);
+  const stop = useRef(null);
+  const [, tick] = useState(0);
+  const t0 = useRef(0);
+  useEffect(() => {
+    if (!state?.running) return undefined;
+    const iv = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(iv);
+  }, [state?.running]);
   const run = useCallback(async () => {
     setState({ running: true, kinds: {} });
-    const result = await testServer(server, {
+    t0.current = Date.now();
+    const ctl = new AbortController();
+    stop.current = ctl;
+    const result = await testServer(listCustomServers().find((x) => x.id === server.id) || server, {
+      signal: ctl.signal,
       onStep: ({ kind, steps }) => setState((s) => ({ ...s, kinds: { ...s.kinds, [kind]: steps } })),
     });
     setState({ running: false, kinds: Object.fromEntries(result.kinds.map((k) => [k.kind, k.steps])), result });
@@ -599,7 +661,14 @@ function TestPanel({ server, autoStart }) {
           ))}
         </div>
       ))}
-      {state?.running && <Row label="Testing…" detail="Up to 45 s per link (ends at the first stream), then more titles and the site's servers" chevron={false} />}
+      {state?.running && (
+        <Row
+          label={`Learning… ${Math.round((Date.now() - t0.current) / 1000)} s of up to ${fmtMs(server.learnMs || LEARN_TIME.def)}`}
+          detail={`Each link up to ${fmtMs(server.linkWaitMs || LINK_WAIT.def)} (ends at the first stream), then more titles and the site's servers`}
+          chevron={false}
+        />
+      )}
+      {state?.running && <Row label="Stop" center chevron={false} onClick={() => stop.current?.abort()} />}
       {!state?.running && <Row label={state ? "Test Again" : "Test"} center chevron={false} onClick={run} />}
       {state?.result?.playable && <Row label="Play Test" center chevron={false} onClick={() => playTest(server, state.result.playable.url)} />}
     </Group>

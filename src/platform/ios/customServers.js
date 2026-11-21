@@ -35,6 +35,11 @@ export const CUSTOM_SNIFF_TIMEOUT_MS = 25000;
  * slow sites need a tap, a server pick or two nested iframes first.
  */
 export const TEST_SNIFF_TIMEOUT_MS = 45000;
+/** "Learn site" time limits, set per site (Add Site sheet): the whole learn / Test, and each link. */
+export const LEARN_TIME = Object.freeze({ min: 60000, max: 300000, step: 15000, def: 180000 });
+export const LINK_WAIT = Object.freeze({ min: 15000, max: 120000, step: 5000, def: TEST_SNIFF_TIMEOUT_MS });
+export const clampMs = (v, lim) => Math.min(lim.max, Math.max(lim.min, Math.round((Number(v) || lim.def) / 1000) * 1000));
+
 /** At most this many of a site's own servers are kept per site. */
 export const MAX_SITE_SERVERS = 8;
 /** Play waits at most this long for an IMDb / MAL id a template needs. */
@@ -132,6 +137,8 @@ export function normalizeServer(s) {
     directNotes: Object.fromEntries(DIRECT_SLOTS.filter((k) => typeof s.directNotes?.[k] === "string").map((k) => [k, s.directNotes[k].slice(0, 200)])),
     learnTried: Object.fromEntries(TEMPLATE_KINDS.filter((k) => Number(s.learnTried?.[k])).map((k) => [k, Number(s.learnTried[k])])),
     slugStyle: s.slugStyle ? normalizeSlugStyle(s.slugStyle) : null,
+    learnMs: clampMs(s.learnMs, LEARN_TIME),
+    linkWaitMs: clampMs(s.linkWaitMs, LINK_WAIT),
     // Recipe: the button the page needs pressed before it streams ("Start playback").
     tap: typeof s.tap === "string" && s.tap.trim() ? s.tap.trim().slice(0, 60) : null,
     // The site's own servers ("Server 2", "Vidplay"): each working one is its own entry.
@@ -821,6 +828,8 @@ export function sampleNumbers(template, sample) {
   return out;
 }
 
+const nativeTryRaw = (...a) => nativeTry(...a);
+
 /** Open one link in the hidden page (native), with the learn log on. */
 export async function nativeTry(server, url, { timeoutMs = TEST_SNIFF_TIMEOUT_MS, learn = true, tap, tapOnly = false } = {}) {
   try {
@@ -955,7 +964,26 @@ export async function directSteps(server, kind, link, r) {
  * blocked, then Direct mode (learned from the page) and its own test.
  * Learned APIs are saved on the server.
  */
-export async function testServer(server, { onStep, retest = !!server.lastTest } = {}) {
+export async function testServer(server, { onStep, retest = !!server.lastTest, signal: outer = null } = {}) {
+  // The site's own time limits: the whole run (learn time) and each link.
+  const learnMs = clampMs(server.learnMs, LEARN_TIME);
+  const waitMs = clampMs(server.linkWaitMs, LINK_WAIT);
+  const ctl = new AbortController();
+  outer?.addEventListener?.("abort", () => ctl.abort(), { once: true });
+  const budget = setTimeout(() => ctl.abort(), learnMs);
+  const signal = ctl.signal;
+  // Stop (or the learn time running out) keeps what already worked: pages still loading are given up.
+  const stopped = new Promise((resolve) => signal.addEventListener("abort", () => resolve({ ok: false, error: "Stopped" }), { once: true }));
+  const nativeTry = (srv, url, o = {}) =>
+    signal.aborted ? Promise.resolve({ ok: false, error: "Stopped" }) : Promise.race([nativeTryRaw(srv, url, { timeoutMs: waitMs, ...o }), stopped]);
+  try {
+    return await testServerRun(server, { onStep, retest, signal, nativeTry, waitMs });
+  } finally {
+    clearTimeout(budget);
+  }
+}
+
+async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs }) {
   const kinds = TEMPLATE_KINDS.filter((k) => server.templates[k]);
   const results = [];
   let playable = null;
@@ -972,7 +1000,7 @@ export async function testServer(server, { onStep, retest = !!server.lastTest } 
     // A live "still looking… 12 s" line while a page is being tried; the try ends at the first stream.
     const looking = async (label, job) => {
       const t0 = Date.now();
-      const tick = () => onStep?.({ kind, steps: [...steps, { id: "looking", running: true, ok: true, neutral: true, label, detail: `Still looking… ${Math.round((Date.now() - t0) / 1000)} s of ${TEST_SNIFF_TIMEOUT_MS / 1000} s` }] });
+      const tick = () => onStep?.({ kind, steps: [...steps, { id: "looking", running: true, ok: true, neutral: true, label, detail: `Still looking… ${Math.round((Date.now() - t0) / 1000)} s of ${Math.round(waitMs / 1000)} s` }] });
       tick();
       const iv = setInterval(tick, 1000);
       try {
@@ -1049,12 +1077,16 @@ export async function testServer(server, { onStep, retest = !!server.lastTest } 
     const { link, push } = serversKind;
     for (const label of labels) {
       const old = before.find((x) => x.label === label);
+      if (signal?.aborted) {
+        if (old) siteServers.push({ ...old });
+        continue;
+      }
       if (retest && old?.works === true) {
         siteServers.push({ ...old });
         push({ id: `srv-${label}`, ok: true, label: `Server: ${label}`, detail: "Kept: worked before" });
         continue;
       }
-      const rs = await nativeTry(server, link.url, { learn: false, tap: label, tapOnly: true, timeoutMs: TEST_SNIFF_TIMEOUT_MS });
+      const rs = await nativeTry(server, link.url, { learn: false, tap: label, tapOnly: true });
       const ok = !!rs?.stream?.ok && !!rs?.playable?.ok;
       siteServers.push({ label, works: ok, at: Date.now() });
       push({
