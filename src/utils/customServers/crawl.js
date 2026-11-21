@@ -138,6 +138,11 @@ export function scriptUrls(html, base) {
     const u = abs(m[1], base);
     if (u && scanWorthy(u) && !out.includes(u)) out.push(u);
   }
+  // SPA chunks preloaded by the page (Vite / webpack): the router lives in one of them.
+  for (const m of String(html || "").matchAll(/<link\b[^>]*rel=["'](?:modulepreload|preload)["'][^>]*href=["']([^"']+\.m?js[^"']*)["']/gi)) {
+    const u = abs(m[1], base);
+    if (u && scanWorthy(u) && !out.includes(u)) out.push(u);
+  }
   // Page / app chunks hold the routes; framework runtime chunks don't.
   return out.sort((a, b) => (/\/(app|pages)\//.test(b) ? 1 : 0) - (/\/(app|pages)\//.test(a) ? 1 : 0));
 }
@@ -338,5 +343,5 @@ export async function crawlSite(start, { http, onStep = () => {}, budgetMs = CRA
   const clean = Object.fromEntries(["movie", "tv", "anime"].filter((k) => samples[k]).map((k) => [k, samples[k]]));
   const kinds = Object.keys(clean);
   onStep("links", kinds.length ? "done" : "failed", kinds.length ? `Found ${kinds.map((k) => (k === "tv" ? "episode" : k)).join(", ")} links` : "No movie or episode links on the site");
-  return { origin, name: info.name, icon: info.icon, samples: clean, details, scriptRoutes, search, pages: seen.size, wall, errors, links: links.length };
+  return { origin, name: info.name, icon: info.icon, samples: clean, details, scriptRoutes, scriptTexts: texts, search, pages: seen.size, wall, errors, links: links.length };
 }

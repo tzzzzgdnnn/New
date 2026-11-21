@@ -5,16 +5,20 @@
 // background, in parallel), bot walls, whether a direct API can be learned,
 // and the mode to use. Reports progress step by step for the sheet's list.
 import { crawlSite, CRAWL_FETCH_TIMEOUT_MS } from "../../utils/customServers/crawl";
+import { discoverCandidates, looksLikeInfoPage } from "../../utils/customServers/discover";
+import { learnLookup } from "../../utils/customServers/lookup";
 import { fillFromFamily, idScheme } from "../../utils/customServers/families";
 import { analyzeUrl, buildUrl, deriveTemplate, originOf, siteDomain, TEMPLATE_KINDS } from "../../utils/customServers/template";
-import { analyzeSample, canTestNatively, defaultLists, directSteps, nativeTry, pageSteps, testLinkFor, REFERENCE_TITLES, CUSTOM_ID_PREFIX } from "./customServers";
+import { analyzeSample, canTestNatively, defaultLists, directSteps, nativeTry, pageSteps, sampleNumbers, siteHttp, siteValueFor, testLinkAsync, REFERENCE_TITLES, CUSTOM_ID_PREFIX } from "./customServers";
 import { directHttp } from "./customDirect";
 import { diag } from "../../utils/diag";
 
 /** Smart add aims to finish within this long. */
-export const SMART_ADD_BUDGET_MS = 20000;
-/** Each background page try gets at most this long to show a stream. */
-export const SMART_PROBE_TIMEOUT_MS = 9000;
+export const SMART_ADD_BUDGET_MS = 110000;
+/** Each background page try gets at most this long to show a stream (it ends at the first one). */
+export const SMART_PROBE_TIMEOUT_MS = 30000;
+/** Links tried per kind before giving up on it. */
+export const MAX_TRIES_PER_KIND = 5;
 /** Hidden pages open at once during the probes. */
 const PROBE_PARALLEL = 3;
 
@@ -143,10 +147,49 @@ export async function smartAdd(link, { apiKey, onStep = () => {}, deps = {} } = 
   for (const k of TEMPLATE_KINDS) {
     if (!all[k] && crawl.scriptRoutes?.[k]?.length) (all[k] = crawl.scriptRoutes[k][0]), (guessed[k] = true);
   }
-  // Nothing at all: the usual embed routes, one per kind until one works.
+  // Where the site's player really is: router routes in its scripts, the
+  // pasted link rewritten (details -> embed / watch, slug dropped), the usual
+  // embed routes. Tried after the link as read, or before it when that link
+  // is an info page that never starts a player.
+  const disc = discoverCandidates({
+    origin,
+    pasted: { movie: all.movie, tv: all.tv, anime: all.anime },
+    scriptTexts: crawl.scriptTexts || [],
+    scriptRoutes: crawl.scriptRoutes || {},
+  });
   const routeGuesses = {};
+  for (const k of TEMPLATE_KINDS) routeGuesses[k] = disc[k].map((c) => c.tpl);
+  const switched = {};
+
+  // Slug sites with per-title ids ({site}): learn the site's own search from
+  // the pasted title, so any title finds its page.
+  const lookup = {};
+  const searchHttp = deps.siteHttp || siteHttp(site);
+  await Promise.all(
+    TEMPLATE_KINDS.filter((k) => all[k]?.includes("{site}") && matches[k]).map(async (k) => {
+      const seg = sampleNumbers(all[k], matches[k].sample).site;
+      const lk = await learnLookup({
+        origin,
+        kind: k === "movie" ? "movie" : "tv",
+        title: matches[k].match.title,
+        siteSegment: seg,
+        http: searchHttp,
+        extra: crawl.search ? [crawl.search] : [],
+      }).catch(() => null);
+      if (lk) lookup[k] = lk;
+    }),
+  );
   for (const k of TEMPLATE_KINDS) {
-    if (!all[k]) routeGuesses[k] = COMMON_ROUTES[k].map((r) => origin + r);
+    if (lookup[k] || !all[k]?.includes("{site}")) continue;
+    const from = Object.values(lookup)[0];
+    if (from) lookup[k] = { url: from.url, type: k === "movie" ? "movie" : "tv" };
+  }
+  // A {site} link with no way to find other titles is no use beyond the pasted one.
+  for (const k of TEMPLATE_KINDS) {
+    if (all[k]?.includes("{site}") && !lookup[k]) {
+      delete all[k];
+      delete guessed[k];
+    }
   }
 
   const primaryKind = hint?.ok ? hint.detected.kind : ["movie", "tv", "anime"].find((k) => matches[k]) || null;
@@ -160,6 +203,7 @@ export async function smartAdd(link, { apiKey, onStep = () => {}, deps = {} } = 
     slugStyle,
     mode: "auto",
     direct: {},
+    lookup,
   };
 
   // 4. Try one known title per kind, in the background, in parallel.
@@ -168,11 +212,16 @@ export async function smartAdd(link, { apiKey, onStep = () => {}, deps = {} } = 
   const titleIssues = [];
   let wall = crawl.wall;
   let adsOn = null;
+  let humanCheck = null;
   if (native) {
     onStep("probe", "running");
     const jobs = [];
     for (const k of TEMPLATE_KINDS) {
-      const options = all[k] ? [all[k]] : routeGuesses[k] || [];
+      const found0 = all[k] && !guessed[k] ? all[k] : null;
+      const rest = [...(all[k] && guessed[k] ? [all[k]] : []), ...routeGuesses[k]].filter((t) => t !== found0);
+      // An info page goes after the site's player routes; a link that plays goes first.
+      let options = found0 ? (looksLikeInfoPage(found0) ? [...rest.slice(0, 2), found0, ...rest.slice(2)] : [found0, ...rest]) : rest;
+      options = [...new Set(options)].slice(0, MAX_TRIES_PER_KIND);
       // Anime on a TMDB route: One Piece through the TV link.
       if (k === "anime" && all.tv && (!all.anime || guessed.anime)) options.unshift(all.tv);
       jobs.push({ k, options });
@@ -183,7 +232,7 @@ export async function smartAdd(link, { apiKey, onStep = () => {}, deps = {} } = 
         if (ms < 2000) break;
         const kindForLink = tpl === all.tv && k === "anime" ? "anime-tv" : k;
         const server = { ...base, templates: { ...all, [k]: tpl }, match: base.match?.kind === k ? base.match : null };
-        const link0 = kindForLink === "anime-tv" ? animeOnTvLink(server) : testLinkFor(server, k);
+        const link0 = kindForLink === "anime-tv" ? await animeOnTvLink(server) : await testLinkAsync(server, k);
         if (!link0.ok) continue;
         const r = await tryPage(server, link0.url, ms);
         const steps = pageSteps(r, { title: link0.title, want: link0.want, site: base.name });
@@ -192,18 +241,29 @@ export async function smartAdd(link, { apiKey, onStep = () => {}, deps = {} } = 
         const ok = !!r?.stream?.ok && !!r?.playable?.ok;
         const title = steps.find((s) => s.id === "title");
         if (title && !title.ok) titleIssues.push(`${KIND_WORD[k]}: ${title.detail}`);
+        if (r?.page?.humanCheck) humanCheck = humanCheck || r.page.humanCheck;
         if (ok && title?.ok !== false) {
           works[k] = true;
           tries[k] = { r, link: link0, tpl };
-          if (k !== "anime" || tpl !== all.tv) all[k] = all[k] || tpl;
-          if (routeGuesses[k]?.includes(tpl)) guessed[k] = true;
+          if (k !== "anime" || tpl !== all.tv) {
+            if (all[k] && all[k] !== tpl) switched[k] = { from: all[k], to: tpl };
+            all[k] = tpl;
+            guessed[k] = false;
+          }
           return;
         }
       }
       works[k] = false;
     });
     const okKinds = TEMPLATE_KINDS.filter((k) => works[k]);
-    onStep("probe", okKinds.length ? "done" : "failed", TEMPLATE_KINDS.map((k) => `${KIND_WORD[k]} ${works[k] ? "✓" : "✗"}`).join(" "));
+    const sw = Object.values(switched)[0];
+    onStep(
+      "probe",
+      okKinds.length ? "done" : "failed",
+      TEMPLATE_KINDS.map((k) => `${KIND_WORD[k]} ${works[k] ? "✓" : "✗"}`).join(" ") +
+        (sw ? ` · switched to ${sw.to.replace(/^https?:\/\//, "")}` : "") +
+        (!okKinds.length && humanCheck ? ` · ${humanCheck} check` : ""),
+    );
   } else {
     onStep("probe", "skipped", "Trying the site needs the iPhone app");
   }
@@ -233,12 +293,16 @@ export async function smartAdd(link, { apiKey, onStep = () => {}, deps = {} } = 
   for (const k of TEMPLATE_KINDS) {
     if (!all[k]) continue;
     if (native && !works[k] && guessed[k]) continue;
+    // An info page that never played: not kept when the site was tried.
+    if (native && !works[k] && looksLikeInfoPage(all[k]) && Object.values(works).some(Boolean)) continue;
     templatesOut[k] = all[k];
   }
   if (!Object.keys(templatesOut).length) {
     return {
       ok: false,
-      error: wall
+      error: humanCheck
+        ? `${base.name} asks for a human check (${humanCheck}) before it plays. Super Player never ticks it for you, so this site can't play in the background.`
+        : wall
         ? `${base.name} shows a ${wall} bot check to the app, so its links can't be read. Paste a link of a page that plays a movie or an episode.`
         : `Couldn't find how ${base.name} links its movies and episodes. Paste a link of a page that plays a movie or an episode.`,
       report: { crawl, works },
@@ -259,6 +323,7 @@ export async function smartAdd(link, { apiKey, onStep = () => {}, deps = {} } = 
     Object.keys(direct).length ? "Direct API found" : native ? "Page mode" : null,
     adsOn ? "ads blocked" : null,
     wall ? `${wall} check` : null,
+    Object.keys(switched).length ? `switched to the site's player link` : null,
     titleIssues.length ? "title mismatch" : null,
   ]
     .filter(Boolean)
@@ -280,15 +345,32 @@ export async function smartAdd(link, { apiKey, onStep = () => {}, deps = {} } = 
       mode,
       direct,
       directNotes,
+      tap: recipeTap(tries),
+      lookup,
+      siteServers: [...new Set(Object.values(tries).flatMap((t) => t.r?.page?.servers || []))].slice(0, 8).map((label) => ({ label, works: null })),
+      switchedFrom: Object.values(switched)[0]?.from ? link.trim() : null,
+      switched,
     },
-    report: { crawl, works, ms: Date.now() - started },
+    report: { crawl, works, switched, ms: Date.now() - started },
   };
 }
 
+/** The button the working pages needed pressed (last press before the stream). */
+function recipeTap(tries) {
+  for (const t of Object.values(tries)) {
+    const taps = t.r?.page?.taps;
+    if (taps?.length) return taps[taps.length - 1];
+  }
+  return null;
+}
+
 /** The anime reference title through a TV link (sites whose anime use TMDB ids). */
-function animeOnTvLink(server) {
+async function animeOnTvLink(server) {
   const ref = REFERENCE_TITLES.anime;
   const values = { tmdb: ref.tmdb, title: ref.title, year: ref.year, season: 1, episode: 1, lang: "sub", slugStyle: server.slugStyle };
+  if (server.templates.tv?.includes("{site}")) {
+    values.site = await siteValueFor(server, "tv", ref);
+  }
   const url = buildUrl(server.templates.tv, values);
   if (!url) return { ok: false, error: "The TV link needs a value One Piece doesn't have on TMDB." };
   return { ok: true, url, title: ref.title, reference: true, values, want: { kind: "tv", title: ref.title, altTitles: ref.altTitles, tmdb: ref.tmdb } };

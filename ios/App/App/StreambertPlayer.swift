@@ -136,7 +136,16 @@ enum SniffScript {
     /// `learn`: custom servers' Test and first play also report the page's
     /// fetch / XHR calls with their answers, and its scripts, so the site's
     /// stream API can be learned (Direct mode). Cookies are never read.
-    static func source(subframesOnly: Bool, nudge: Bool, learn: Bool = false) -> String {
+    static func source(subframesOnly: Bool, nudge: Bool, learn: Bool = false, tap: String? = nil, tapOnly: Bool = false) -> String {
+        let tapJS = tap.flatMap { t -> String? in
+            guard let d = try? JSONSerialization.data(withJSONObject: [t]), let a = String(data: d, encoding: .utf8) else { return nil }
+            return a
+        } ?? "[null]"
+        var nudgeBlock = ""
+        if nudge {
+            let setup = "window.__sbPost = function (o) { try { H.postMessage(o); } catch (e) {} };\n"
+            nudgeBlock = setup + "window.__sbTap = \(tapJS)[0]; window.__sbTapOnly = \(tapOnly);\n" + nudgeJS
+        }
         return """
         (function () {
           \(subframesOnly ? "if (window.top === window) return;" : "")
@@ -180,6 +189,7 @@ enum SniffScript {
           function post(kind, u, label) {
             if (!u || seen[kind + u]) return;
             seen[kind + u] = 1;
+            if (kind === 'hls' || kind === 'mp4') window.__sbGot = true;
             try { H.postMessage({ kind: kind, url: u, page: location.href, label: label || null }); } catch (e) {}
           }
           function rep(u, force) {
@@ -200,8 +210,14 @@ enum SniffScript {
           }
           function sniffText(u, t) {
             if (typeof t !== 'string') return;
-            if (t.slice(0, 7) === '#EXTM3U' && /#EXT-X-(STREAM-INF|TARGETDURATION|MEDIA-SEQUENCE)/.test(t)) rep(u, true);
-            else sniffSubs(u, t);
+            var h = t.replace(/^\\uFEFF/, '').replace(/^\\s+/, '');
+            if (h.slice(0, 7) === '#EXTM3U' && /#EXT-X-(STREAM-INF|TARGETDURATION|MEDIA-SEQUENCE)/.test(h)) { rep(u, true); return; }
+            // JSON / text answers that carry the playlist link (file hosts' source APIs).
+            if (t.length < 2000000 && /m3u8|\\.mp4/i.test(t)) {
+              var s2 = t.replace(/\\\\\\//g, '/'), mm, re2 = /https?:\\/\\/[^"'\\s<>\\\\]+?(?:\\.m3u8|\\/m3u8|\\.mp4)(?:\\?[^"'\\s<>\\\\]*)?/gi, n2 = 0;
+              while ((mm = re2.exec(s2)) && n2++ < 6) rep(mm[0]);
+            }
+            sniffSubs(u, t);
           }
           // Subtitle URLs inside JSON / text / scripts: player configs like
           // "tracks":[{"file":"…/en.vtt","label":"English"}] or bare links.
@@ -337,34 +353,163 @@ enum SniffScript {
             new PerformanceObserver(function (l) { l.getEntries().forEach(function (e) { rep(e.name); }); })
               .observe({ type: 'resource', buffered: true });
           } catch (e) {}
-          \(nudge ? nudgeJS : "")
+          \(nudgeBlock)
         })();
         """
     }
 
-    // Hidden sniffer only: block popups, keep media muted, and press the
-    // player's play button so the stream request actually happens.
-    static let nudgeJS = """
-          window.open = function () { return null; };
-          var tries = 0;
-          var iv = setInterval(function () {
-            tries++;
-            try {
-              document.querySelectorAll('video,audio').forEach(function (v) {
-                v.muted = true; v.volume = 0;
-                if (v.paused) { var p = v.play(); if (p && p.catch) p.catch(function () {}); }
-              });
-              if (tries % 2 === 0) {
-                var sel = '.vjs-big-play-button,.jw-icon-display,.jw-display-icon-container,.plyr__control--overlaid,'
-                  + 'button[aria-label*="play" i],[class*="play-button" i],[class*="playbtn" i],[class*="btn-play" i],'
-                  + '[id*="play" i]:not(video),.play,.play-icon,.art-control-play,.vds-play-button,media-play-button';
-                var b = document.querySelector(sel);
-                if (b && b.offsetParent !== null) b.click();
-              }
-            } catch (e) {}
-            if (tries > 16) clearInterval(iv);
-          }, 700);
-    """
+    // Hidden sniffer only: block popups, keep media muted, press the player's
+    // play button / the site's server buttons so the stream request happens,
+    // and report human checks (never pressed). Generated from
+    // src/utils/customServers/nudge.js by scripts/gen-nudge-swift.mjs: edit
+    // that file, then run the script (scripts/test-custom-discover.mjs checks they match).
+    // BEGIN NUDGE_JS
+    static let nudgeJS = #"""
+    (function () {
+      if (window.__sbNudge) return;
+      window.__sbNudge = true;
+      try { window.open = function () { return null; }; } catch (e) {}
+      var PLAY_SEL = '.vjs-big-play-button,.jw-icon-display,.jw-display-icon-container,.plyr__control--overlaid,'
+        + '.art-control-play,.vds-play-button,media-play-button,.fp-play,.mejs__overlay-play,.dplayer-mobile-play,'
+        + '.play-button,.playbtn,.btn-play,.play-btn,.big-play,.play-icon,.icon-play,#play,#playButton,#player-button,'
+        + 'button[aria-label*="play" i],[role=button][aria-label*="play" i],[class*="play-button" i],[class*="playbtn" i],'
+        + '[class*="btn-play" i],[class*="play_button" i],[class*="PlayButton"],[data-testid*="play" i],[title="Play" i]';
+      var PLAY_TEXT = /^\s*(▶|►|⏵)?\s*(play( now| movie| episode| video)?|watch( now| movie| episode| online| free)?|start( watching| playback| streaming)?|start .{0,24}playback|click (here )?to (play|watch)|tap to (play|watch)|resume|stream now|load (the )?player)\s*[!.]?\s*$/i;
+      var SERVER_TEXT = /^\s*(server|source|mirror|provider|player|link|host)\s*#?\s*\d{0,2}\b|^\s*(vid|up|stream|dood|filemoon|mixdrop|voe|mp4|hls|embed|super|vip|hd|4k|auto|main|backup|alpha|beta|nova|orion|evion|citadel|fast|flix)[a-z0-9 ._-]{0,18}$/i;
+      var BAD_TEXT = /download|subscribe|sign ?in|log ?in|register|premium|vpn|install|app|close|share|report|trailer|discord|telegram|donate|cookie|accept|login|next|prev|season|episode \d+ of|more/i;
+      var WALL_SRC = /challenges\.cloudflare\.com\/(cdn-cgi\/challenge-platform|turnstile)|hcaptcha\.com\/(captcha|checksiteconfig)|google\.com\/recaptcha|recaptcha\.net\/recaptcha/i;
+      var top = window.top === window;
+      var tries = 0, presses = 0, serverIdx = 0, sentWall = false, pressed = {}, sentServers = '';
+      var only = !!window.__sbTapOnly;
+      function post(o) { try { if (typeof window.__sbPost === 'function') window.__sbPost(o); } catch (e) {} }
+      function visible(el) {
+        try {
+          if (!el || !el.getBoundingClientRect) return false;
+          var r = el.getBoundingClientRect();
+          if (r.width < 8 || r.height < 8) return false;
+          var cs = getComputedStyle(el);
+          return cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity || 1) > 0.05;
+        } catch (e) { return false; }
+      }
+      function label(el) {
+        var t = '';
+        try { t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim(); } catch (e) {}
+        if (!t || t.length > 40) t = el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('data-name') || '') || t;
+        return String(t || '').slice(0, 40);
+      }
+      function press(el, why) {
+        try {
+          var l = label(el) || why;
+          var r = el.getBoundingClientRect();
+          var o = { bubbles: true, cancelable: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+          try { el.dispatchEvent(new PointerEvent('pointerdown', o)); el.dispatchEvent(new PointerEvent('pointerup', o)); } catch (e) {}
+          try { el.dispatchEvent(new MouseEvent('mousedown', o)); el.dispatchEvent(new MouseEvent('mouseup', o)); } catch (e) {}
+          el.click();
+          presses++;
+          post({ kind: 'tap', label: l, why: why, page: location.href });
+          return true;
+        } catch (e) { return false; }
+      }
+      function clickables() {
+        var out = [];
+        try {
+          document.querySelectorAll('button,[role=button],a,div[onclick],span[onclick],li[onclick],[data-server],[data-id][class*="server" i],[class*="server" i] li,[class*="server" i] a,[class*="server" i] button,[class*="source" i] button,[class*="source" i] li').forEach(function (el) {
+            if (out.indexOf(el) < 0 && visible(el)) out.push(el);
+          });
+        } catch (e) {}
+        return out;
+      }
+      function wall() {
+        if (sentWall) return true;
+        try {
+          var f = document.querySelectorAll('iframe[src]');
+          for (var i = 0; i < f.length; i++) {
+            if (WALL_SRC.test(f[i].src) && visible(f[i])) {
+              sentWall = true;
+              var s = f[i].src;
+              post({ kind: 'wall', wall: /hcaptcha/i.test(s) ? 'hCaptcha' : /recaptcha/i.test(s) ? 'reCAPTCHA' : 'Cloudflare Turnstile', page: location.href });
+              return true;
+            }
+          }
+          if (top && /just a moment|attention required|verify you are human|checking your browser/i.test(document.title || '')) {
+            sentWall = true; post({ kind: 'wall', wall: 'Cloudflare', page: location.href }); return true;
+          }
+        } catch (e) {}
+        return false;
+      }
+      function step() {
+        tries++;
+        try {
+          document.querySelectorAll('video,audio').forEach(function (v) {
+            v.muted = true; v.volume = 0;
+            if (v.paused && !v.ended) { var p = v.play(); if (p && p.catch) p.catch(function () {}); }
+          });
+        } catch (e) {}
+        var els = tries % 2 === 0 || tries === 4 ? clickables() : null;
+        // The site's own server list, reported once it settles (and again if it changes).
+        if (tries >= 4 && tries % 4 === 0 && els) {
+          var names = [];
+          els.forEach(function (el) { var s = label(el); if (s && SERVER_TEXT.test(s) && !BAD_TEXT.test(s) && names.indexOf(s) < 0) names.push(s); });
+          var sig = names.slice(0, 12).join('|');
+          if (names.length && sig !== sentServers) { sentServers = sig; post({ kind: 'servers', labels: names.slice(0, 12), page: location.href }); }
+        }
+        if (window.__sbGot) return;
+        if (wall()) return;
+        if (tries % 2 !== 0 || !els) return;
+        // 1. The recipe's own button.
+        var hint = window.__sbTap;
+        if (hint) {
+          for (var i = 0; i < els.length; i++) {
+            if (label(els[i]).toLowerCase() === String(hint).toLowerCase() && (pressed[label(els[i])] || 0) < 3) {
+              pressed[label(els[i])] = (pressed[label(els[i])] || 0) + 1;
+              if (press(els[i], 'recipe')) return;
+            }
+          }
+        }
+        // 2. Known player buttons.
+        try {
+          var known = document.querySelectorAll(PLAY_SEL);
+          for (var k = 0; k < known.length; k++) {
+            var key = 'sel' + k;
+            if (visible(known[k]) && (pressed[key] || 0) < 3 && known[k].tagName !== 'VIDEO') {
+              pressed[key] = (pressed[key] || 0) + 1;
+              if (press(known[k], 'player')) return;
+            }
+          }
+        } catch (e) {}
+        // 3. Buttons that say Play / Watch / Start playback.
+        for (var j = 0; j < els.length; j++) {
+          var t = label(els[j]);
+          if (t && PLAY_TEXT.test(t) && !BAD_TEXT.test(t) && (pressed['t' + t] || 0) < 2) {
+            pressed['t' + t] = (pressed['t' + t] || 0) + 1;
+            if (press(els[j], 'play-text')) return;
+          }
+        }
+        // 4. Server / source buttons, one each time, after the play presses had their chance.
+        if (tries >= 6 && !only) {
+          var servers = els.filter(function (el) { var s = label(el); return s && SERVER_TEXT.test(s) && !BAD_TEXT.test(s) && !(el.tagName === 'A' && /^https?:/.test(el.getAttribute('href') || '') && el.host !== location.host); });
+          if (servers.length && tries % 6 === 0) {
+            var el = servers[serverIdx % servers.length];
+            serverIdx++;
+            if (serverIdx <= servers.length * 2 && press(el, 'server')) return;
+          }
+        }
+        // 5. A big centred overlay (poster with a play glyph), once in a while.
+        if (tries % 8 === 4 && tries <= 40) {
+          try {
+            var w = innerWidth, h = innerHeight;
+            var c = document.elementFromPoint(w / 2, h / 2);
+            if (c && c.tagName !== 'IFRAME' && c.tagName !== 'VIDEO' && c !== document.body && c !== document.documentElement) {
+              var r = c.getBoundingClientRect();
+              if (r.width > w * 0.3 && r.height > h * 0.15) press(c, 'center');
+            }
+          } catch (e) {}
+        }
+      }
+      setInterval(step, 700);
+    })();
+    """#
+    // END NUDGE_JS
 }
 
 // MARK: - Hidden stream sniffer
@@ -390,6 +535,10 @@ struct SniffCandidate {
     var headers: [String: String] = [:]
     /// Custom servers: also report the page's API calls and scripts (Direct mode learning).
     var learn = false
+    /// Custom servers: the button the page needs pressed (the site's recipe or one of its servers).
+    var tap: String? = nil
+    /// Press only `tap` among the site's server buttons (one site server picked in the menu).
+    var tapOnly = false
 
     /// A candidate from the JS bridge ({ id, label, url, lockHost?, timeoutMs?, cache?, referer?, headers?, learn? }).
     static func from(_ d: [String: Any]) -> SniffCandidate? {
@@ -400,7 +549,9 @@ struct SniffCandidate {
                               timeout: ms.map { $0 / 1000 }, cacheable: (d["cache"] as? Bool) ?? false,
                               referer: (d["referer"] as? String).flatMap { URL(string: $0) },
                               headers: (d["headers"] as? [String: String]) ?? [:],
-                              learn: (d["learn"] as? Bool) ?? false)
+                              learn: (d["learn"] as? Bool) ?? false,
+                              tap: (d["tap"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(60)) },
+                              tapOnly: (d["tapOnly"] as? Bool) ?? false)
     }
 
     /// Whether `host` is the locked site or one of its subdomains.
@@ -423,6 +574,12 @@ struct SniffReport {
     var pageTitle: String?
     /// A bot check the site showed instead of the page ("Cloudflare").
     var wall: String?
+    /// A human check shown inside the page (Cloudflare Turnstile, hCaptcha): never pressed.
+    var humanCheck: String?
+    /// Buttons the page nudge pressed, in order (the site's recipe keeps the one that worked).
+    var taps: [String] = []
+    /// The site's own server list (buttons / tabs) seen on the page.
+    var siteServers: [String] = []
 }
 
 /// A subtitle file seen on an embed page, with the page's label if it had one.
@@ -617,7 +774,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         cfg.allowsPictureInPictureMediaPlayback = false
         cfg.preferences.javaScriptCanOpenWindowsAutomatically = false
         let ucc = WKUserContentController()
-        ucc.addUserScript(WKUserScript(source: SniffScript.source(subframesOnly: false, nudge: true, learn: c.learn),
+        ucc.addUserScript(WKUserScript(source: SniffScript.source(subframesOnly: false, nudge: true, learn: c.learn, tap: c.tap, tapOnly: c.tapOnly),
                                        injectionTime: .atDocumentStart, forMainFrameOnly: false))
         ucc.add(WeakHandler(self), name: "sbMedia")
         if c.lockHost != nil {
@@ -671,6 +828,27 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         if (b["kind"] as? String) == "blocked" {
             reports[slot.index, default: SniffReport()].popupsBlocked += 1
             return
+        }
+        // Page nudge: what it pressed, the site's server list, a human check it saw.
+        switch b["kind"] as? String {
+        case "tap":
+            var r = reports[slot.index, default: SniffReport()]
+            if let l = b["label"] as? String, !l.isEmpty, r.taps.count < 30 { r.taps.append(String(l.prefix(60))) }
+            reports[slot.index] = r
+            return
+        case "servers":
+            var r = reports[slot.index, default: SniffReport()]
+            for l in (b["labels"] as? [String] ?? []).prefix(12) where !r.siteServers.contains(l) && r.siteServers.count < 16 {
+                r.siteServers.append(String(l.prefix(60)))
+            }
+            reports[slot.index] = r
+            return
+        case "wall":
+            var r = reports[slot.index, default: SniffReport()]
+            if r.humanCheck == nil { r.humanCheck = (b["wall"] as? String) ?? "human check" }
+            reports[slot.index] = r
+            return
+        default: break
         }
         // Learn mode: the page's API calls and scripts (only asked for by custom servers).
         if let kind = b["kind"] as? String, kind == "api" || kind == "script" {

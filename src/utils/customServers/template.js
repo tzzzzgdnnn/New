@@ -9,9 +9,29 @@
 //   http://192.168.1.20:8080/a/21?ep=7&dub -> http://192.168.1.20:8080/a/{anilist}?ep={episode}&{lang}
 
 /** Every placeholder a template may hold. */
-export const PLACEHOLDERS = Object.freeze(["tmdb", "imdb", "anilist", "mal", "title", "slug", "year", "season", "episode", "absolute", "lang"]);
+// {site}: the site's own path for a title ("family-guy-y6bs3k"): slug plus a
+// per-title site id that TMDB can't give; looked up through the site's own
+// search (the server's `lookup` recipe) when a title plays.
+export const PLACEHOLDERS = Object.freeze(["tmdb", "imdb", "anilist", "mal", "title", "slug", "site", "year", "season", "episode", "absolute", "lang"]);
 /** Placeholders that identify the title (a template needs one of them). */
-export const ID_PLACEHOLDERS = Object.freeze(["tmdb", "imdb", "anilist", "mal", "title", "slug"]);
+export const ID_PLACEHOLDERS = Object.freeze(["tmdb", "imdb", "anilist", "mal", "title", "slug", "site"]);
+
+/**
+ * A per-title site id at the end of a slug ("family-guy-y6bs3k" -> "y6bs3k",
+ * "avengers-endgame-2019-5iu40l" -> "5iu40l"): 4–10 letters and digits mixed,
+ * not a year, not an episode word, not "s01e02".
+ */
+export const SITE_ID_TOKEN = /^(?=[a-z0-9]{4,10}$)(?=.*\d)(?=.*[a-z])(?!s\d{1,2}e\d{1,4}$)(?!\d{1,2}x\d{1,4}$)(?!(?:ep?|episode|season|s)\d+$)(?!\d{3,4}p$)(?!x26[45]$)(?!h26[45]$)[a-z0-9]+$/i;
+
+/** A slug path segment split into title words, year and trailing site id. */
+export function splitSlug(segment) {
+  const parts = String(segment || "").split(/[-_+.\s]+/).filter(Boolean);
+  let siteId = null;
+  if (parts.length >= 2 && SITE_ID_TOKEN.test(parts[parts.length - 1])) siteId = parts.pop();
+  let year = null;
+  if (parts.length >= 2 && /^(19|20)\d\d$/.test(parts[parts.length - 1])) year = Number(parts.pop());
+  return { words: parts, year, siteId };
+}
 /** Kinds of link a server can have a template for. */
 export const TEMPLATE_KINDS = Object.freeze(["movie", "tv", "anime"]);
 
@@ -179,16 +199,31 @@ export function analyzeUrl(url) {
   const imdb = [...new Set(decoded.match(/tt\d{5,9}/g) || [])];
   const numbers = [...new Set((decoded.match(/(?<![a-z0-9])\d{1,8}(?![a-z0-9])/gi) || []).map(Number))];
   const yearGuess = numbers.find((n) => n >= MIN_YEAR && n <= MAX_YEAR && n <= new Date().getFullYear() + 2) ?? null;
-  // Title guess: the longest run of plain words in one path segment / value.
+  // Title guess: the longest run of plain words in one path segment / value,
+  // without a per-title site id ("-y6bs3k") or the year ("-2019").
   let titleGuess = "";
-  for (const part of decoded.split(/[/?&#=]+/)) {
-    const run = part
-      .split(/[-_+.\s]+/)
-      .filter((w) => w && /[a-z]/i.test(w) && !/^tt\d+$/i.test(w) && !NOISE_WORDS.has(w.toLowerCase()))
-      .join(" ");
-    if (run.length > titleGuess.length) titleGuess = run;
-  }
-  return { ok: true, origin, kind, numbers, imdb, titleGuess, yearGuess };
+  let siteId = null;
+  let slugSegment = null;
+  let slugYear = null;
+  const parts = decoded.split(/[/?&#=]+/);
+  let slugAt = -1;
+  parts.forEach((part, i) => {
+    const sp = splitSlug(part);
+    const run = sp.words.filter((w) => /[a-z]/i.test(w) && !/^tt\d+$/i.test(w) && !NOISE_WORDS.has(w.toLowerCase())).join(" ");
+    if (run.length > titleGuess.length) {
+      titleGuess = run;
+      siteId = sp.siteId;
+      slugYear = sp.year;
+      slugSegment = part;
+      slugAt = i;
+    }
+  });
+  // Plain numbers after a slug ("/family-guy-y6bs3k/1/1") are season / episode, never title ids.
+  const trailing = slugAt >= 0 && titleGuess.split(" ").length >= 1
+    ? [...new Set(parts.slice(slugAt + 1).filter((x) => /^\d{1,4}$/.test(x)).map(Number))]
+    : [];
+  const idNumbers = numbers.filter((n) => !trailing.includes(n) || n > 9999);
+  return { ok: true, origin, kind, numbers, idNumbers, trailing, imdb, titleGuess, yearGuess: slugYear ?? yearGuess, siteId, slugSegment };
 }
 
 // ── Template detection ────────────────────────────────────────────────────
@@ -280,6 +315,23 @@ export function detectTemplate(sample, match) {
     }
   }
 
+  // A per-title site id right after the slug ("family-guy-y6bs3k"): the whole
+  // segment is the site's own path for the title, {site}, found through its search.
+  const slugIdx = spans.findIndex((sp) => sp.ph === "slug" || sp.ph === "title");
+  if (slugIdx >= 0) {
+    const sp = spans[slugIdx];
+    const after = /^([-_.][0-9]{4})?[-_.]([a-z0-9]{4,10})(?=$|[/?#&])/i.exec(tail.slice(sp.end));
+    if (after && SITE_ID_TOKEN.test(after[2])) {
+      const end = sp.end + after[0].length;
+      for (let i = spans.length - 1; i >= 0; i--) if (spans[i] !== sp && spans[i].start >= sp.start && spans[i].end <= end) spans.splice(i, 1);
+      spans[spans.indexOf(sp)] = { start: sp.start, end, ph: "site", value: tail.slice(sp.start, end) };
+    }
+  }
+  // Never two of the same title id ("/{tmdb}/{tmdb}"): keep the first.
+  for (const ph of ID_PLACEHOLDERS) {
+    const same = spans.filter((sp) => sp.ph === ph);
+    for (const extra of same.slice(1)) spans.splice(spans.indexOf(extra), 1);
+  }
   spans.sort((a, b) => a.start - b.start);
   let template = origin;
   let at = 0;
@@ -307,12 +359,17 @@ export const templatePlaceholders = (template) => [...new Set([...String(templat
  * Whether a hand-edited template is usable: http(s), only known
  * placeholders, and one that names the title. Returns an error or null.
  */
+/** Whether a template uses one title id twice ("/{tmdb}/{tmdb}"): never a real link. */
+export const hasDuplicateId = (template) =>
+  ID_PLACEHOLDERS.some((ph) => (String(template || "").match(new RegExp(`\\{${ph}\\}`, "g")) || []).length > 1);
+
 export function validateTemplate(template) {
   if (!originOf(String(template || "").replace(/\{[a-z]+\}/g, "1"))) return "The link must start with http:// or https://";
   const used = templatePlaceholders(template);
   const unknown = used.filter((p) => !PLACEHOLDERS.includes(p));
   if (unknown.length) return `Unknown placeholder {${unknown[0]}}`;
   if (!used.some((p) => ID_PLACEHOLDERS.includes(p))) return "Add {tmdb}, {imdb}, {anilist}, {mal}, {title} or {slug}";
+  if (hasDuplicateId(template)) return "A title id is in the link twice";
   return null;
 }
 
@@ -337,6 +394,7 @@ export function buildUrl(template, v = {}) {
     episode: v.episode ?? 1,
     absolute: v.absolute ?? v.episode ?? 1,
     lang: v.lang === "dub" ? "dub" : "sub",
+    site: v.site || null,
   };
   let missing = false;
   const url = template.replace(/\{([a-z]+)\}/g, (all, ph) => {
@@ -345,7 +403,7 @@ export function buildUrl(template, v = {}) {
       missing = true;
       return all;
     }
-    return ph === "title" || ph === "slug" ? String(val) : encodeURIComponent(String(val));
+    return ph === "title" || ph === "slug" || ph === "site" ? String(val) : encodeURIComponent(String(val));
   });
   return missing ? null : url;
 }

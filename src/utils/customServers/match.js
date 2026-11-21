@@ -65,12 +65,25 @@ const fromAnilist = (m) => ({
   format: m.format || null,
 });
 
+/** A page title without the site's name and "Watch … online" words. */
+export function cleanPageTitle(t) {
+  return String(t || "")
+    .split(/\s[|·•–—-]\s/)[0]
+    .replace(/^\s*(watch|stream)\s+/i, "")
+    .replace(/\s+(online|free|full movie|hd|for free|streaming|english sub(bed)?|dubbed)(\s.*)?$/i, "")
+    .replace(/\s*\((19|20)\d\d\)\s*/, " ")
+    .replace(/\s+(19|20)\d\d\s*$/, "")
+    .trim();
+}
+
 /** Score of a hit against what the link itself says. */
 function score(hit, a, idInLink) {
   let s = idInLink ? 50 : 0;
   const names = [hit.title, ...(hit.altTitles || [])];
   const overlap = a.titleGuess ? Math.max(...names.map((n) => titleOverlap(a.titleGuess, n))) : 0;
-  if (a.titleGuess) s += overlap >= 0.99 ? 40 : overlap >= 0.5 ? 20 : -25;
+  // An id from the link whose title has nothing to do with the link's words
+  // (TMDB tv/1 "Pride" for ".../family-guy-y6bs3k/1/1") is not a match.
+  if (a.titleGuess) s += overlap >= 0.99 ? 40 : overlap >= 0.5 ? 20 : idInLink && titleWords(a.titleGuess).length >= 2 ? -70 : -25;
   if (a.yearGuess && hit.year) s += a.yearGuess === hit.year ? 15 : 0;
   if (a.kind) s += a.kind === hit.kind ? 20 : -20;
   if (!idInLink && overlap < 0.5) s -= 100; // a search hit must at least share the title
@@ -87,12 +100,12 @@ const settle = (promises) => Promise.allSettled(promises).then((r) => r.filter((
  * @returns {Promise<{ ok: boolean, error?: string, match?: object, detected?: object,
  *                     alternatives?: object[] }>}
  */
-export async function matchSample(sample, { tmdb, anilist, prefer = null, timeoutMs = LOOKUP_TIMEOUT_MS } = {}) {
+export async function matchSample(sample, { tmdb, anilist, prefer = null, timeoutMs = LOOKUP_TIMEOUT_MS, pageTitle = null } = {}) {
   const a = analyzeUrl(sample);
   if (!a.ok) return { ok: false, error: a.error };
   const kindHint = a.kind || prefer;
   const t = (p, what) => withTimeout(Promise.resolve().then(p), timeoutMs, what);
-  const ids = a.numbers.filter((n) => n > 0 && !(n === a.yearGuess)).slice(0, MAX_ID_CANDIDATES);
+  const ids = (a.idNumbers || a.numbers).filter((n) => n > 0 && !(n === a.yearGuess)).slice(0, MAX_ID_CANDIDATES);
   const errors = [];
   const note = (e) => {
     errors.push(e?.message || String(e));
@@ -141,17 +154,20 @@ export async function matchSample(sample, { tmdb, anilist, prefer = null, timeou
   const searches = [];
   if (a.titleGuess) {
     if (tmdb && kindHint !== "anime") {
-      const year = a.yearGuess ? `&year=${a.yearGuess}` : "";
-      searches.push(
-        t(() => tmdb(`/search/multi?query=${encodeURIComponent(a.titleGuess)}${year}`), "TMDB")
+      const q = encodeURIComponent(a.titleGuess);
+      const multi = (path) =>
+        t(() => tmdb(path), "TMDB")
           .then((r) =>
             (r?.results || [])
-              .filter((d) => d.media_type === "movie" || d.media_type === "tv")
+              .filter((d) => (d.media_type || kindHint) === "movie" || (d.media_type || kindHint) === "tv")
               .slice(0, 5)
-              .map((d) => ({ hit: fromTmdb(d.media_type, d), idInLink: false })),
+              .map((d) => ({ hit: fromTmdb(d.media_type || kindHint, d), idInLink: false })),
           )
-          .catch(note),
-      );
+          .catch(note);
+      searches.push(multi(`/search/multi?query=${q}`));
+      // The kind's own search takes the year as a filter (multi ignores it).
+      if (kindHint === "movie" && a.yearGuess) searches.push(multi(`/search/movie?query=${q}&year=${a.yearGuess}`));
+      if (kindHint === "tv" && a.yearGuess) searches.push(multi(`/search/tv?query=${q}&first_air_date_year=${a.yearGuess}`));
     }
     if (anilist && (kindHint === "anime" || !kindHint)) {
       searches.push(
@@ -180,11 +196,37 @@ export async function matchSample(sample, { tmdb, anilist, prefer = null, timeou
       };
     }
   }
+  // The page's own title (og:title / <title> / JSON-LD), when the link's words weren't enough.
+  if (pageTitle && tmdb && !matchSample.inner) {
+    const clean = cleanPageTitle(pageTitle);
+    const junk = /quick check|just a moment|attention required|verify|access denied|not found|error|captcha|security check|loading/i.test(clean || "");
+    const related = !a.titleGuess || titleWords(a.titleGuess).length < 2 || titleOverlap(a.titleGuess, clean) >= 0.3;
+    if (clean && !junk && related && titleWords(clean).join(" ") !== titleWords(a.titleGuess).join(" ")) {
+      const year = /\b(19|20)\d\d\b/.exec(pageTitle)?.[0] || a.yearGuess || "";
+      const kindWord = a.kind === "tv" || a.kind === "movie" ? `/${a.kind}` : "";
+      const synthetic = `${a.origin}${kindWord}/${clean.toLowerCase().replace(/[^a-z0-9]+/g, "-")}${year ? `-${year}` : ""}`;
+      matchSample.inner = true;
+      try {
+        const r = await matchSample(synthetic, { tmdb, anilist, prefer: prefer || a.kind, timeoutMs });
+        if (r.ok) {
+          const detected = detectTemplate(sample, r.match);
+          if (detected.ok) return { ...r, detected, via: "page title" };
+        }
+      } finally {
+        matchSample.inner = false;
+      }
+    }
+  }
   if (!found.length && errors.length) return { ok: false, error: `Couldn't reach the title database (${errors[0]}).` };
+  // Never a dead end: the closest titles, to pick from.
+  const guesses = ranked.filter((r) => r.s > -50).slice(0, 3).map((r) => r.hit);
   return {
     ok: false,
-    error: a.titleGuess
-      ? `No title matched "${a.titleGuess}". Paste the link of a page that plays a movie or an episode.`
-      : "No title matched this link. Paste the link of a page that plays a movie or an episode.",
+    guesses,
+    error: guesses.length
+      ? `Not sure which title this link is. Closest: ${guesses.map((g) => `${g.title}${g.year ? ` (${g.year})` : ""}`).join(", ")}.`
+      : a.titleGuess
+        ? `Couldn't find "${a.titleGuess}"${a.yearGuess ? ` (${a.yearGuess})` : ""} on TMDB yet; Super Player keeps looking through the site's own links.`
+        : "Couldn't tell which title this link is; Super Player keeps looking through the site's own links.",
   };
 }

@@ -349,8 +349,19 @@ const STEP_ICON = { pending: "·", running: "", done: "✓", failed: "✕", skip
 
 /** Smart add's progress, one row per step. */
 function SmartAddProgress({ steps }) {
+  // Seconds on the step that is running, so a slow site visibly keeps going.
+  const since = useRef({});
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(iv);
+  }, []);
+  for (const st of SMART_STEPS) {
+    const cur = steps[st.id];
+    if (cur?.state === "running" && !since.current[st.id]) since.current[st.id] = Date.now();
+  }
   return (
-    <Group header="Checking the Site" footer="Usually done in under 20 seconds.">
+    <Group header="Checking the Site" footer="Slow sites can take up to two minutes: each link gets up to 30 s to start a stream, and stops as soon as one shows.">
       <div className="cs-test">
         {SMART_STEPS.map((st) => {
           const cur = steps[st.id] || { state: "pending" };
@@ -361,6 +372,9 @@ function SmartAddProgress({ steps }) {
               </span>
               <span className="cs-step-text">
                 <span className="cs-step-label">{st.label}</span>
+                {cur.state === "running" && since.current[st.id] && (
+                  <span className="cs-step-detail">Still looking… {Math.round((Date.now() - since.current[st.id]) / 1000)} s</span>
+                )}
                 {cur.detail && <span className="cs-step-detail">{cur.detail}</span>}
               </span>
             </div>
@@ -378,6 +392,14 @@ function SummaryCard({ draft, analysis }) {
       <div className="cs-summary">
         <SiteLabel server={draft} />
         <div className="cs-summary-line">{analysis.summary}</div>
+        {Object.entries(draft.switched || {}).map(([k, sw]) => (
+          <div key={k} className="cs-summary-line">
+            {KIND_LABEL[k]}: your link was an info page, so Super Player uses the site's player link {sw.to}
+          </div>
+        ))}
+        {draft.siteServers?.length > 0 && (
+          <div className="cs-summary-line">Site servers found: {draft.siteServers.map((x) => x.label).join(", ")} (each one is checked by the Test)</div>
+        )}
         {analysis.titleIssues.map((t) => (
           <div key={t} className="cs-summary-warn">
             {t}
@@ -567,8 +589,8 @@ function TestPanel({ server, autoStart }) {
         <div key={kind} className="cs-test">
           {kinds.length > 1 && <div className="cs-test-kind">{KIND_LABEL[kind]} link</div>}
           {steps.map((st) => (
-            <div key={st.id} className={"cs-step" + (st.neutral ? " is-neutral" : st.ok ? " is-ok" : " is-bad")}>
-              <span className="cs-step-icon" aria-hidden="true">{st.neutral ? "–" : st.ok ? "✓" : "✕"}</span>
+            <div key={st.id} className={"cs-step" + (st.running ? " is-running" : st.neutral ? " is-neutral" : st.ok ? " is-ok" : " is-bad")}>
+              <span className="cs-step-icon" aria-hidden="true">{st.running ? <span className="cs-spinner" /> : st.neutral ? "–" : st.ok ? "✓" : "✕"}</span>
               <span className="cs-step-text">
                 <span className="cs-step-label">{st.label}</span>
                 <span className="cs-step-detail">{st.detail}</span>
@@ -577,7 +599,7 @@ function TestPanel({ server, autoStart }) {
           ))}
         </div>
       ))}
-      {state?.running && <Row label="Testing…" detail="Up to 15 s per link, then the direct API" chevron={false} />}
+      {state?.running && <Row label="Testing…" detail="Up to 45 s per link (ends at the first stream), then more titles and the site's servers" chevron={false} />}
       {!state?.running && <Row label={state ? "Test Again" : "Test"} center chevron={false} onClick={run} />}
       {state?.result?.playable && <Row label="Play Test" center chevron={false} onClick={() => playTest(server, state.result.playable.url)} />}
     </Group>

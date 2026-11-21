@@ -12,9 +12,10 @@
 import { storage, secureStorage } from "../../utils/storage";
 import { fetchImdbId, lastTmdbKey, tmdbFetch } from "../../utils/api";
 import { normalizeSiteServer, resolveSiteServer, siteAdderEnabled } from "./siteServers";
-import { buildUrl, deriveTemplate, normalizeSlugStyle, siteDomain, templatePlaceholders, TEMPLATE_KINDS, validateTemplate } from "../../utils/customServers/template";
+import { buildUrl, deriveTemplate, hasDuplicateId, normalizeSlugStyle, originOf, siteDomain, templatePlaceholders, TEMPLATE_KINDS, validateTemplate } from "../../utils/customServers/template";
 import { DIRECT_METHODS, EXTRACT_TYPES, validateDirect, checkTitle } from "../../utils/customServers/direct";
-import { cachedResolve, learnDirect, testDirect, DIRECT_TIMEOUT_MS } from "./customDirect";
+import { cachedResolve, directHttp, learnDirect, testDirect, DIRECT_TIMEOUT_MS } from "./customDirect";
+import { resolveSite } from "../../utils/customServers/lookup";
 import { matchSample, withTimeout, LOOKUP_TIMEOUT_MS } from "../../utils/customServers/match";
 import { isAutoPick } from "./autoServer";
 import { diag } from "../../utils/diag";
@@ -27,9 +28,14 @@ export const CUSTOM_ID_PREFIX = "custom-";
 const CUSTOM_HOST = "sp-custom.invalid";
 export const CHANGED_EVENT = "sb-custom-servers-changed";
 /** The hidden page of a custom site gets this long to show a stream when playing. */
-export const CUSTOM_SNIFF_TIMEOUT_MS = 9000;
-/** A Test waits a little longer, so a slow site gets a clear answer. */
-export const TEST_SNIFF_TIMEOUT_MS = 15000;
+export const CUSTOM_SNIFF_TIMEOUT_MS = 25000;
+/**
+ * A Test waits up to this long per link (it ends as soon as a stream shows):
+ * slow sites need a tap, a server pick or two nested iframes first.
+ */
+export const TEST_SNIFF_TIMEOUT_MS = 45000;
+/** At most this many of a site's own servers are kept per site. */
+export const MAX_SITE_SERVERS = 8;
 /** Play waits at most this long for an IMDb / MAL id a template needs. */
 const ID_LOOKUP_WAIT_MS = 2500;
 const MAX_NAME_LENGTH = 40;
@@ -55,6 +61,20 @@ export const LISTS = Object.freeze([
 ]);
 
 /** Titles the Test uses for a link kind the sample didn't cover. */
+/**
+ * Titles the Test checks besides the first one, so a site is known to work
+ * for every title and not just the one pasted: 3 movies, 2 episodes (an
+ * anime one included).
+ */
+export const EXTRA_TEST_TITLES = Object.freeze({
+  movie: [
+    { kind: "movie", tmdb: 550, imdb: "tt0137523", title: "Fight Club", year: 1999 },
+    { kind: "movie", tmdb: 603, imdb: "tt0133093", title: "The Matrix", year: 1999 },
+  ],
+  tv: [{ kind: "tv", tmdb: 66732, imdb: "tt4574334", title: "Stranger Things", year: 2016, season: 1, episode: 2 }],
+  anime: [],
+});
+
 export const REFERENCE_TITLES = Object.freeze({
   movie: { kind: "movie", tmdb: 27205, imdb: "tt1375666", title: "Inception", year: 2010 },
   tv: { kind: "tv", tmdb: 1396, imdb: "tt0903747", title: "Breaking Bad", year: 2008, season: 1, episode: 1 },
@@ -111,11 +131,45 @@ export function normalizeServer(s) {
     directNotes: Object.fromEntries(DIRECT_SLOTS.filter((k) => typeof s.directNotes?.[k] === "string").map((k) => [k, s.directNotes[k].slice(0, 200)])),
     learnTried: Object.fromEntries(TEMPLATE_KINDS.filter((k) => Number(s.learnTried?.[k])).map((k) => [k, Number(s.learnTried[k])])),
     slugStyle: s.slugStyle ? normalizeSlugStyle(s.slugStyle) : null,
+    // Recipe: the button the page needs pressed before it streams ("Start playback").
+    tap: typeof s.tap === "string" && s.tap.trim() ? s.tap.trim().slice(0, 60) : null,
+    // The site's own servers ("Server 2", "Vidplay"): each working one is its own entry.
+    siteServers: normalizeSiteServers(s.siteServers),
+    // The link the viewer pasted, when the adder switched to the site's player route.
+    switchedFrom: typeof s.switchedFrom === "string" ? s.switchedFrom.slice(0, 300) : null,
+    // Slug sites with per-title ids ({site}): the site's own search, per kind.
+    lookup: Object.fromEntries(
+      ["movie", "tv", "anime"]
+        .filter((k) => typeof s.lookup?.[k]?.url === "string" && /^https?:\/\//.test(s.lookup[k].url) && s.lookup[k].url.includes("{query}"))
+        .map((k) => [k, { url: s.lookup[k].url.slice(0, 300), type: s.lookup[k].type === "tv" ? "tv" : "movie" }]),
+    ),
     icon: typeof s.icon === "string" && /^https?:\/\//.test(s.icon) ? s.icon : null,
     createdAt: Number(s.createdAt) || Date.now(),
     updatedAt: Number(s.updatedAt) || Date.now(),
   };
 }
+
+/** Id of one of a site's own servers: "<server id>~<label slug>". */
+export const siteServerId = (serverId, label) =>
+  `${serverId}~${String(label).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "server"}`;
+/** The saved server's id for a menu id ("custom-x~server-2:dub" -> "custom-x"). */
+export const baseCustomId = (id) => String(id || "").split(/[~:]/)[0];
+
+/** A site's server list in its expected shape: [{ label, works, at, isNew? }]. */
+export function normalizeSiteServers(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const x of list) {
+    const label = typeof x === "string" ? x : x?.label;
+    if (typeof label !== "string" || !label.trim() || out.some((o) => o.label === label.trim())) continue;
+    out.push({ label: label.trim().slice(0, 60), works: x?.works === true ? true : x?.works === false ? false : null, at: Number(x?.at) || 0 });
+    if (out.length >= MAX_SITE_SERVERS) break;
+  }
+  return out;
+}
+
+/** The site servers that work, as menu entries. */
+export const workingSiteServers = (s) => (s.siteServers || []).filter((x) => x.works === true);
 
 /** A saved direct definition in its expected shape, or null when it can't work. */
 export function normalizeDirect(d) {
@@ -227,6 +281,21 @@ export async function recordTestResult(id, result) {
   await writeAll(list);
 }
 
+/** Store the recipe the Test learned: the button to press and the site's servers. */
+export async function recordRecipe(id, { tap, siteServers, verified = [] } = {}) {
+  const list = listCustomServers();
+  const s = list.find((x) => x.id === id);
+  if (!s) return;
+  if (tap !== undefined) s.tap = tap || null;
+  if (siteServers) s.siteServers = normalizeSiteServers(siteServers);
+  // A link that passed its Test is Verified, and its list turns on by itself.
+  for (const k of verified) {
+    if (s.guessed) delete s.guessed[k];
+    s.lists = { ...s.lists, [k === "movie" ? "movies" : k]: true };
+  }
+  await writeAll(list);
+}
+
 /**
  * Store what Direct learning found for one kind: the definition, or why
  * there is none (shown in the Test and the summary).
@@ -312,11 +381,14 @@ const keyUrl = (id, ...parts) => `https://${CUSTOM_HOST}/${id}/${parts.map((p) =
  * customCandidates() builds it when Play starts.
  */
 export function customPlayerSources() {
-  return listCustomServers().map((s) => {
+  return listCustomServers().flatMap((s) => [
+    { s, id: s.id, label: s.name },
+    ...workingSiteServers(s).map((x) => ({ s, id: siteServerId(s.id, x.label), label: `${s.name} · ${x.label}` })),
+  ]).map(({ s, id, label }) => {
     const dubbable = !!s.templates.anime && templatePlaceholders(s.templates.anime).includes("lang");
     return {
-      id: s.id,
-      label: s.name,
+      id,
+      label,
       tag: null,
       note: "Custom",
       custom: true,
@@ -324,9 +396,9 @@ export function customPlayerSources() {
       supportsProgress: false,
       supportsAnime: !!s.lists.anime,
       params: {},
-      movieUrl: (id) => keyUrl(s.id, "movie", id),
-      tvUrl: (id, season, ep) => keyUrl(s.id, "tv", id, season, ep),
-      ...(dubbable ? { animeUrl: (anilistId, ep, lang) => keyUrl(s.id, "anime", anilistId, ep, lang) } : {}),
+      movieUrl: (tid) => keyUrl(id, "movie", tid),
+      tvUrl: (tid, season, ep) => keyUrl(id, "tv", tid, season, ep),
+      ...(dubbable ? { animeUrl: (anilistId, ep, lang) => keyUrl(id, "anime", anilistId, ep, lang) } : {}),
     };
   });
 }
@@ -334,7 +406,7 @@ export function customPlayerSources() {
 /** Whether a PLAYER_SOURCES entry is shown for this title (built-ins always are). */
 export function sourceFitsTitle(src, { isAnime, type }) {
   if (!src?.custom) return true;
-  const s = listCustomServers().find((x) => x.id === src.id);
+  const s = listCustomServers().find((x) => x.id === baseCustomId(src.id));
   return !!s && serverFits(s, { isAnime, type });
 }
 
@@ -418,6 +490,24 @@ export async function valuesFor(template, ctx, { waitMs = ID_LOOKUP_WAIT_MS } = 
   return v;
 }
 
+/** The HTTP client for a site's own search: native (no CORS), with the site as Referer. */
+export const siteHttp = (site) => (url) => {
+  const origin = originOf(url) || `https://${site}`;
+  return directHttp({ url, headers: { Referer: origin + "/", Accept: "application/json, text/html;q=0.9, */*;q=0.8" }, timeoutMs: 6000 });
+};
+const siteValues = new Map(); // "<server>:<kind>:<title>:<year>" -> Promise<string|null>
+
+/** A title's {site} value through the server's learned search (cached for the session). */
+export function siteValueFor(s, kind, { title, year }) {
+  const lk = s.lookup?.[kind] || s.lookup?.[kind === "anime" ? "tv" : kind] || null;
+  if (!lk || !title) return Promise.resolve(null);
+  const key = `${s.id}:${s.site}:${lk.url}:${kind}:${title}:${year || ""}`;
+  if (!siteValues.has(key)) {
+    siteValues.set(key, resolveSite(lk, { title, year, kind: kind === "movie" ? "movie" : "tv", http: siteHttp(s.site) }).catch(() => null));
+  }
+  return siteValues.get(key);
+}
+
 /** Whether a source URL is a custom server's placeholder (never loaded as a page). */
 export const isCustomPlaceholder = (url) => String(url || "").includes(`//${CUSTOM_HOST}/`);
 
@@ -462,6 +552,7 @@ export async function customCandidates(ctx, opts = {}) {
         const tpl = templateFor(s, { isAnime, type, dubMode });
         if (!tpl) return [];
         const values = { ...(await valuesFor(tpl, ctx, opts)), slugStyle: s.slugStyle };
+        if (templatePlaceholders(tpl).includes("site")) values.site = await siteValueFor(s, kindOfTemplate(s, tpl), values);
         const url = buildUrl(tpl, values);
         if (!url) {
           diag("custom", `${s.name}: no link for ${type} ${ctx.tmdbId ?? ctx.anilistId} (a value is missing)`);
@@ -486,6 +577,11 @@ export async function customCandidates(ctx, opts = {}) {
           const learn = s.mode !== "page" && !def && Date.now() - (s.learnTried?.[kind] || 0) > LEARN_RETRY_MS;
           if (learn) pendingLearn.set(url, { serverId: s.id, kind, values, want: wantFor(ctx, values, kind) });
           list.push({ ...candidateFor(s, url, { id, label }), ...(learn ? { learn: true } : {}) });
+          // The site's own servers, each its own entry: same page, that server's button pressed.
+          const suffix = dubbable ? `:${dubMode}` : "";
+          for (const x of workingSiteServers(s)) {
+            list.push(candidateFor(s, url, { id: siteServerId(s.id, x.label) + suffix, label: `${s.name} · ${x.label}`, tap: x.label, tapOnly: true, cache: false }));
+          }
         }
         return list;
       }),
@@ -528,13 +624,15 @@ if (typeof window !== "undefined") {
 }
 
 /** One native candidate for a server's link. */
-export const candidateFor = (s, url, { id = s.id, label = s.name, timeoutMs = CUSTOM_SNIFF_TIMEOUT_MS, cache = true } = {}) => ({
+export const candidateFor = (s, url, { id = s.id, label = s.name, timeoutMs = CUSTOM_SNIFF_TIMEOUT_MS, cache = true, tap = s.tap || null, tapOnly = false } = {}) => ({
   id,
   label,
   url,
   lockHost: s.site,
   timeoutMs,
   cache,
+  ...(tap ? { tap } : {}),
+  ...(tapOnly ? { tapOnly: true } : {}),
 });
 
 /**
@@ -549,6 +647,8 @@ export const candidateFor = (s, url, { id = s.id, label = s.name, timeoutMs = CU
 export function withCustom(list, custom, picked = null) {
   if (!custom?.length) return list;
   const pick = picked ? custom.filter((c) => c.id.split(":")[0] === picked) : [];
+  // A site's own server picked: the site's other entries follow it first.
+  if (pick.length && picked.includes("~")) pick.push(...custom.filter((c) => !pick.includes(c) && baseCustomId(c.id) === baseCustomId(picked)));
   const rest = custom.filter((c) => !pick.includes(c));
   if (pick.length) return [...pick, ...list, ...rest];
   const lead = list.findIndex((c) => !/#sb-direct$/.test(c.url));
@@ -573,7 +673,17 @@ export function pickedCustomId() {
 export async function analyzeSample(sample, { apiKey = lastTmdbKey(), prefer = null } = {}) {
   const tmdb = apiKey ? (path) => tmdbFetch(path, apiKey, { kidsRaw: true }) : null;
   const anilist = (q, v) => anilistQuery(q, v);
-  const res = await matchSample(sample, { tmdb, anilist, prefer, timeoutMs: LOOKUP_TIMEOUT_MS });
+  let res = await matchSample(sample, { tmdb, anilist, prefer, timeoutMs: LOOKUP_TIMEOUT_MS });
+  // The link's words weren't enough: the page's own title (og:title, JSON-LD, <title>).
+  if (!res.ok && canTestNatively()) {
+    const pageTitle = await directHttp({ url: sample, timeoutMs: 6000 })
+      .then((r) => (r?.status < 400 ? titleFromHtml(r.text) : null))
+      .catch(() => null);
+    if (pageTitle) {
+      const again = await matchSample(sample, { tmdb, anilist, prefer, timeoutMs: LOOKUP_TIMEOUT_MS, pageTitle });
+      if (again.ok || again.guesses?.length) res = again;
+    }
+  }
   if (!res.ok) return res;
   const kind = res.detected.kind;
   const templates = { [kind]: res.detected.template };
@@ -581,12 +691,26 @@ export async function analyzeSample(sample, { apiKey = lastTmdbKey(), prefer = n
   for (const other of ["movie", "tv"]) {
     if (templates[other]) continue;
     const g = deriveTemplate(res.detected.template, kind, other);
-    if (g) {
+    if (g && !hasDuplicateId(g)) {
       templates[other] = g;
       guessed[other] = true;
     }
   }
   return { ...res, templates, guessed };
+}
+
+/** A page's own name for its title: og:title, then JSON-LD "name", then <title>. */
+export function titleFromHtml(html) {
+  const h = String(html || "");
+  const og = /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i.exec(h) || /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i.exec(h);
+  if (og) return og[1].trim();
+  const ld = /<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/i.exec(h);
+  if (ld) {
+    const m = /"name"\s*:\s*"([^"]{2,120})"/.exec(ld[1]);
+    if (m) return m[1];
+  }
+  const t = /<title[^>]*>([^<]{2,200})<\/title>/i.exec(h);
+  return t ? t[1].trim() : null;
 }
 
 /** Lists a fresh server joins by default: the kind of link that was pasted. */
@@ -650,6 +774,22 @@ export function testLinkFor(server, kind) {
   return { ok: true, url, expected, title, reference: !own, values: v, want };
 }
 
+/**
+ * testLinkFor, plus the {site} value of a reference title looked up through
+ * the site's own search (slug sites with per-title ids).
+ */
+export async function testLinkAsync(server, kind) {
+  const link = testLinkFor(server, kind);
+  if (link.ok || !templatePlaceholders(server.templates[kind] || "").includes("site")) return link;
+  const ref = REFERENCE_TITLES[kind];
+  const site = await siteValueFor(server, kind, ref);
+  if (!site) return { ok: false, error: `Couldn't find ${ref.title} through ${server.name}'s search.` };
+  const v = { ...ref, lang: "sub", slugStyle: server.slugStyle, site };
+  const url = buildUrl(server.templates[kind], v);
+  if (!url) return link;
+  return { ok: true, url, expected: null, title: ref.title, reference: true, values: v, want: { kind: kind === "movie" ? "movie" : "tv", title: ref.title, altTitles: ref.altTitles || [], year: ref.year, tmdb: ref.tmdb } };
+}
+
 /** Season / episode / lang read back out of the sample at the template's places. */
 export function sampleNumbers(template, sample) {
   const names = [];
@@ -673,15 +813,16 @@ export function sampleNumbers(template, sample) {
   names.forEach((n, i) => {
     if (n === "season" || n === "episode") out[n] = Number(m[i + 1]) || 1;
     if (n === "lang") out.lang = /dub/i.test(m[i + 1]) ? "dub" : "sub";
+    if (n === "site") out.site = m[i + 1];
   });
   return out;
 }
 
 /** Open one link in the hidden page (native), with the learn log on. */
-export async function nativeTry(server, url, { timeoutMs = TEST_SNIFF_TIMEOUT_MS, learn = true } = {}) {
+export async function nativeTry(server, url, { timeoutMs = TEST_SNIFF_TIMEOUT_MS, learn = true, tap, tapOnly = false } = {}) {
   try {
     return await nativeTest().postMessage({
-      candidate: { ...candidateFor(server, url, { id: server.id, timeoutMs, cache: false }), learn },
+      candidate: { ...candidateFor(server, url, { id: server.id, timeoutMs, cache: false, ...(tap !== undefined ? { tap } : {}), tapOnly }), learn },
     });
   } catch (e) {
     return { ok: false, error: e?.message || String(e) };
@@ -720,7 +861,9 @@ export function pageSteps(r, { title, want, site, t0 = Date.now() }) {
     label: "Stream found",
     detail: stream.ok
       ? `${(stream.kind || "hls").toUpperCase()} in ${((stream.ms ?? Date.now() - t0) / 1000).toFixed(1)} s`
-      : stream.error || (page.ok ? `No video stream within ${TEST_SNIFF_TIMEOUT_MS / 1000} s` : "Skipped: the page didn't load"),
+      : page.humanCheck
+        ? `The site shows a human check (${page.humanCheck}) before it plays. Super Player never ticks it for you, so this site can't play in the background.`
+        : stream.error || (page.ok ? `No video stream within ${TEST_SNIFF_TIMEOUT_MS / 1000} s${page.taps?.length ? ` (pressed ${[...new Set(page.taps)].slice(0, 3).join(", ")})` : ""}` : "Skipped: the page didn't load"),
   });
   const play = r?.playable || {};
   steps.push({
@@ -805,17 +948,33 @@ export async function directSteps(server, kind, link, r) {
  * blocked, then Direct mode (learned from the page) and its own test.
  * Learned APIs are saved on the server.
  */
-export async function testServer(server, { onStep } = {}) {
+export async function testServer(server, { onStep, retest = !!server.lastTest } = {}) {
   const kinds = TEMPLATE_KINDS.filter((k) => server.templates[k]);
   const results = [];
   let playable = null;
+  let tap = server.tap || null;
+  const seenServers = [];
+  let serversKind = null;
+  const verified = [];
   for (const kind of kinds) {
     const steps = [];
     const push = (...s) => {
       steps.push(...s);
       onStep?.({ kind, steps: steps.slice() });
     };
-    const link = testLinkFor(server, kind);
+    // A live "still looking… 12 s" line while a page is being tried; the try ends at the first stream.
+    const looking = async (label, job) => {
+      const t0 = Date.now();
+      const tick = () => onStep?.({ kind, steps: [...steps, { id: "looking", running: true, ok: true, neutral: true, label, detail: `Still looking… ${Math.round((Date.now() - t0) / 1000)} s of ${TEST_SNIFF_TIMEOUT_MS / 1000} s` }] });
+      tick();
+      const iv = setInterval(tick, 1000);
+      try {
+        return await job();
+      } finally {
+        clearInterval(iv);
+      }
+    };
+    const link = await testLinkAsync(server, kind);
     if (!link.ok) {
       push({ id: "link", ok: false, label: "Link built", detail: link.error });
       results.push({ kind, steps });
@@ -824,9 +983,9 @@ export async function testServer(server, { onStep } = {}) {
     const rebuilt = !link.expected || link.expected.replace(/\/$/, "") === link.url.replace(/\/$/, "");
     push({
       id: "link",
-      ok: rebuilt,
+      ok: rebuilt || !!server.switchedFrom,
       label: "Link built",
-      detail: rebuilt
+      detail: rebuilt || server.switchedFrom
         ? `${link.reference ? `${link.title} (test title)` : link.title}: ${link.url}`
         : `Rebuilt ${link.url} but you pasted ${link.expected}. Check the template.`,
     });
@@ -836,24 +995,105 @@ export async function testServer(server, { onStep } = {}) {
       continue;
     }
     const t0 = Date.now();
-    const r = await nativeTry(server, link.url, { learn: server.mode !== "page" });
+    let r = await looking(`Trying ${link.title}`, () => nativeTry(server, link.url, { learn: server.mode !== "page" }));
+    // One more try in a fresh hidden page (slow first load, a flaky server), unless a check blocks it.
+    if (!r?.stream?.ok && !r?.page?.humanCheck && !r?.page?.wall && r?.page?.ok) {
+      r = await looking(`Trying ${link.title} again`, () => nativeTry(server, link.url, { learn: server.mode !== "page" }));
+    }
     push(...pageSteps(r, { title: link.title, want: link.want, site: server.name, t0 }));
+    const works = !!r?.stream?.ok && !!r?.playable?.ok;
+    // Recipe: the last button pressed before the stream showed.
+    if (works && r?.page?.taps?.length) tap = r.page.taps[r.page.taps.length - 1];
+    for (const l of r?.page?.servers || []) if (!seenServers.includes(l)) seenServers.push(l);
     if (server.mode !== "page") {
       const d = await directSteps(server, kind, link, r);
       push(...d.steps);
       await recordDirect(server.id, kind, d.def, d.note);
     }
-    if (r?.stream?.ok && r?.playable?.ok && !playable) playable = { kind, url: link.url };
+    if (works && !playable) playable = { kind, url: link.url };
+    // More titles, so the link is known to work for every title, not only this one.
+    if (works) {
+      const extra = await extraTitlesFor(server, kind);
+      const tries = await looking(`Trying ${extra.map((x) => x.title).join(", ")}`, () =>
+        Promise.all(extra.map(async (x) => ({ x, r: await nativeTry({ ...server, tap }, x.url, { learn: false }) }))),
+      );
+      for (const { x, r: rx } of tries) {
+        const ok = !!rx?.stream?.ok && !!rx?.playable?.ok;
+        push({
+          id: `title-${x.key}`,
+          ok,
+          label: `Also plays ${x.title}`,
+          detail: ok
+            ? `${(rx.stream.kind || "hls").toUpperCase()} in ${((rx.stream.ms || 0) / 1000).toFixed(1)} s`
+            : pageSteps(rx, { title: x.title, want: x.want, site: server.name }).find((st) => !st.ok && !st.neutral)?.detail || "No stream",
+        });
+      }
+    }
+    if (works && !serversKind) serversKind = { kind, link, steps, push };
+    if (works) verified.push(kind);
     results.push({ kind, steps });
   }
+  // The site's own servers: each one tried with only its button pressed. On a
+  // Retest the ones that worked before are kept without a new try.
+  const before = normalizeSiteServers(server.siteServers);
+  const labels = [...before.map((x) => x.label), ...seenServers.filter((l) => !before.some((x) => x.label === l))].slice(0, MAX_SITE_SERVERS);
+  const siteServers = [];
+  if (labels.length && serversKind && nativeTest()) {
+    const { link, push } = serversKind;
+    for (const label of labels) {
+      const old = before.find((x) => x.label === label);
+      if (retest && old?.works === true) {
+        siteServers.push({ ...old });
+        push({ id: `srv-${label}`, ok: true, label: `Server: ${label}`, detail: "Kept: worked before" });
+        continue;
+      }
+      const rs = await nativeTry(server, link.url, { learn: false, tap: label, tapOnly: true, timeoutMs: TEST_SNIFF_TIMEOUT_MS });
+      const ok = !!rs?.stream?.ok && !!rs?.playable?.ok;
+      siteServers.push({ label, works: ok, at: Date.now() });
+      push({
+        id: `srv-${label}`,
+        ok: true,
+        neutral: !ok,
+        label: `Server: ${label}`,
+        detail: ok
+          ? old ? (old.works === false ? "Fixed: works now, added to your servers" : "Works, added to your servers") : "New: works, added to your servers"
+          : old ? "Still doesn't play" : "New: doesn't play, not added",
+      });
+    }
+  } else {
+    siteServers.push(...before);
+  }
+  await recordRecipe(server.id, { tap, siteServers, verified });
   const ok = results.length > 0 && results.every((k) => k.steps.every((s) => s.ok));
   const working = results.filter((k) => k.steps.some((s) => (s.id === "playable" || s.id === "d-playable") && s.ok)).map((k) => k.kind);
-  const summary = ok
+  const nServers = siteServers.filter((x) => x.works).length;
+  const summary = (ok
     ? "Working"
     : working.length
       ? `Works for ${working.join(", ")}`
-      : results.flatMap((k) => k.steps).find((s) => !s.ok)?.detail || "Not working";
-  return { ok, kinds: results, summary, playable };
+      : results.flatMap((k) => k.steps).find((s) => !s.ok)?.detail || "Not working") + (nServers ? ` · ${nServers} site server${nServers === 1 ? "" : "s"}` : "");
+  return { ok, kinds: results, summary, playable, tap, siteServers };
+}
+
+/** The extra titles a kind is checked with (links built from the server's template). */
+export async function extraTitlesFor(server, kind) {
+  const list = kind === "anime" ? [] : EXTRA_TEST_TITLES[kind] || [];
+  const out = [];
+  const own = server.match?.ids?.tmdb;
+  const refs = [...list];
+  // The reference title too, when the first try was the pasted title.
+  if (server.match?.kind === kind && REFERENCE_TITLES[kind]) refs.unshift(REFERENCE_TITLES[kind]);
+  // An anime episode through the TV link (sites whose anime use TMDB ids).
+  if (kind === "tv" && !server.templates.anime) refs.push(REFERENCE_TITLES.anime);
+  for (const ref of refs) {
+    if (ref.tmdb && ref.tmdb === own) continue;
+    const v = { ...ref, lang: "sub", slugStyle: server.slugStyle };
+    if (templatePlaceholders(server.templates[kind]).includes("site")) v.site = await siteValueFor(server, kind, ref);
+    const url = buildUrl(server.templates[kind], v);
+    if (!url) continue;
+    out.push({ key: `${kind}-${ref.anilist || ref.tmdb}`, title: ref.title, url, want: { kind: kind === "movie" ? "movie" : "tv", title: ref.title, altTitles: ref.altTitles || [], year: ref.year, tmdb: ref.tmdb } });
+  }
+  return out.slice(0, kind === "movie" ? 2 : 3);
 }
 
 /** Play a test link in the native player (the link the Test found working). */

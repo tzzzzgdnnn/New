@@ -263,6 +263,9 @@ final class ServerTestMessageHandler: NSObject, WKScriptMessageHandlerWithReply 
         if let t = rep.pageLoadedAfter { page["ms"] = Int(t * 1000) }
         if let t = rep.pageTitle { page["title"] = t }
         if let w = rep.wall { page["wall"] = w }
+        if let h = rep.humanCheck { page["humanCheck"] = h }
+        if !rep.taps.isEmpty { page["taps"] = rep.taps }
+        if !rep.siteServers.isEmpty { page["servers"] = rep.siteServers }
         let statusOK = rep.pageStatus.map { $0 < 400 } ?? true
         page["ok"] = statusOK && rep.pageError == nil && (rep.pageLoadedAfter != nil || streamFound)
             || streamFound

@@ -3,7 +3,7 @@
 // rebuilding the app.
 import bundled from "../../../servers.json";
 import { PLAYER_SOURCES, WEB_UNFRAMEABLE, WEB_ALLOWED, WEB_PLAYER_URLS, webEmbedRank } from "../../utils/api";
-import { customPlayerSources, listCustomServers, serverFits, setCustomServersApplyHook } from "./customServers";
+import { baseCustomId, customPlayerSources, listCustomServers, serverFits, setCustomServersApplyHook } from "./customServers";
 
 export const SERVERS_BRANCH =
   (typeof localStorage !== "undefined" &&
@@ -63,7 +63,7 @@ function customSources() {
       },
     ]),
   );
-  return customPlayerSources().map((src) => ({ ...src, customFits: fits.get(src.id) }));
+  return customPlayerSources().map((src) => ({ ...src, customFits: fits.get(baseCustomId(src.id)) }));
 }
 
 /** Web app: a server's bare player page in place of its site page (WEB_PLAYER_URLS, #26). */
