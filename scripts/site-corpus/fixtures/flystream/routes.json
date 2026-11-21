@@ -1,0 +1,14 @@
+{
+ "/": {
+  "file": "home.html",
+  "status": 200
+ },
+ "/movie/27205": {
+  "file": "movie_27205.html",
+  "status": 200
+ },
+ "/tv/1399/1/1": {
+  "file": "tv_1399_1_1.html",
+  "status": 200
+ }
+}

@@ -1,0 +1,22 @@
+{
+ "/": {
+  "file": "home.html",
+  "status": 200
+ },
+ "/details/movie/27205": {
+  "file": "details_movie_27205.html",
+  "status": 200
+ },
+ "/embed/movie/27205": {
+  "file": "embed_movie_27205.html",
+  "status": 200
+ },
+ "/embed/tv/1399/1/1": {
+  "file": "embed_tv_1399_1_1.html",
+  "status": 200
+ },
+ "/assets/main-DHdp0MQu.js": {
+  "file": "assets_main-DHdp0MQu.js",
+  "status": 200
+ }
+}

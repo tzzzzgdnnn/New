@@ -1,0 +1,453 @@
+{
+ "note": "Corpus for the Custom Servers site adder. routes = the links the adder must learn (expected). appCanPlay: page = plays in the app's hidden page if the link is right; turnstile/anubis/frame-only = needs app support; unknown = blocked from the sandbox, unverified.",
+ "titles": {
+  "movies": [
+   {
+    "tmdb": 27205,
+    "imdb": "tt1375666",
+    "title": "Inception",
+    "year": 2010
+   },
+   {
+    "tmdb": 155,
+    "imdb": "tt0468569",
+    "title": "The Dark Knight",
+    "year": 2008
+   },
+   {
+    "tmdb": 603,
+    "imdb": "tt0133093",
+    "title": "The Matrix",
+    "year": 1999
+   }
+  ],
+  "episodes": [
+   {
+    "tmdb": 1399,
+    "imdb": "tt0944947",
+    "title": "Game of Thrones",
+    "year": 2011,
+    "season": 1,
+    "episode": 1
+   },
+   {
+    "tmdb": 1396,
+    "imdb": "tt0903747",
+    "title": "Breaking Bad",
+    "year": 2008,
+    "season": 2,
+    "episode": 3
+   }
+  ],
+  "anime": [
+   {
+    "tmdb": 37854,
+    "anilist": 21,
+    "mal": 21,
+    "title": "One Piece",
+    "year": 1999,
+    "season": 1,
+    "episode": 1
+   }
+  ]
+ },
+ "sites": [
+  {
+   "id": "m-zone",
+   "origin": "https://m-zone.cc",
+   "paste": "https://m-zone.cc/details/movie/27205",
+   "routes": {
+    "movie": "https://m-zone.cc/embed/movie/{tmdb}",
+    "tv": "https://m-zone.cc/embed/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "m-zone",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "api.m-zone.org (not needed: TMDB ids)",
+   "servers": "multiple (in-player picker)",
+   "stream": "SPA (React Router). /details/:type/:id is an info page that never plays; the player routes are /embed/:type/:id and /embed/:type/:id/:season/:episode (read from the bundle's router). Stream from api.m-zone.org /api/player/v4/c\u2026 with obfuscated, signed requests \u2192 page mode only.",
+   "blocking": "none from sandbox",
+   "scheme": "https",
+   "spa": true,
+   "appCanPlay": "page"
+  },
+  {
+   "id": "bingebang",
+   "origin": "https://bingebang.sx",
+   "paste": "https://bingebang.sx/tv/play/family-guy-y6bs3k/1/1",
+   "routes": {
+    "movie": "https://bingebang.sx/movie/play/{site}",
+    "tv": "https://bingebang.sx/tv/play/{site}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "bingebang",
+   "idType": "slug+site id",
+   "animeVia": "tv",
+   "search": "GET /api/search/{movie|tv}?query=\u2026&page=1 \u2192 JSON results[].play_url (open, no key)",
+   "servers": "multiple",
+   "stream": "Every /play/ page is now a Cloudflare Turnstile 'Quick check' gate (sitekey 0x4AAAAAAD085X4hFCI3NeEl) that POSTs /api/player/gate before the player loads. Managed Turnstile may pass invisibly in WKWebView; if it shows the checkbox the app refuses (never ticks human checks).",
+   "blocking": "Turnstile gate on /play/ (HTTP 200)",
+   "scheme": "https",
+   "appCanPlay": "turnstile",
+   "siteIds": {
+    "Inception": "inception-2010-uyknsn",
+    "The Dark Knight": "the-dark-knight-2008-fkj48m",
+    "The Matrix": "the-matrix-1999-yqf335",
+    "Game of Thrones": "game-of-thrones-rrvaju",
+    "Breaking Bad": "breaking-bad-wr64zr",
+    "One Piece": "one-piece-u9v7li"
+   }
+  },
+  {
+   "id": "flystream",
+   "origin": "https://flystream.net",
+   "paste": "https://flystream.net/movie/27205",
+   "routes": {
+    "movie": "https://flystream.net/movie/{tmdb}",
+    "tv": "https://flystream.net/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "flystream",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "unknown (behind Anubis)",
+   "servers": "unknown (behind Anubis)",
+   "stream": "Every path answers an Anubis proof-of-work page ('Making sure you're not a bot!', v1.27.0). A real browser solves it in JS with no human step and gets a cookie; native HTTP never can. Player not reached from the sandbox; routes are the user's.",
+   "blocking": "Anubis PoW (JS, no human)",
+   "scheme": "https",
+   "appCanPlay": "anubis"
+  },
+  {
+   "id": "7movies",
+   "origin": "https://7movies.ac",
+   "paste": "https://7movies.ac/movie/27205/watch",
+   "routes": {
+    "movie": "https://7movies.ac/movie/{tmdb}/watch",
+    "tv": "https://7movies.ac/tv/{tmdb}/watch?season={season}&episode={episode}",
+    "anime": null
+   },
+   "fixtures": "7movies",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "Next.js site search",
+   "servers": "multiple (embed.vidrift.net etc.)",
+   "stream": "Next.js app; player asks /api/playback-token (session-signed) then loads a nested embed. Page mode; Direct only if the token step is learnable. CF beacon only, no challenge.",
+   "blocking": "none (CF analytics beacon only)",
+   "scheme": "https",
+   "appCanPlay": "page",
+   "extraFixtures": "scripts/fixtures/custom-sites/7movies/ (ipa-custom-direct)"
+  },
+  {
+   "id": "movy",
+   "origin": "https://www.movy.sx",
+   "paste": "http://www.movy.sx/movie/27205",
+   "routes": {
+    "movie": "https://www.movy.sx/movie/{tmdb}",
+    "tv": "https://www.movy.sx/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "movy",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "TMDB proxy",
+   "servers": "multiple (miami, boise, seattle, atlanta\u2026 /<provider>/sources on api.wecollege.net)",
+   "stream": "Next.js pages router: /movie/[...params] and /tv/[...params]; /tv/{tmdb}/{s}/{e} sets seasonId/episodeId in __NEXT_DATA__ (no season \u2192 S1E1 info). Player 'Finding the best server\u2026' calls api.wecollege.net/<provider>/sources, answers XOR-encrypted with a per-title seed (already ported in src/utils/servers/movy.js). api.wecollege.net is Cloudflare-blocked (403) from datacenter IPs. http:// redirects to https://www.",
+   "blocking": "api.wecollege.net CF 403 from sandbox; site pages fine",
+   "scheme": "http\u2192https",
+   "appCanPlay": "page",
+   "builtIn": "src/utils/servers/movy.js (Movy direct)",
+   "userReport": "Test built http://www.movy.sx/movie/27205: page 200, no stream in 15 s; TV built /tv/42009 with no season/episode."
+  },
+  {
+   "id": "vidsrc-to",
+   "origin": "https://vidsrc.to",
+   "paste": "https://vidsrc.to/embed/movie/27205",
+   "routes": {
+    "movie": "https://vidsrc.to/embed/movie/{tmdb}",
+    "tv": "https://vidsrc.to/embed/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "vidsrc-to",
+   "idType": "tmdb (imdb accepted)",
+   "animeVia": "tv",
+   "search": "none",
+   "servers": "via vidsrc.sh",
+   "stream": "Thin wrapper: one iframe to https://vidsrc.sh/embed/movie/{tmdb}/ (TV: /embed/tv/{tmdb}/{s}-{e}) + ad scripts. Nested iframe \u2192 vidsrc.sh recipe.",
+   "blocking": "none",
+   "scheme": "https",
+   "appCanPlay": "page"
+  },
+  {
+   "id": "vidsrc-sh",
+   "origin": "https://vidsrc.sh",
+   "paste": "https://vidsrc.sh/embed/movie/27205",
+   "routes": {
+    "movie": "https://vidsrc.sh/embed/movie/{tmdb}",
+    "tv": "https://vidsrc.sh/embed/tv/{tmdb}/{season}-{episode}",
+    "anime": null
+   },
+   "fixtures": "vidsrc-sh",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "none",
+   "servers": "single + rotating host",
+   "stream": "data-api=/vs_src.php?type=movie&id={tmdb} \u2192 JSON {src: https://<rotating host>/embed/movie/{tmdb}?vs=<signed token>} \u2192 iframe page with vsdec.js (JS-decrypted source, disable-devtool). Signed + nested \u2192 page mode only. vidsrc.me redirects here.",
+   "blocking": "none",
+   "scheme": "https",
+   "appCanPlay": "page"
+  },
+  {
+   "id": "vidsrc-buzz",
+   "origin": "https://vidsrc.buzz",
+   "paste": "https://vidsrc.buzz/embed/movie/27205",
+   "routes": {
+    "movie": "https://vidsrc.buzz/embed/movie/{tmdb}",
+    "tv": "https://vidsrc.buzz/embed/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "vidsrc-buzz",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "none",
+   "servers": "multiple (api.php?a=sources then a=race / a=play&ref=)",
+   "stream": "Inline player; fetch('api.php?a=sources&type=&id=&s=&e=') lists refs, 'api.php?a=play&ref=' returns the stream. Direct API candidate (same-origin JSON); 404s without the page's referer/cookie from sandbox.",
+   "blocking": "none",
+   "scheme": "https",
+   "appCanPlay": "page"
+  },
+  {
+   "id": "2embed",
+   "origin": "https://www.2embed.cc",
+   "paste": "https://www.2embed.cc/embed/27205",
+   "routes": {
+    "movie": "https://www.2embed.cc/embed/{tmdb}",
+    "tv": "https://www.2embed.cc/embedtv/{tmdb}&s={season}&e={episode}",
+    "anime": null
+   },
+   "fixtures": "2embed",
+   "idType": "tmdb or imdb",
+   "animeVia": "tv",
+   "search": "site search",
+   "servers": "multiple (data-src server list, default vidsrc.buzz)",
+   "stream": "iframe#iframesrc src=about:blank data-src=https://vidsrc.buzz/embed/movie/{tmdb} \u2192 vidsrc.buzz recipe. Note '&s=\u2026&e=\u2026' sits in the PATH (no '?').",
+   "blocking": "none",
+   "scheme": "https",
+   "appCanPlay": "page"
+  },
+  {
+   "id": "vidsrc-su",
+   "origin": "https://vidsrc.su",
+   "paste": "https://vidsrc.su/embed/movie/27205",
+   "routes": {
+    "movie": "https://vidsrc.su/embed/movie/{tmdb}",
+    "tv": "https://vidsrc.su/embed/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "vidsrc-su",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "themoviedb.vidsrc.su TMDB proxy",
+   "servers": "multiple",
+   "stream": "Vite SPA shell ('Loading...'); routes in bundle: /embed/movie/:tmdbId, /embed/tv/:tmdbId/:seasonId/:episodeId. Sources fetched by the bundle \u2192 page mode.",
+   "blocking": "none",
+   "scheme": "https",
+   "spa": true,
+   "appCanPlay": "page"
+  },
+  {
+   "id": "vidlink",
+   "origin": "https://vidlink.pro",
+   "paste": "https://vidlink.pro/movie/27205",
+   "routes": {
+    "movie": "https://vidlink.pro/movie/{tmdb}",
+    "tv": "https://vidlink.pro/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "vidlink",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "none",
+   "servers": "single (+ fallbacks)",
+   "stream": "Next.js player; stream from an encrypted per-title API (/api/b/\u2026, encoded id) \u2192 m3u8 on a proxy host needing its Referer. Page mode.",
+   "blocking": "none",
+   "scheme": "https",
+   "appCanPlay": "page"
+  },
+  {
+   "id": "vidrock",
+   "origin": "https://vidrock.net",
+   "paste": "https://vidrock.net/movie/27205",
+   "routes": {
+    "movie": "https://vidrock.net/movie/{tmdb}",
+    "tv": "https://vidrock.net/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "vidrock",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "none",
+   "servers": "multiple (vidvault.to and others)",
+   "stream": "Vite SPA (650 KB shell); routes /movie/:id, /tv/:id/:season/:episode (also /embed/\u2026). Encrypted source requests (crypto in bundle), random-host stream URLs \u2192 page mode.",
+   "blocking": "none",
+   "scheme": "https",
+   "spa": true,
+   "appCanPlay": "page"
+  },
+  {
+   "id": "vidzee",
+   "origin": "https://player.vidzee.wtf",
+   "paste": "https://player.vidzee.wtf/embed/movie/27205",
+   "routes": {
+    "movie": "https://player.vidzee.wtf/embed/movie/{tmdb}",
+    "tv": "https://player.vidzee.wtf/embed/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "vidzee",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "none",
+   "servers": "multiple",
+   "stream": "TanStack-router SPA (/embed/movie/$tmdb, /embed/tv/$tmdb/$season/$episode); sources from the bundle's API calls \u2192 page mode. vidzee.wtf root (no player.) 404s.",
+   "blocking": "none",
+   "scheme": "https",
+   "spa": true,
+   "appCanPlay": "page"
+  },
+  {
+   "id": "moviesapi",
+   "origin": "https://moviesapi.to",
+   "paste": "https://moviesapi.to/movie/27205",
+   "routes": {
+    "movie": "https://moviesapi.to/movie/{tmdb}",
+    "tv": "https://moviesapi.to/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "moviesapi",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "none",
+   "servers": "multiple (VidSpark)",
+   "stream": "'VidSpark' SPA; /api/vidora/\u2026 endpoints (v1/ice etc.) return sources; /tv/{tmdb}-{s}-{e} redirects to /tv/{tmdb}/{s}/{e}. Page mode. moviesapi.club is unreachable.",
+   "blocking": "none",
+   "scheme": "https",
+   "spa": true,
+   "appCanPlay": "page"
+  },
+  {
+   "id": "autoembed",
+   "origin": "https://autoembed.co",
+   "paste": "https://autoembed.co/movie/tmdb/27205",
+   "routes": {
+    "movie": "https://autoembed.co/movie/tmdb/{tmdb}",
+    "tv": "https://autoembed.co/tv/tmdb/{tmdb}-{season}-{episode}",
+    "anime": null
+   },
+   "fixtures": "autoembed",
+   "idType": "tmdb (imdb too)",
+   "animeVia": "tv",
+   "search": "none",
+   "servers": "multiple (in player.autoembed.me)",
+   "stream": "Redirects to autoembed.me; page is one iframe //player.autoembed.me/embed/movie/{tmdb} (protocol-relative). The player page blanks itself when it is the top window (if(window===window.top) die) \u2014 it must be loaded inside an iframe with the parent as Referer.",
+   "blocking": "none",
+   "scheme": "https (protocol-relative iframe)",
+   "appCanPlay": "frame-only"
+  },
+  {
+   "id": "ani-pm",
+   "origin": "https://ani.pm",
+   "paste": "https://ani.pm/ani/21/1",
+   "routes": {
+    "movie": null,
+    "tv": null,
+    "anime": "https://ani.pm/ani/{anilist}/{episode}"
+   },
+   "fixtures": "ani-pm",
+   "idType": "anilist (/ani/:id/:episode) or own id (/anime/:id/:episode)",
+   "search": "/api/anime/\u2026 (own)",
+   "servers": "anipm-server HLS proxy (/api/anime/anipm-server/\u2026.m3u8)",
+   "stream": "SPA; same-origin HLS proxy under /api/anime/anipm-server/. Already a built-in server. Pages are Cloudflare 'Just a moment' (403) from the sandbox.",
+   "blocking": "CF managed challenge on deep links from sandbox",
+   "scheme": "https",
+   "spa": true,
+   "appCanPlay": "page",
+   "builtIn": "ani.pm built-in"
+  },
+  {
+   "id": "vidsrc-cc",
+   "origin": "https://vidsrc.cc",
+   "paste": "https://vidsrc.cc/v2/embed/movie/27205",
+   "routes": {
+    "movie": "https://vidsrc.cc/v2/embed/movie/{tmdb}",
+    "tv": "https://vidsrc.cc/v2/embed/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "vidsrc-cc",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "none",
+   "servers": "multiple",
+   "stream": "Cloudflare 'Attention Required' 403 block page from the sandbox; recipe unread.",
+   "blocking": "CF 403 (IP block)",
+   "scheme": "https",
+   "appCanPlay": "unknown"
+  },
+  {
+   "id": "vidfast",
+   "origin": "https://vidfast.pro",
+   "paste": "https://vidfast.pro/movie/27205",
+   "routes": {
+    "movie": "https://vidfast.pro/movie/{tmdb}",
+    "tv": "https://vidfast.pro/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "vidfast",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "none",
+   "servers": "multiple",
+   "stream": "Cloudflare 403 block page from the sandbox (already a built-in server).",
+   "blocking": "CF 403 (IP block)",
+   "scheme": "https",
+   "appCanPlay": "unknown"
+  },
+  {
+   "id": "multiembed",
+   "origin": "https://multiembed.mov",
+   "paste": "https://multiembed.mov/?video_id=27205&tmdb=1",
+   "routes": {
+    "movie": "https://multiembed.mov/?video_id={tmdb}&tmdb=1",
+    "tv": "https://multiembed.mov/?video_id={tmdb}&tmdb=1&s={season}&e={episode}",
+    "anime": null
+   },
+   "fixtures": "multiembed",
+   "idType": "tmdb (query string)",
+   "animeVia": "tv",
+   "search": "none",
+   "servers": "multiple",
+   "stream": "Redirects to streamingnow.mov/?play=<token> \u2192 Cloudflare 'Just a moment' 403 from sandbox.",
+   "blocking": "CF managed challenge",
+   "scheme": "https",
+   "appCanPlay": "unknown"
+  },
+  {
+   "id": "videasy",
+   "origin": "https://player.videasy.net",
+   "paste": "https://player.videasy.net/movie/27205",
+   "routes": {
+    "movie": "https://player.videasy.net/movie/{tmdb}",
+    "tv": "https://player.videasy.net/tv/{tmdb}/{season}/{episode}",
+    "anime": null
+   },
+   "fixtures": "videasy",
+   "idType": "tmdb",
+   "animeVia": "tv",
+   "search": "none",
+   "servers": "multiple",
+   "stream": "Unreachable from the sandbox (redirects to player.videasy.to, which times out).",
+   "blocking": "unreachable from sandbox",
+   "scheme": "https",
+   "appCanPlay": "unknown"
+  }
+ ]
+}

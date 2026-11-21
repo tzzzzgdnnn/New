@@ -1,0 +1,10 @@
+{
+ "/movie/tmdb/27205": {
+  "file": "movie_tmdb_27205.html",
+  "status": 200
+ },
+ "/tv/tmdb/1399-1-1": {
+  "file": "tv_tmdb_1399-1-1.html",
+  "status": 200
+ }
+}

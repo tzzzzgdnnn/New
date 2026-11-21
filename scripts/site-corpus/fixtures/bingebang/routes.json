@@ -1,0 +1,46 @@
+{
+ "/tv/play/family-guy-y6bs3k/1/1": {
+  "file": "tv_play_family-guy-y6bs3k_1_1.html",
+  "status": 200
+ },
+ "/movie/play/avengers-endgame-2019-5iu40l": {
+  "file": "movie_play_avengers-endgame-2019-5iu40l.html",
+  "status": 200
+ },
+ "/": {
+  "file": "home.html",
+  "status": 200
+ },
+ "/api/search/movie?query=avengers%20endgame&page=1": {
+  "file": "search-movie-avengers-20endgame.json",
+  "status": 200
+ },
+ "/api/search/movie?query=inception&page=1": {
+  "file": "search-movie-inception.json",
+  "status": 200
+ },
+ "/api/search/movie?query=the%20dark%20knight&page=1": {
+  "file": "search-movie-the-20dark-20knight.json",
+  "status": 200
+ },
+ "/api/search/movie?query=the%20matrix&page=1": {
+  "file": "search-movie-the-20matrix.json",
+  "status": 200
+ },
+ "/api/search/tv?query=breaking%20bad&page=1": {
+  "file": "search-tv-breaking-20bad.json",
+  "status": 200
+ },
+ "/api/search/tv?query=family%20guy&page=1": {
+  "file": "search-tv-family-20guy.json",
+  "status": 200
+ },
+ "/api/search/tv?query=game%20of%20thrones&page=1": {
+  "file": "search-tv-game-20of-20thrones.json",
+  "status": 200
+ },
+ "/api/search/tv?query=one%20piece&page=1": {
+  "file": "search-tv-one-20piece.json",
+  "status": 200
+ }
+}

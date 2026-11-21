@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en" class="dark oled">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="profiton-domain-verification" content="72fb0f9dd6933fedeae12a7dd5d2c7ccadd98a8edf3b5a8eaf02eb638e97cac6" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0f0f0f" />
+  <meta name="description" content="Discover trending movies, TV shows and anime, build a watchlist, read community reviews and find your next night-in pick on M-Zone." data-rh="true" />
+
+  <link rel="icon" type="image/svg+xml" href="/brand/mzone-icon-v1.svg?v=20261014" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/brand/icon-32-v1.png?v=20261014" />
+  <link rel="icon" type="image/png" sizes="512x512" href="/brand/icon-maskable-512-v1.png?v=20261014" />
+  <link rel="shortcut icon" href="/favicon.ico?v=20261014" />
+
+  <link rel="apple-touch-icon" href="/brand/apple-touch-icon-v1.png?v=20261014" />
+
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://api.m-zone.cc" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Montserrat:wght@400;500;700&family=Poppins:wght@400;500;700&subset=latin&display=swap"
+    rel="stylesheet">
+
+  <style></style>
+  <noscript><style></style></noscript>
+
+  <title>M-Zone - Movies, Shows, Anime, Watchlists and Reviews</title>
+  <script>
+    // Generated catalog pages keep their descriptive SEO title in the HTML,
+    // but visitors should see a neutral brand title while the SPA boots.
+    // React Helmet replaces this with the route-specific title after mount.
+    document.title = 'M-Zone';
+  </script>
+  <script>
+    // Runs before hashed assets load so stale or missing CSS/JS can recover
+    // to the newest deployment without an infinite refresh loop.
+    (() => {
+      const key = 'mzone:stale-chunk-reload';
+      let requested = false;
+
+      window.__mzoneReloadFreshAssets = (force = false) => {
+        if (requested) return;
+
+        const now = Date.now();
+        let lastReload = 0;
+        try {
+          lastReload = Number(sessionStorage.getItem(key) || 0);
+        } catch (_) {}
+
+        if (!force && now - lastReload < 60000) return;
+        requested = true;
+        try {
+          sessionStorage.setItem(key, String(now));
+        } catch (_) {}
+
+        const url = new URL(location.href);
+        url.searchParams.set('mzone-refresh', String(now));
+        url.searchParams.delete('vite-reloaded');
+        url.searchParams.delete('t');
+        location.replace(url.toString());
+      };
+
+      addEventListener('error', (event) => {
+        const target = event.target;
+        const assetUrl = target && (target.src || target.href || '');
+        if (!String(assetUrl).includes('/assets/')) return;
+        event.preventDefault();
+        window.__mzoneReloadFreshAssets();
+      }, true);
+
+      // Vite reports failed lazy chunks through this event rather than the
+      // element-level error path above. A deployment can briefly leave one
+      // edge serving an older runtime while another serves the new assets.
+      addEventListener('vite:preloadError', (event) => {
+        event.preventDefault();
+        window.__mzoneReloadFreshAssets(true);
+      });
+
+      addEventListener('unhandledrejection', (event) => {
+        const message = String(event.reason?.message || event.reason || '');
+        if (!/(?:dynamically imported module|module script failed|failed to fetch.*module)/i.test(message)) return;
+        event.preventDefault();
+        window.__mzoneReloadFreshAssets(true);
+      });
+    })();
+  </script>
+
+  <script type="module" crossorigin src="/assets/main-DHdp0MQu.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/vendor-react-BaGkCvrn.js">
+  <link rel="modulepreload" crossorigin href="/assets/desktop-BBiXJlRd.js">
+  <link rel="modulepreload" crossorigin href="/assets/offlineSiteBootstrap-CtQQneWs.js">
+  <link rel="modulepreload" crossorigin href="/assets/vendor-query-CPue3Jnr.js">
+  <link rel="modulepreload" crossorigin href="/assets/vendor-icons-CJbGcv_A.js">
+  <link rel="stylesheet" crossorigin href="/assets/desktop-L0-zwH9C.css">
+  <link rel="stylesheet" crossorigin href="/assets/main-CMKIzAQd.css">
+  <link rel="canonical" href="https://m-zone.cc/" data-rh="true" />
+  <meta name="robots" content="index, follow" data-rh="true" />
+  <meta name="googlebot" content="index, follow" data-rh="true" />
+  <meta property="og:title" content="M-Zone - Movies, Shows, Anime, Watchlists and Reviews" data-rh="true" />
+  <meta property="og:description" content="Discover trending movies, TV shows and anime, build a watchlist, read community reviews and find your next night-in pick on M-Zone." data-rh="true" />
+  <meta property="og:url" content="https://m-zone.cc/" data-rh="true" />
+  <meta property="og:image" content="https://m-zone.cc/social/mzone-preview-v2.png" data-rh="true" />
+  <meta property="og:image:width" content="1200" data-rh="true" />
+  <meta property="og:image:height" content="630" data-rh="true" />
+  <meta property="og:image:type" content="image/png" data-rh="true" />
+  <meta property="og:image:alt" content="M-Zone - Movies, Shows, Anime, Watchlists and Reviews artwork" data-rh="true" />
+  <meta property="og:type" content="website" data-rh="true" />
+  <meta property="og:site_name" content="M-Zone" data-rh="true" />
+  <meta name="twitter:card" content="summary_large_image" data-rh="true" />
+  <meta name="twitter:title" content="M-Zone - Movies, Shows, Anime, Watchlists and Reviews" data-rh="true" />
+  <meta name="twitter:description" content="Discover trending movies, TV shows and anime, build a watchlist, read community reviews and find your next night-in pick on M-Zone." data-rh="true" />
+  <meta name="twitter:image" content="https://m-zone.cc/social/mzone-preview-v2.png" data-rh="true" />
+  <meta name="twitter:image:alt" content="M-Zone - Movies, Shows, Anime, Watchlists and Reviews artwork" data-rh="true" />
+  <meta name="twitter:url" content="https://m-zone.cc/" data-rh="true" />
+  <script type="application/ld+json" data-rh="true">{"@context":"https://schema.org","@type":"WebSite","name":"M-Zone - Movies, Shows, Anime, Watchlists and Reviews","description":"Discover trending movies, TV shows and anime, build a watchlist, read community reviews and find your next night-in pick on M-Zone.","url":"https://m-zone.cc/","potentialAction":{"@type":"SearchAction","target":"https://m-zone.cc/search?query={search_term_string}","query-input":"required name=search_term_string"}}</script>
+</head>
+
+<body>
+
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-KXVDF9YKG4"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    gtag('js', new Date());
+    gtag('config', 'G-KXVDF9YKG4');
+  </script>
+  <!-- Google tag above -->
+
+  <div id="mz-boot" aria-hidden="true">
+    <span class="mzb-word"><svg/><span>oviezone</span></span>
+    <span class="mzb-track"><span class="mzb-bar"></span></span>
+  </div>
+  <script>
+    // First visit of a session: start as the dark curtain the intro opens from.
+    try { if (!sessionStorage.getItem('mzone:intro-played') && location.pathname.indexOf('/embed/') !== 0) document.getElementById('mz-boot').className = 'mzb-intro'; } catch (e) {}
+  </script>
+  <div id="root"><main id="seo-prerender"><h1>M-Zone - Movies, Shows, Anime, Watchlists and Reviews</h1><p>Discover trending movies, TV shows and anime, build a watchlist, read community reviews and find your next night-in pick on M-Zone.</p><nav aria-label="Explore M-Zone"><a href="/">M-Zone - Movies, Shows, Anime, Watchlists and Reviews</a> <a href="/movies">Trending Movies and Movie Recommendations - M-Zone</a> <a href="/tv">Trending TV Shows and Series to Watch - M-Zone</a> <a href="/anime">Trending Anime Shows and Anime Picks - M-Zone</a> <a href="/genres">Browse Movies and TV Shows by Genre - M-Zone</a> <a href="/genre/action-movies">Action Movies to Watch - M-Zone</a> <a href="/genre/horror-movies">Horror Movies and Scary Picks - M-Zone</a> <a href="/genre/comedy-movies">Comedy Movies for a Better Night - M-Zone</a> <a href="/genre/drama-shows">Drama TV Shows to Start - M-Zone</a> <a href="/genre/crime-shows">Crime Shows and Mystery Series - M-Zone</a> <a href="/genre/anime-series">Anime Series and Animated Shows - M-Zone</a></nav><nav aria-label="Explore titles"><a href="/details/movie/1766574">BOWMAN</a> <a href="/details/movie/1766564">Îmi Pare Rău Că Am Renunțat Prea Ușor!</a> <a href="/details/movie/1765181">Aftoklitos Fterotos</a> <a href="/details/movie/1765095">Handyman</a> <a href="/details/movie/1762506">Band of Brothers: Legacy</a> <a href="/details/movie/1760089">NJPW Road to Destruction 2026 - Day 2</a> <a href="/details/movie/1757012">Yégolé, mi amor</a> <a href="/details/movie/1755284">Cannibal</a> <a href="/details/movie/1753886">Eucalipto</a> <a href="/details/movie/1753882">La calle donde llueven colores</a> <a href="/details/movie/1753878">Monstruos</a> <a href="/details/movie/1753877">Mina de libertad</a> <a href="/details/tv/334296">微风襟袖同卿心</a> <a href="/details/tv/333894">Love and Throne</a> <a href="/details/tv/332926">SixTONES Kochi Hatsu Kochi: Dotabata Yokubari Tabi</a> <a href="/details/tv/332679">Your Love Is a Fire</a> <a href="/details/tv/301489">Abyss</a> <a href="/details/tv/258230">Last Seen</a> <a href="/details/tv/334473">Surviving Amazonas: The Shanenawa Exam</a> <a href="/details/tv/334298">这都不是事儿</a> <a href="/details/movie/1753875">Ecos del cañaveral</a> <a href="/details/movie/1753873">Volveré</a> <a href="/details/movie/1753871">La tienda de Marcelita</a> <a href="/details/movie/1753870">La presencia de blanco</a></nav></main></div>
+</body>
+
+</html>
