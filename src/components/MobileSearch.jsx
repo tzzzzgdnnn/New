@@ -133,7 +133,9 @@ export default function MobileSearch({ apiKey, onSelect, onClose, offline }) {
         <Mag />
         <input
           ref={inputRef}
+          className="search-input"
           type="search"
+          aria-label="Search"
           enterKeyHint="search"
           autoCorrect="off" autoCapitalize="none" spellCheck={false}
           placeholder="Search shows, movies, anime…"
@@ -199,7 +201,7 @@ export default function MobileSearch({ apiKey, onSelect, onClose, offline }) {
                 <b>Oh darn. We don't have that.</b><br />Try searching for another movie or show.
               </div>
             )}
-            <div className="nfs-grid">
+            <div className="nfs-grid" {...(loading && results.length === 0 ? { role: "status", "aria-busy": "true", "aria-label": "Searching" } : {})}>
               {loading && results.length === 0
                 ? Array.from({ length: 9 }, (_, i) => <div key={i} className="nfs-tile nfs-skel" />)
                 : results.map((r) => (

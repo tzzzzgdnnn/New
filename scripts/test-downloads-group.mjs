@@ -204,7 +204,7 @@ await t("tab: one card per show with poster, name, count, size and live progress
     movie("m", "completed", { finalBytes: 2 * GB, completedAt: 1 }),
   ];
   const { host } = await mount(list);
-  const shows = host.querySelectorAll(".pd-card--show");
+  const shows = document.body.querySelectorAll(".pd-card--show");
   assert.equal(shows.length, 2); // Active and Local Files each have the show once
   const [activeCard, finishedCard] = shows;
   assert.ok(activeCard.textContent.includes("Breaking Bad"));
@@ -216,9 +216,9 @@ await t("tab: one card per show with poster, name, count, size and live progress
   assert.ok(finishedCard.textContent.includes("2 episodes · 2.0 GB"));
   assert.equal(finishedCard.querySelector(".pd-card__bar"), null); // nothing fetching there
   // The movie is its own card; no episode is listed outside its show.
-  const singles = [...host.querySelectorAll(".pd-card:not(.pd-card--show)")];
+  const singles = [...document.body.querySelectorAll(".pd-card:not(.pd-card--show)")];
   assert.deepEqual(singles.map((c) => c.querySelector(".pd-card__title").textContent), ["Inception (2010)"]);
-  assert.ok(!host.textContent.includes("S01 E01"));
+  assert.ok(!document.body.textContent.includes("S01 E01"));
 });
 
 await t("tab: a show opens its episodes in order with live state and controls; back returns", async () => {
@@ -229,50 +229,50 @@ await t("tab: a show opens its episodes in order with live state and controls; b
     movie("m", "completed", { finalBytes: 2 * GB }),
   ];
   const { host, calls, click, update } = await mount(list);
-  await click(host.querySelector(".pd-card--show"));
-  assert.ok(host.querySelector(".pd-back"));
-  assert.ok(host.textContent.includes("Breaking Bad"));
-  assert.ok(host.textContent.includes("3 episodes"));
-  const eps = [...host.querySelectorAll(".pd-card--episode")];
+  await click(document.body.querySelector(".pd-card--show"));
+  assert.ok(document.body.querySelector(".pd-back"));
+  assert.ok(document.body.textContent.includes("Breaking Bad"));
+  assert.ok(document.body.textContent.includes("3 episodes"));
+  const eps = [...document.body.querySelectorAll(".pd-card--episode")];
   assert.deepEqual(eps.map((c) => c.querySelector(".pd-card__title").textContent), ["S1 E1", "S1 E2", "S1 E3"]);
   assert.ok(eps[0].textContent.includes("Finished") && eps[0].querySelector('[aria-label="Play S1 E1"]'));
   assert.ok(eps[1].textContent.includes("Paused") && eps[1].textContent.includes("12.5%"));
   assert.ok(eps[2].textContent.includes("Downloading") && eps[2].textContent.includes("25.0%"));
-  assert.ok(!host.textContent.includes("Inception")); // only this show
+  assert.ok(!document.body.textContent.includes("Inception")); // only this show
   await click(eps[0].querySelector('[aria-label="Play S1 E1"]'));
   await click(eps[1].querySelector('[aria-label="Resume S1 E2"]'));
   await click(eps[2].querySelector('[aria-label="Pause S1 E3"]'));
   assert.deepEqual(calls, [["play", "e1"], ["resume", "e2"], ["pause", "e3"]]);
   // Live: a progress update shows in the open view.
   await update(list.map((r) => (r.id === "e3" ? { ...r, progress: 60 } : r)));
-  assert.ok(host.querySelectorAll(".pd-card--episode")[2].textContent.includes("60.0%"));
+  assert.ok(document.body.querySelectorAll(".pd-card--episode")[2].textContent.includes("60.0%"));
   // Every touch target is a real button (44pt in CSS).
-  for (const b of host.querySelectorAll(".pd-card--episode button, .pd-back")) assert.equal(b.tagName, "BUTTON");
-  await click(host.querySelector(".pd-back"));
-  assert.equal(host.querySelector(".pd-back"), null);
-  assert.ok(host.textContent.includes("Local Files"));
-  assert.ok(host.textContent.includes("Inception"));
+  for (const b of document.body.querySelectorAll(".pd-card--episode button, .pd-back")) assert.equal(b.tagName, "BUTTON");
+  await click(document.body.querySelector(".pd-back"));
+  assert.equal(document.body.querySelector(".pd-back"), null);
+  assert.ok(document.body.textContent.includes("Local Files"));
+  assert.ok(document.body.textContent.includes("Inception"));
 });
 
 await t("tab: deleting a show's last episode removes the show and returns to the list", async () => {
   const list = [ep("e1", DARK, 1, 1, "completed", { finalBytes: GB }), ep("e2", DARK, 1, 2, "completed", { finalBytes: GB }), movie("m", "completed", { finalBytes: GB })];
   const { host, click } = await mount(list);
-  await click(host.querySelector(".pd-card--show"));
-  await click(host.querySelector('[aria-label="Delete S1 E1"]'));
-  assert.equal(host.querySelectorAll(".pd-card--episode").length, 1);
-  assert.ok(host.textContent.includes("1 episode · 1.0 GB"));
-  await click(host.querySelector('[aria-label="Delete S1 E2"]'));
-  assert.equal(host.querySelector(".pd-back"), null); // back on the list
-  assert.equal(host.querySelectorAll(".pd-card--show").length, 0); // the group is gone
-  assert.ok(host.textContent.includes("Inception"));
-  assert.ok(!host.textContent.includes("Dark"));
+  await click(document.body.querySelector(".pd-card--show"));
+  await click(document.body.querySelector('[aria-label="Delete S1 E1"]'));
+  assert.equal(document.body.querySelectorAll(".pd-card--episode").length, 1);
+  assert.ok(document.body.textContent.includes("1 episode · 1.0 GB"));
+  await click(document.body.querySelector('[aria-label="Delete S1 E2"]'));
+  assert.equal(document.body.querySelector(".pd-back"), null); // back on the list
+  assert.equal(document.body.querySelectorAll(".pd-card--show").length, 0); // the group is gone
+  assert.ok(document.body.textContent.includes("Inception"));
+  assert.ok(!document.body.textContent.includes("Dark"));
   // Same in the pure grouping.
   assert.deepEqual(m.groupDownloads([movie("m", "completed")]).map((g) => g.kind), ["item"]);
 });
 
 await t("tab: phone only (no desktop controls)", async () => {
   const { host } = await mount([ep("e1", BB, 1, 1, "completed"), ep("e2", BB, 1, 2, "completed")]);
-  for (const text of ["Ctrl", "Untracked", "Sort by", "Folder"]) assert.ok(!host.textContent.includes(text), text);
+  for (const text of ["Ctrl", "Untracked", "Sort by", "Folder"]) assert.ok(!document.body.textContent.includes(text), text);
 });
 
 
@@ -386,30 +386,30 @@ await t("picker sheet: checkboxes, Select all, season switcher, size, one qualit
     ),
   );
   await flush();
-  const boxes = () => [...host.querySelectorAll('.pd-row--check input[type="checkbox"]')].slice(1);
+  const boxes = () => [...document.body.querySelectorAll('.pd-row--check input[type="checkbox"]')].slice(1);
   // E1 already queued, E2 downloading: ticked and disabled.
   assert.deepEqual(boxes().map((b) => [b.checked, b.disabled]), [[true, true], [true, true], [false, false], [false, false]]);
-  assert.ok(host.textContent.includes(m.STATUS_LABEL[downloads[0].status]) && host.textContent.includes("Downloading"));
-  assert.ok(host.textContent.includes("0 episodes selected"));
+  assert.ok(document.body.textContent.includes(m.STATUS_LABEL[downloads[0].status]) && document.body.textContent.includes("Downloading"));
+  assert.ok(document.body.textContent.includes("0 episodes selected"));
   // Select all picks only what is not downloaded yet.
-  await act(async () => host.querySelector('[aria-label="Select all of season 1"]').click());
-  assert.ok(host.textContent.includes("2 episodes selected"));
-  assert.ok(host.textContent.includes("~2.0 GB at 1080p"), host.textContent);
+  await act(async () => document.body.querySelector('[aria-label="Select all of season 1"]').click());
+  assert.ok(document.body.textContent.includes("2 episodes selected"));
+  assert.ok(document.body.textContent.includes("~2.0 GB at 1080p"), document.body.textContent);
   // Other season: pick one episode (25 min, half the measured one's 50).
-  await act(async () => [...host.querySelectorAll(".pd-season")][1].click());
+  await act(async () => [...document.body.querySelectorAll(".pd-season")][1].click());
   await flush();
   assert.equal(boxes().length, 2);
   await act(async () => boxes()[0].click());
-  assert.ok(host.textContent.includes("3 episodes selected"));
-  assert.ok(host.textContent.includes("~2.5 GB at 1080p"));
-  for (const b of host.querySelectorAll(".pd-season, .pd-batchbar .pd-btn")) assert.equal(b.tagName, "BUTTON");
+  assert.ok(document.body.textContent.includes("3 episodes selected"));
+  assert.ok(document.body.textContent.includes("~2.5 GB at 1080p"));
+  for (const b of document.body.querySelectorAll(".pd-season, .pd-batchbar .pd-btn")) assert.equal(b.tagName, "BUTTON");
   // One quality for the whole batch, with the batch's total.
-  await act(async () => host.querySelector(".pd-batchbar .pd-btn").click());
-  const rows = [...host.querySelectorAll("button.pd-row")];
+  await act(async () => document.body.querySelector(".pd-batchbar .pd-btn").click());
+  const rows = [...document.body.querySelectorAll("button.pd-row")];
   assert.deepEqual(rows.map((r) => r.textContent), ["1080p~2.5 GB total", "720p~1.3 GB total"]);
   await act(async () => rows[1].click());
   for (let i = 0; i < 100 && !closed; i++) await flush(); // each episode is looked up and queued in turn
-  assert.equal(closed, true, host.textContent);
+  assert.equal(closed, true, document.body.textContent);
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].episodes.map((e) => `${e.season}:${e.episode}`), ["1:3", "1:4", "2:1"]);
   assert.equal(calls[0].option.name, "720p");
@@ -452,13 +452,13 @@ await t("row download: one episode preselected, sheet opens on the quality step,
     ),
   );
   await flush();
-  assert.ok(host.textContent.includes("1 episode selected"), host.textContent);
+  assert.ok(document.body.textContent.includes("1 episode selected"), document.body.textContent);
   assert.equal(probed[0], "2:2", "the tapped episode is the one measured");
-  const rows = [...host.querySelectorAll("button.pd-row")];
+  const rows = [...document.body.querySelectorAll("button.pd-row")];
   assert.ok(rows.length >= 1, "quality step shown right away");
   await act(async () => rows[0].click());
   for (let i = 0; i < 100 && !closed; i++) await flush();
-  assert.equal(closed, true, host.textContent);
+  assert.equal(closed, true, document.body.textContent);
   assert.deepEqual(calls[0].episodes.map((e) => `${e.season}:${e.episode}`), ["2:2"]);
   root.unmount();
 });
@@ -486,8 +486,8 @@ await t("row download: an already-downloaded episode opens the list instead", as
     ),
   );
   await flush();
-  assert.ok(host.textContent.includes("0 episodes selected"), host.textContent);
-  assert.ok(host.querySelector(".pd-batchbar"), "episode list shown");
+  assert.ok(document.body.textContent.includes("0 episodes selected"), document.body.textContent);
+  assert.ok(document.body.querySelector(".pd-batchbar"), "episode list shown");
   root.unmount();
 });
 

@@ -164,14 +164,15 @@ const mountEl = async (el) => {
 await t("kids: Search shows only kid-rated results (no people, no unrated)", async () => {
   const { default: SearchModal } = await import("../src/components/SearchModal.jsx");
   const { host, root } = await mountEl(React.createElement(SearchModal, { apiKey: "tok", onSelect() {}, onClose() {}, offline: false }));
-  const input = host.querySelector("input.search-input");
+  // iPhone search is portaled to <body>; result tiles are posters (title = alt).
+  const input = document.body.querySelector("input.search-input");
   await act(async () => {
     Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value").set.call(input, "cartoon");
     input.dispatchEvent(new win.Event("input", { bubbles: true }));
   });
   await flush(500);
   await flush(50);
-  const titles = [...host.querySelectorAll(".search-result-title")].map((n) => n.textContent).sort();
+  const titles = [...document.body.querySelectorAll(".nfs-grid .nfs-tile img")].map((n) => n.getAttribute("alt")).sort();
   assert.deepEqual(titles, ["Movie 1", "Movie 2", "Show 11", "Show 12", "Show 13", "Show 19"]);
   root.unmount();
 });
@@ -360,6 +361,7 @@ await t("every surface uses the kids filter", () => {
     "src/pages/LibraryPage.jsx": [/useKidsFilter\(historyAll\)/, /useKidsFilter\(inProgressAll\)/, /useKidsFilter\(savedAll\)/],
     "src/pages/DownloadsPage.jsx": [/useKidsFilter\(props\.downloads\)/, /downloads=\{downloads\}/],
     "src/components/SearchModal.jsx": [/useKidsFilter\(rawResults/],
+    "src/components/MobileSearch.jsx": [/useKidsFilter\(raw, apiKey\)/, /useKidsFilter\(trendRaw, apiKey\)/],
     "src/platform/ios/kids/KidsHome.jsx": [/useKidsFilter\(inProgress/, /useKidsFilter\(useMemo\(\(\) => uniqueItems\(saved\)/, /useKidsFilter\(useMemo\(\(\) => historyTitles/, /useKidsFilter\(useMemo\(\(\) => favoriteShows/, /useKidsFilter\(useGenreTitles/],
     "src/platform/ios/kids/kidsCatalog.js": [/resolveKidsVerdict\(item/],
     "src/platform/ios/shim.js": [/resolveHiAnime:[\s\S]*?isKidsProfileActive\(\)/],
@@ -367,7 +369,7 @@ await t("every surface uses the kids filter", () => {
   };
   for (const [f, res] of Object.entries(need)) for (const re of res) assert.match(src(f), re, `${f} lacks ${re}`);
   // No surface may call the old genre-only filter directly.
-  for (const f of ["src/utils/api.js", "src/platform/ios/HomeSections.jsx", "src/components/SearchModal.jsx"])
+  for (const f of ["src/utils/api.js", "src/platform/ios/HomeSections.jsx", "src/components/SearchModal.jsx", "src/components/MobileSearch.jsx"])
     assert.doesNotMatch(src(f), /filterKidSafeResults/, f);
 });
 
