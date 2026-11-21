@@ -40,6 +40,23 @@ export const TEST_SNIFF_TIMEOUT_MS = 45000;
 export const LEARN_TIME = Object.freeze({ min: 60000, max: 900000, step: 15000, def: 300000 });
 export const LINK_WAIT = Object.freeze({ min: 15000, max: 300000, step: 5000, def: TEST_SNIFF_TIMEOUT_MS });
 export const clampMs = (v, lim) => Math.min(lim.max, Math.max(lim.min, Math.round((Number(v) || lim.def) / 1000) * 1000));
+/** Site servers checked at the same time during a Test. */
+export const SERVER_CHECKS_AT_ONCE = 4;
+/** "Test rounds", set per site: how many times a Test re-tries what hasn't worked yet. */
+export const TEST_ROUNDS = Object.freeze({ min: 1, max: 10, def: 3 });
+export const clampRounds = (v) => Math.min(TEST_ROUNDS.max, Math.max(TEST_ROUNDS.min, Math.round(Number(v) || TEST_ROUNDS.def)));
+/**
+ * A real block from the site (bot wall, human check, 401 / 403, login page):
+ * the user's rule is to drop the site at once, never retry it.
+ */
+export function blockOf(r) {
+  const p = r?.page || {};
+  if (p.wall) return `${p.wall} bot check`;
+  if (p.humanCheck) return `human check (${p.humanCheck})`;
+  if (p.status === 401 || p.status === 403) return `HTTP ${p.status}`;
+  if (p.login) return "a login page";
+  return null;
+}
 /** The site's own per-link wait (Add Site sheet): every hidden page of that site waits this long, playback and Test alike. */
 export const linkWaitOf = (s) => clampMs(s?.linkWaitMs, LINK_WAIT);
 
@@ -146,6 +163,7 @@ export function normalizeServer(s) {
       TEMPLATE_KINDS.filter((k) => Number(s.worked?.[k]?.at) > 0 && typeof s.worked[k].tpl === "string").map((k) => [k, { at: Number(s.worked[k].at), tpl: s.worked[k].tpl.slice(0, 500) }]),
     ),
     linkWaitMs: clampMs(s.linkWaitMs, LINK_WAIT),
+    testRounds: clampRounds(s.testRounds),
     // Recipe: the button the page needs pressed before it streams ("Start playback").
     tap: typeof s.tap === "string" && s.tap.trim() ? s.tap.trim().slice(0, 60) : null,
     // The site's own servers ("Server 2", "Vidplay"): each working one is its own entry.
@@ -1063,9 +1081,32 @@ export async function testServer(server, { onStep, retest = !!server.lastTest, f
   const stopped = new Promise((resolve) => signal.addEventListener("abort", () => resolve({ ok: false, error: "Stopped" }), { once: true }));
   const nativeTry = (srv, url, o = {}) =>
     signal.aborted ? Promise.resolve({ ok: false, error: "Stopped" }) : Promise.race([nativeTryRaw(srv, url, { timeoutMs: waitMs, ...o }), stopped]);
+  // Rounds: each one re-tries every link, method and site server that hasn't worked yet
+  // (what worked is kept); a failure only moves on. The Test ends when every round is
+  // used, the learn time runs out, Stop is tapped, or the site really blocks the app.
+  const rounds = clampRounds(server.testRounds);
+  const keep = new Map(); // kind -> { steps, link } that worked in an earlier round
   try {
-    const r = await testServerRun(server, { onStep, retest: retest && !full, signal, nativeTry, waitMs });
-    return { ...r, stopped: signal.aborted && !outer?.aborted ? "time" : signal.aborted ? "stop" : false };
+    let r = null;
+    let round = 1;
+    for (; round <= rounds; round++) {
+      const cur = round === 1 ? server : listCustomServers().find((x) => x.id === server.id) || { ...server, siteServers: r?.siteServers || server.siteServers };
+      const roundStep = () => {
+        const count = serverCount(listCustomServers().find((x) => x.id === server.id) || cur);
+        return { id: "round", ok: true, neutral: true, label: `Round ${round} of ${rounds}`, detail: (round === 1 ? "First try" : "Re-trying what hasn't worked yet") + (count.total ? ` · ${serverCountText(count)}` : "") };
+      };
+      const step = onStep ? (ev) => onStep({ ...ev, round, rounds, steps: [roundStep(), ...ev.steps] }) : undefined;
+      r = await testServerRun(cur, { onStep: step, retest: retest && !full, retestServers: round > 1 || (retest && !full), signal, nativeTry, waitMs, keep });
+      for (const k of r.kinds) if (r.verified.includes(k.kind) && !keep.has(k.kind)) keep.set(k.kind, { steps: k.steps, link: k.link, round });
+      // Done when everything works (links and the site's servers), or the site blocks the app.
+      if ((r.ok && !r.siteServers.some((x) => x.works === false)) || r.blocked || signal.aborted) break;
+    }
+    const used = Math.min(round, rounds);
+    const kinds = r.kinds.map((k) => ({
+      kind: k.kind,
+      steps: [{ id: "round", ok: true, neutral: true, label: `Round ${keep.get(k.kind)?.round || used} of ${rounds}`, detail: r.blocked ? `Stopped: the site blocks the app (${r.blocked}), no retries` : keep.has(k.kind) ? `Worked in round ${keep.get(k.kind).round}` : `Tried ${used} round${used === 1 ? "" : "s"}` }, ...k.steps],
+    }));
+    return { ...r, kinds, rounds: used, stopped: signal.aborted && !outer?.aborted ? "time" : signal.aborted ? "stop" : false };
   } finally {
     clearTimeout(budget);
   }
@@ -1077,7 +1118,7 @@ export function keptKind(server, kind) {
   return !!(w && w.at > 0 && w.tpl && w.tpl === server.templates?.[kind]);
 }
 
-async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs }) {
+async function testServerRun(server, { onStep, retest, retestServers = retest, signal, nativeTry, waitMs, keep = new Map() }) {
   const kinds = TEMPLATE_KINDS.filter((k) => server.templates[k]);
   const results = [];
   let playable = null;
@@ -1086,12 +1127,30 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
   let serversKind = null;
   const verified = [];
   const failed = [];
+  let blocked = null;
   for (const kind of kinds) {
     const steps = [];
     const push = (...s) => {
       steps.push(...s);
       onStep?.({ kind, steps: steps.slice() });
     };
+    // Worked in an earlier round of this Test: kept as it was.
+    const kept = keep.get(kind);
+    if (kept) {
+      push(...kept.steps.filter((st) => st.id !== "round" && !String(st.id).startsWith("srv-")));
+      if (!playable && kept.link) playable = { kind, url: kept.link.url };
+      if (!serversKind && kept.link) serversKind = { kind, link: kept.link, steps, push };
+      verified.push(kind);
+      results.push({ kind, steps, link: kept.link });
+      continue;
+    }
+    // The site blocked the app on an earlier link: nothing else is tried.
+    if (blocked) {
+      push({ id: "blocked", ok: false, label: "Skipped", detail: `The site blocks the app (${blocked})` });
+      failed.push(kind);
+      results.push({ kind, steps });
+      continue;
+    }
     const keptBefore = keptKind(server, kind);
     // Stop (or the learn time running out): the kinds not reached yet stay as they were.
     if (signal?.aborted) {
@@ -1136,13 +1195,14 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
       push({ id: "playable", ok: true, label: "Plays", detail: "Kept: worked before (Test Everything checks it again)" });
       if (!playable) playable = { kind, url: link.url };
       if (!serversKind) serversKind = { kind, link, steps, push };
-      results.push({ kind, steps });
+      results.push({ kind, steps, link });
       continue;
     }
     const t0 = Date.now();
     let r = await looking(`Trying ${link.title}`, () => nativeTry(server, link.url, { learn: server.mode !== "page" }));
-    // One more try in a fresh hidden page (slow first load, a flaky server), unless a check blocks it.
-    if (!r?.stream?.ok && !r?.page?.humanCheck && !r?.page?.wall && r?.page?.ok) {
+    blocked = blockOf(r);
+    // One more try in a fresh hidden page (slow first load, a flaky server), unless the site blocks it.
+    if (!blocked && !r?.stream?.ok && r?.page?.ok) {
       r = await looking(`Trying ${link.title} again`, () => nativeTry(server, link.url, { learn: server.mode !== "page" }));
     }
     const works = !!r?.stream?.ok && !!r?.playable?.ok;
@@ -1183,45 +1243,63 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
     if (works && !serversKind) serversKind = { kind, link, steps, push };
     if (works) verified.push(kind);
     else failed.push(kind);
-    results.push({ kind, steps });
+    results.push({ kind, steps, link });
   }
   // The site's own servers: each one tried with only its button pressed. On a
   // Retest the ones that worked before are kept without a new try.
   const before = normalizeSiteServers(server.siteServers);
   const labels = [...before.map((x) => x.label), ...seenServers.filter((l) => !before.some((x) => x.label === l))].slice(0, MAX_SITE_SERVERS);
   const siteServers = [];
-  if (labels.length && serversKind && nativeTest()) {
+  if (labels.length && serversKind && nativeTest() && !blocked) {
     const { link, push } = serversKind;
-    for (const label of labels) {
-      const old = before.find((x) => x.label === label);
-      if (signal?.aborted) {
-        if (old) siteServers.push({ ...old });
-        continue;
+    // Each site server checked in parallel (at most SERVER_CHECKS_AT_ONCE pages at once); the
+    // round ends as soon as every server has an answer. A block stops the rest at once.
+    const out = new Array(labels.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < labels.length) {
+        const i = next++;
+        const label = labels[i];
+        const old = before.find((x) => x.label === label);
+        if (signal?.aborted || blocked) {
+          if (old) out[i] = { srv: { ...old } };
+          continue;
+        }
+        if (retestServers && old?.works === true) {
+          out[i] = { srv: { ...old }, step: { id: `srv-${label}`, ok: true, label: `Server: ${label}`, detail: `Kept: worked before${old.method ? ` (${old.method})` : ""}` } };
+          push(out[i].step);
+          continue;
+        }
+        const rs = await nativeTry(server, link.url, { learn: false, tap: label, tapOnly: true });
+        blocked = blocked || blockOf(rs);
+        if (signal?.aborted && !rs?.stream?.ok) {
+          if (old) out[i] = { srv: { ...old } };
+          continue;
+        }
+        const ok = !!rs?.stream?.ok && !!rs?.playable?.ok;
+        const how = ok ? methodOfTry(rs, { link: link.url }) : null;
+        out[i] = {
+          srv: { label, works: ok, at: Date.now(), ...(how ? { method: how.label } : {}) },
+          step: {
+            id: `srv-${label}`,
+            ok: true,
+            neutral: !ok,
+            label: `Server: ${label}`,
+            detail: ok
+              ? (old ? (old.works === false ? "Fixed: works now, added to your servers" : "Works, added to your servers") : "New: works, added to your servers") + (how ? ` (${how.label})` : "")
+              : old ? "Still doesn't play" : "New: doesn't play, not added",
+          },
+        };
+        push(out[i].step);
       }
-      if (retest && old?.works === true) {
-        siteServers.push({ ...old });
-        push({ id: `srv-${label}`, ok: true, label: `Server: ${label}`, detail: `Kept: worked before${old.method ? ` (${old.method})` : ""}` });
-        continue;
-      }
-      const rs = await nativeTry(server, link.url, { learn: false, tap: label, tapOnly: true });
-      const ok = !!rs?.stream?.ok && !!rs?.playable?.ok;
-      const how = ok ? methodOfTry(rs, { link: link.url }) : null;
-      siteServers.push({ label, works: ok, at: Date.now(), ...(how ? { method: how.label } : {}) });
-      push({
-        id: `srv-${label}`,
-        ok: true,
-        neutral: !ok,
-        label: `Server: ${label}`,
-        detail: ok
-          ? (old ? (old.works === false ? "Fixed: works now, added to your servers" : "Works, added to your servers") : "New: works, added to your servers") + (how ? ` (${how.label})` : "")
-          : old ? "Still doesn't play" : "New: doesn't play, not added",
-      });
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(SERVER_CHECKS_AT_ONCE, labels.length) }, worker));
+    for (const x of out) if (x?.srv) siteServers.push(x.srv);
   } else {
     siteServers.push(...before);
   }
   await recordRecipe(server.id, { tap, siteServers, verified, failed });
-  const ok = results.length > 0 && results.every((k) => k.steps.every((s) => s.ok));
+  const ok = !blocked && results.length > 0 && results.every((k) => k.steps.every((s) => s.ok));
   const working = results.filter((k) => k.steps.some((s) => (s.id === "playable" || s.id === "d-playable") && s.ok)).map((k) => k.kind);
   const count = serverCount({ ...(listCustomServers().find((x) => x.id === server.id) || server), siteServers });
   const summary = (ok
@@ -1229,7 +1307,7 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
     : working.length
       ? `Works for ${working.join(", ")}`
       : results.flatMap((k) => k.steps).find((s) => !s.ok)?.detail || "Not working") + (signal?.aborted ? " · stopped early" : "") + (count.total ? ` · ${serverCountText(count)}` : "");
-  return { ok, kinds: results, summary, playable, tap, siteServers, verified };
+  return { ok, kinds: results, summary: blocked && !working.length ? `Blocked: the site blocks the app (${blocked})` + (count.total ? ` · ${serverCountText(count)}` : "") : summary, playable, tap, siteServers, verified, blocked };
 }
 
 /** How many of a site's servers work: its own server buttons and its API's servers, each counted once. */

@@ -1006,3 +1006,65 @@ test("engine: sniffed stream bodies are checked (#EXTM3U / media bytes) and the 
     assert.ok(!probe.toLowerCase().includes(name), `${name} not in StreamProbe`);
   }
 });
+
+// ── Test rounds (engine): retry what failed, keep what worked, stop at once on a block ──
+test("Test rounds: a link that fails round 1 and works round 2 passes; what worked is kept", async () => {
+  const opened = [];
+  let n = 0;
+  window.webkit = { messageHandlers: { sbServerTest: { postMessage: async (m) => {
+    if (!m.candidate) return { ok: true };
+    opened.push(m.candidate.url);
+    n++;
+    // Round 1 (first try + its in-round retry) fails; round 2 works.
+    return n <= 2
+      ? { page: { ok: true, status: 200, url: "https://rnd.test/" }, stream: { ok: false }, playable: { ok: false } }
+      : { page: { ok: true, status: 200, url: "https://rnd.test/" }, stream: { ok: true, kind: "hls", ms: 5 }, playable: { ok: true } };
+  } } } };
+  const s = await CS.saveCustomServer({ name: "Rounds", mode: "page", templates: { movie: "https://rnd.test/embed/movie/{tmdb}" }, lists: { movies: true }, testRounds: 3 });
+  assert.equal(s.testRounds, 3);
+  assert.equal(CS.clampRounds(99), CS.TEST_ROUNDS.max);
+  assert.equal(CS.clampRounds(undefined), 3, "default 3");
+  const seen = [];
+  const r = await CS.testServer(s, { retest: false, onStep: (ev) => ev.round && seen.push(ev.steps[0].label) });
+  delete window.webkit;
+  assert.ok(r.playable, "works after round 2");
+  assert.equal(r.rounds, 2, "ends early once everything works");
+  assert.ok(seen.includes("Round 1 of 3") && seen.includes("Round 2 of 3"), "progress names the round");
+  assert.match(r.kinds[0].steps[0].label, /Round 2 of 3/);
+  assert.equal(r.blocked, null);
+  await CS.deleteCustomServer(s.id);
+});
+
+test("Test rounds: a real block (403 / bot check) stops the site at once, no retries", async () => {
+  for (const page of [{ ok: true, status: 403 }, { ok: true, status: 200, wall: "Cloudflare" }, { ok: true, status: 200, humanCheck: "Turnstile" }]) {
+    let n = 0;
+    window.webkit = { messageHandlers: { sbServerTest: { postMessage: async (m) => (m.candidate ? (n++, { page, stream: { ok: false }, playable: { ok: false } }) : { ok: true }) } } };
+    const s = await CS.saveCustomServer({ name: "Blk", mode: "page", templates: { movie: "https://blk.test/m/{tmdb}", tv: "https://blk.test/t/{tmdb}/{season}/{episode}" }, lists: { movies: true, tv: true }, testRounds: 5 });
+    const r = await CS.testServer(s, { retest: false });
+    delete window.webkit;
+    assert.equal(n, 1, `one page only (${JSON.stringify(page)})`);
+    assert.ok(r.blocked);
+    assert.equal(r.rounds, 1);
+    assert.match(r.summary, /blocks the app/);
+    await CS.deleteCustomServer(s.id);
+  }
+});
+
+test("Test: site servers are checked in parallel (at most 4 at once)", async () => {
+  let live = 0, peak = 0;
+  window.webkit = { messageHandlers: { sbServerTest: { postMessage: async (m) => {
+    if (!m.candidate) return { ok: true };
+    live++; peak = Math.max(peak, live);
+    await new Promise((res) => setTimeout(res, 5));
+    live--;
+    return { page: { ok: true, status: 200, url: "https://par.test/" }, stream: { ok: true, kind: "hls", ms: 5 }, playable: { ok: true } };
+  } } } };
+  const labels = ["S1", "S2", "S3", "S4", "S5", "S6"];
+  const s = await CS.saveCustomServer({ name: "Par", mode: "page", templates: { movie: "https://par.test/m/{tmdb}" }, lists: { movies: true }, siteServers: labels.map((label) => ({ label })) });
+  const r = await CS.testServer(s, { retest: false });
+  delete window.webkit;
+  assert.deepEqual(r.siteServers.map((x) => x.label), labels, "kept in order");
+  assert.ok(r.siteServers.every((x) => x.works));
+  assert.ok(peak > 1 && peak <= CS.SERVER_CHECKS_AT_ONCE, `peak ${peak}`);
+  await CS.deleteCustomServer(s.id);
+});

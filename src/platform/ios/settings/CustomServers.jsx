@@ -8,6 +8,7 @@ import ActionSheet from "../ActionSheet";
 import {
   LEARN_TIME,
   LINK_WAIT,
+  TEST_ROUNDS,
   LISTS,
   analyzeSample,
   canTestNatively,
@@ -164,6 +165,7 @@ const emptyDraft = () => ({
   icon: null,
   learnMs: LEARN_TIME.def,
   linkWaitMs: LINK_WAIT.def,
+  testRounds: TEST_ROUNDS.def,
 });
 
 const fmtMs = (ms) => (ms >= 60000 ? `${Math.floor(ms / 60000)} min${ms % 60000 ? ` ${Math.round((ms % 60000) / 1000)} s` : ""}` : `${Math.round(ms / 1000)} s`);
@@ -172,6 +174,7 @@ const fmtMs = (ms) => (ms >= 60000 ? `${Math.floor(ms / 60000)} min${ms % 60000 
 function TimingGroup({ draft, patch }) {
   const learn = draft.learnMs || LEARN_TIME.def;
   const wait = draft.linkWaitMs || LINK_WAIT.def;
+  const rounds = draft.testRounds || TEST_ROUNDS.def;
   return (
     <Group header="Learn Time" footer="How long Super Player may spend working the site out, and how long each link may take to start a stream. Both end early as soon as everything is found.">
       <Row
@@ -183,6 +186,12 @@ function TimingGroup({ draft, patch }) {
         label={`Each link: up to ${fmtMs(wait)}`}
         chevron={false}
         accessory={<input type="range" aria-label="Wait per link" min={LINK_WAIT.min} max={LINK_WAIT.max} step={LINK_WAIT.step} value={wait} onChange={(e) => patch({ linkWaitMs: Number(e.target.value) })} />}
+      />
+      <Row
+        label={`Test rounds: ${rounds}`}
+        detail="Each round re-tries what hasn't worked yet. A site that blocks the app stops at once."
+        chevron={false}
+        accessory={<input type="range" aria-label="Test rounds" min={TEST_ROUNDS.min} max={TEST_ROUNDS.max} step={1} value={rounds} onChange={(e) => patch({ testRounds: Number(e.target.value) })} />}
       />
     </Group>
   );
@@ -641,7 +650,7 @@ function TestPanel({ server, autoStart, onVerified }) {
     const result = await testServer(listCustomServers().find((x) => x.id === server.id) || server, {
       signal: ctl.signal,
       full: full === true,
-      onStep: ({ kind, steps }) => setState((s) => ({ ...s, kinds: { ...s.kinds, [kind]: steps } })),
+      onStep: ({ kind, steps, round, rounds }) => setState((s) => ({ ...s, round, rounds, kinds: { ...s.kinds, [kind]: steps } })),
     });
     setState({ running: false, kinds: Object.fromEntries(result.kinds.map((k) => [k.kind, k.steps])), result });
     await recordTestResult(server.id, result);
@@ -676,7 +685,7 @@ function TestPanel({ server, autoStart, onVerified }) {
       {state?.running && (
         <Row
           label={`Learning… ${Math.round((Date.now() - t0.current) / 1000)} s of up to ${fmtMs(server.learnMs || LEARN_TIME.def)}`}
-          detail={`Each link up to ${fmtMs(server.linkWaitMs || LINK_WAIT.def)} (ends at the first stream), then more titles and the site's servers`}
+          detail={`${state.round ? `Round ${state.round} of ${state.rounds} · ` : ""}Each link up to ${fmtMs(server.linkWaitMs || LINK_WAIT.def)} (ends at the first stream), then more titles and the site's servers`}
           chevron={false}
         />
       )}
