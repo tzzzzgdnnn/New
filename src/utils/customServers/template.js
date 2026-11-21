@@ -9,7 +9,7 @@
 //   http://192.168.1.20:8080/a/21?ep=7&dub -> http://192.168.1.20:8080/a/{anilist}?ep={episode}&{lang}
 
 /** Every placeholder a template may hold. */
-export const PLACEHOLDERS = Object.freeze(["tmdb", "imdb", "anilist", "mal", "title", "slug", "year", "season", "episode", "lang"]);
+export const PLACEHOLDERS = Object.freeze(["tmdb", "imdb", "anilist", "mal", "title", "slug", "year", "season", "episode", "absolute", "lang"]);
 /** Placeholders that identify the title (a template needs one of them). */
 export const ID_PLACEHOLDERS = Object.freeze(["tmdb", "imdb", "anilist", "mal", "title", "slug"]);
 /** Kinds of link a server can have a template for. */
@@ -44,8 +44,59 @@ export function titleWords(title) {
     .filter(Boolean);
 }
 
-/** "The Dark Knight: Rises!" -> "the-dark-knight-rises". */
-export const slugify = (title) => titleWords(title).join("-");
+/** Separators a site may put between the words of a title slug. */
+export const SLUG_SEPARATORS = Object.freeze(["-", "_", "+", ".", "%20"]);
+/** The usual slug: lowercase words joined by "-". */
+export const DEFAULT_SLUG_STYLE = Object.freeze({ sep: "-", case: "lower" });
+
+/** Title words with their own capitals kept (accents dropped). */
+function titleWordsKeepCase(title) {
+  return String(title || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, " and ")
+    .replace(/['’]/g, "")
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean);
+}
+
+/**
+ * How a site writes a title in its links, read from the slug in a sample:
+ * "the-dark-knight" -> { sep: "-", case: "lower" }, "The_Dark_Knight" ->
+ * { sep: "_", case: "title" }.
+ */
+export function slugStyleFrom(value) {
+  const v = String(value || "");
+  const sep = SLUG_SEPARATORS.find((s) => v.includes(s)) || DEFAULT_SLUG_STYLE.sep;
+  const letters = v.replace(/%20/g, " ").replace(/[^A-Za-z]/g, "");
+  let kase = "lower";
+  if (letters && letters === letters.toUpperCase() && letters.length > 1) kase = "upper";
+  else if (letters !== letters.toLowerCase()) {
+    const words = v.split(sep).filter((w) => /[A-Za-z]/.test(w));
+    kase = words.every((w) => /^[A-Z0-9]/.test(w)) ? "title" : "keep";
+  }
+  return { sep, case: kase };
+}
+
+/** A saved slug style with only known values (anything else: the default). */
+export function normalizeSlugStyle(style) {
+  const sep = SLUG_SEPARATORS.includes(style?.sep) ? style.sep : DEFAULT_SLUG_STYLE.sep;
+  const kase = ["lower", "upper", "title", "keep"].includes(style?.case) ? style.case : DEFAULT_SLUG_STYLE.case;
+  return { sep, case: kase };
+}
+
+/** "The Dark Knight: Rises!" -> "the-dark-knight-rises" (or the site's own style). */
+export function slugify(title, style = DEFAULT_SLUG_STYLE) {
+  const { sep, case: kase } = normalizeSlugStyle(style);
+  const words = kase === "keep" ? titleWordsKeepCase(title) : titleWords(title);
+  const cased =
+    kase === "upper"
+      ? words.map((w) => w.toUpperCase())
+      : kase === "title"
+        ? words.map((w) => w[0].toUpperCase() + w.slice(1))
+        : words;
+  return cased.join(sep);
+}
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -204,8 +255,9 @@ export function detectTemplate(sample, match) {
   if (words.length) {
     const sep = "(?:[-_+.]|%20|%2[dD])";
     take(spansOf(tail, new RegExp(`(?<![a-z0-9])${words.map(escapeRe).join(sep)}(?![a-z0-9])`, "gi"), "slug").map((sp) => {
-      // A slug written with spaces / capitals is the plain title.
-      return /%20|\+|[A-Z]/.test(sp.value) ? { ...sp, ph: "title" } : sp;
+      // Exactly the title as typed (URL-encoded) is {title}; any other
+      // spelling is a slug in the site's own style (slugStyleFrom).
+      return sp.value === encodeURIComponent(match.title) ? { ...sp, ph: "title" } : sp;
     }));
   }
   // 4. Year, 5. Sub/Dub.
@@ -237,13 +289,15 @@ export function detectTemplate(sample, match) {
   }
   template += tail.slice(at);
   const placeholders = [...new Set(spans.map((s) => s.ph))];
+  const slugSpan = spans.find((sp) => sp.ph === "slug");
+  const slugStyle = slugSpan ? slugStyleFrom(slugSpan.value) : null;
   const warnings = [];
   if (!placeholders.some((p) => ID_PLACEHOLDERS.includes(p))) {
     return { ...fail("Couldn't find the title's id or name in this link."), template, placeholders };
   }
   if (kind !== "movie" && !placeholders.includes("episode")) warnings.push("No episode number found in the link.");
   if (kind === "tv" && !placeholders.includes("season")) warnings.push("No season in the link: every season uses the episode number as is.");
-  return { ok: true, template, kind, placeholders, warnings };
+  return { ok: true, template, kind, placeholders, warnings, slugStyle };
 }
 
 /** Placeholders a template uses, in order. */
@@ -266,7 +320,8 @@ export function validateTemplate(template) {
  * Fill a template for one title. Returns null when the template needs a
  * value the title doesn't have (an AniList template on a movie without one).
  * @param {string} template
- * @param {{ tmdb?, imdb?, anilist?, mal?, title?, year?, season?, episode?, lang? }} v
+ * @param {{ tmdb?, imdb?, anilist?, mal?, title?, year?, season?, episode?, absolute?, lang?,
+ *           slugStyle? }} v  slugStyle: how this site writes slugs (slugStyleFrom)
  */
 export function buildUrl(template, v = {}) {
   if (!template) return null;
@@ -276,10 +331,11 @@ export function buildUrl(template, v = {}) {
     anilist: v.anilist,
     mal: v.mal,
     title: v.title ? encodeURIComponent(v.title) : null,
-    slug: v.title ? slugify(v.title) || null : null,
+    slug: v.title ? slugify(v.title, v.slugStyle || DEFAULT_SLUG_STYLE) || null : null,
     year: v.year,
     season: v.season ?? 1,
     episode: v.episode ?? 1,
+    absolute: v.absolute ?? v.episode ?? 1,
     lang: v.lang === "dub" ? "dub" : "sub",
   };
   let missing = false;

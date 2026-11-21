@@ -1,0 +1,10 @@
+User-Agent: *
+Allow: /
+Disallow: /api/
+Disallow: /watchlist
+Disallow: /settings
+Disallow: /signin
+Disallow: /embed/
+
+Host: https://7movies.ws
+Sitemap: https://7movies.ws/sitemap.xml

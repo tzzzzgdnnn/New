@@ -157,33 +157,69 @@ final class PlayabilityCheck {
 
 // MARK: - Test (sbServerTest)
 
-/// window.webkit.messageHandlers.sbServerTest.postMessage({ candidate }) ->
-/// { page, stream, playable, ads }: one custom server link tried for real in
-/// the hidden stream finder, then opened in a headless player.
+/// window.webkit.messageHandlers.sbServerTest.postMessage(...)
+///  - { candidate } -> { page, stream, playable, ads, learn? }: one custom
+///    server link tried for real in a hidden page, then opened in a headless
+///    player. `learn` (when the candidate asks) is what the page did, for
+///    Direct mode learning. Several runs may go at once (smart add tries a
+///    movie, an episode and an anime in parallel).
+///  - { playable: { url, headers } } -> { ok, detail | error }: a stream from
+///    a site's API, opened in the headless player with its headers.
 final class ServerTestMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
+    /// Hidden pages a smart add may run at once; more wait for a free one.
+    static let maxRuns = 4
+
     private weak var container: UIView?
-    private var sniffer: StreamSniffer?
-    private var check: PlayabilityCheck?
+    private var runs: [UUID: (sniffer: StreamSniffer, check: PlayabilityCheck?)] = [:]
+    private var checks: [UUID: PlayabilityCheck] = [:]
+    private var waiting: [() -> Void] = []
 
     init(container: UIView) { self.container = container }
 
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage,
                                replyHandler: @escaping (Any?, String?) -> Void) {
-        guard let body = message.body as? [String: Any],
-              let d = body["candidate"] as? [String: Any],
-              var cand = SniffCandidate.from(d) else {
+        guard let body = message.body as? [String: Any] else { replyHandler(nil, "bad message"); return }
+        if let p = body["playable"] as? [String: Any] {
+            guard let url = (p["url"] as? String).flatMap({ URL(string: $0) }) else { replyHandler(nil, "bad url"); return }
+            checkPlayable(url, headers: p["headers"] as? [String: String] ?? [:]) { replyHandler($0, nil) }
+            return
+        }
+        guard let d = body["candidate"] as? [String: Any], var cand = SniffCandidate.from(d) else {
             replyHandler(nil, "bad message"); return
         }
         guard let container = container else { replyHandler(nil, "unavailable"); return }
         cand.cacheable = false
-        run(cand, container: container) { replyHandler($0, nil) }
+        let start = { [weak self] in
+            guard let self = self else { return }
+            self.run(cand, container: container) { replyHandler($0, nil) }
+        }
+        if runs.count < Self.maxRuns { start() } else { waiting.append(start) }
+    }
+
+    private func checkPlayable(_ url: URL, headers: [String: String], done: @escaping ([String: Any]) -> Void) {
+        let id = UUID()
+        let check = PlayabilityCheck()
+        checks[id] = check
+        var h = headers
+        if h["User-Agent"] == nil { h["User-Agent"] = StreambertBridgeViewController.safariUserAgent }
+        check.run(url: url, headers: h, cookies: []) { [weak self] ok, detail in
+            self?.checks[id] = nil
+            sbLog("direct playable check \(url.host ?? "?"): \(ok)")
+            done(ok ? ["ok": true, "detail": detail] : ["ok": false, "error": detail])
+        }
+    }
+
+    private func finishRun(_ id: UUID) {
+        runs[id]?.sniffer.cancel()
+        runs[id] = nil
+        if !waiting.isEmpty { waiting.removeFirst()() }
     }
 
     private func run(_ cand: SniffCandidate, container: UIView, done: @escaping ([String: Any]) -> Void) {
-        sniffer?.cancel()
+        let id = UUID()
         let s = StreamSniffer(container: container)
-        sniffer = s
+        runs[id] = (s, nil)
         let started = Date()
         sbLog("test \(cand.id) \(cand.url.absoluteString)")
         s.start([cand], bypassCache: true) { [weak self] r in
@@ -192,25 +228,29 @@ final class ServerTestMessageHandler: NSObject, WKScriptMessageHandlerWithReply 
                 "page": Self.page(rep, streamFound: r != nil),
                 "ads": ["filter": rep.adFilterOn, "popups": rep.popupsBlocked, "redirects": rep.redirectsBlocked],
             ]
+            if let learn = r?.learn { out["learn"] = learn }
             guard let r = r else {
-                s.cancel()
                 var stream: [String: Any] = ["ok": false]
                 if let first = rep.redirectsBlocked.first {
                     stream["error"] = "The site tried to send the page to \(first) (blocked)"
                 }
                 out["stream"] = stream
                 out["playable"] = ["ok": false]
+                self?.finishRun(id)
                 done(out); return
             }
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             let kind = r.url.pathExtension.lowercased() == "mp4" ? "mp4" : "hls"
-            out["stream"] = ["ok": true, "url": r.url.absoluteString, "kind": kind, "ms": ms]
+            // The headers it plays with (never cookies): Direct mode reuses them.
+            out["stream"] = ["ok": true, "url": r.url.absoluteString, "kind": kind, "ms": ms,
+                             "headers": r.headers.filter { $0.key.lowercased() != "cookie" },
+                             "page": r.page.map { $0.absoluteString as Any } ?? NSNull()]
             let check = PlayabilityCheck()
-            self?.check = check
+            self?.runs[id]?.check = check
             check.run(url: r.url, headers: r.headers, cookies: r.cookies) { ok, detail in
-                s.cancel()
                 out["playable"] = ok ? ["ok": true, "detail": detail] : ["ok": false, "error": detail]
                 sbLog("test \(cand.id): stream \(kind) in \(ms) ms, playable \(ok)")
+                self?.finishRun(id)
                 done(out)
             }
         }
@@ -221,6 +261,8 @@ final class ServerTestMessageHandler: NSObject, WKScriptMessageHandlerWithReply 
         if let st = rep.pageStatus { page["status"] = st }
         if let e = rep.pageError { page["error"] = e }
         if let t = rep.pageLoadedAfter { page["ms"] = Int(t * 1000) }
+        if let t = rep.pageTitle { page["title"] = t }
+        if let w = rep.wall { page["wall"] = w }
         let statusOK = rep.pageStatus.map { $0 < 400 } ?? true
         page["ok"] = statusOK && rep.pageError == nil && (rep.pageLoadedAfter != nil || streamFound)
             || streamFound

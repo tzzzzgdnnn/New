@@ -3,13 +3,12 @@
 // and the step-by-step Test with a Play test button.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Group, Row, SwitchRow } from "./cells";
+import { ChoiceList, Group, Row, SwitchRow } from "./cells";
 import ActionSheet from "../ActionSheet";
 import {
   LISTS,
   analyzeSample,
   canTestNatively,
-  defaultLists,
   deleteCustomServer,
   listCustomServers,
   neededKinds,
@@ -20,7 +19,9 @@ import {
   saveProblem,
   testServer,
 } from "../customServers";
-import { isLocalAddress, originOf, siteDomain, validateTemplate } from "../../../utils/customServers/template";
+import { smartAdd, SMART_STEPS } from "../customSmartAdd";
+import { isLocalAddress, originOf, validateTemplate } from "../../../utils/customServers/template";
+import { DEFAULT_STREAM_PATTERN, headerLines, parseHeaderLines, validateDirect } from "../../../utils/customServers/direct";
 import { registerBackHandler } from "../../../utils/navHistory";
 import "./custom-servers.css";
 
@@ -108,7 +109,7 @@ export default function CustomServersPage({ apiKey }) {
         {servers.map((s) => (
           <Row
             key={s.id}
-            label={s.name}
+            label={<SiteLabel server={s} />}
             detail={`${listsText(s.lists)}${s.lastTest ? ` · ${s.lastTest.ok ? "Working" : s.lastTest.summary}` : ""}`}
             onClick={() => setEditing({ server: s, autoTest: false })}
           />
@@ -129,21 +130,51 @@ export default function CustomServersPage({ apiKey }) {
   );
 }
 
+/** A site's name with its icon (hidden when the icon doesn't load). */
+function SiteLabel({ server }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <span className="cs-site">
+      {server.icon && !failed && <img className="cs-site-icon" src={server.icon} alt="" onError={() => setFailed(true)} />}
+      <span>{server.name}</span>
+    </span>
+  );
+}
+
 // ── Add / edit sheet ──────────────────────────────────────────────────────
 
-const emptyDraft = () => ({ id: null, name: "", sample: "", templates: {}, guessed: {}, lists: { anime: false, movies: false, tv: false }, match: null });
+const emptyDraft = () => ({
+  id: null,
+  name: "",
+  sample: "",
+  templates: {},
+  guessed: {},
+  lists: { anime: false, movies: false, tv: false },
+  match: null,
+  mode: "auto",
+  direct: {},
+  directNotes: {},
+  slugStyle: null,
+  icon: null,
+});
 
 function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
   const isNew = !server;
   const [draft, setDraft] = useState(() => (server ? JSON.parse(JSON.stringify(server)) : emptyDraft()));
-  const [analysis, setAnalysis] = useState(null); // { busy } | { error } | { match, alternatives }
+  const [link, setLink] = useState(server?.sample || "");
+  // { steps } while smart add runs | { error } | { summary, titleIssues, alternatives }
+  const [analysis, setAnalysis] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const runId = useRef(0);
   const sheetRef = useRef(null);
   const bodyRef = useRef(null);
-  const patch = (p) => setDraft((d) => ({ ...d, ...p }));
+  const touched = useRef(new Set()); // fields the viewer changed by hand: smart add leaves them
+  const patch = (p) => {
+    Object.keys(p).forEach((k) => touched.current.add(k));
+    setDraft((d) => ({ ...d, ...p }));
+  };
 
   // App-level Back (left-edge swipe, tab bar Back) closes the sheet first.
   useEffect(
@@ -156,41 +187,48 @@ function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
   );
   useSwipeDown(sheetRef, bodyRef, onClose);
 
-  // Paste -> match -> template (debounced; a newer paste wins).
+  // Paste -> smart add: read the site, match on TMDB, try it, fill everything
+  // in (debounced; a newer paste wins). Any link on the site works.
   const analyze = useCallback(
-    (link) => {
+    (url) => {
       const id = ++runId.current;
-      if (!originOf(link)) {
-        setAnalysis(link.trim() ? { error: "Paste a full link that starts with http:// or https://" } : null);
+      if (!originOf(url)) {
+        setAnalysis(url.trim() ? { error: "Paste a full link that starts with http:// or https://" } : null);
         return;
       }
-      setAnalysis({ busy: true });
-      analyzeSample(link, { apiKey }).then(
+      const steps = Object.fromEntries(SMART_STEPS.map((st) => [st.id, { state: "pending", detail: null }]));
+      setAnalysis({ steps: { ...steps } });
+      const onStep = (stepId, state, detail) => {
+        if (id !== runId.current) return;
+        steps[stepId] = { state, detail: detail ?? null };
+        setAnalysis({ steps: { ...steps } });
+      };
+      smartAdd(url, { apiKey, onStep }).then(
         (r) => {
           if (id !== runId.current) return;
-          if (!r.ok) return setAnalysis({ error: r.error });
-          setAnalysis({ match: r.match, alternatives: r.alternatives || [] });
+          if (!r.ok) return setAnalysis({ error: r.error, steps: { ...steps } });
+          setAnalysis({ summary: r.summary, titleIssues: r.titleIssues || [], steps: { ...steps } });
+          const keep = touched.current;
           setDraft((d) => ({
             ...d,
-            sample: link.trim(),
-            name: d.name || siteDomain(link) || "",
-            templates: r.templates,
-            guessed: r.guessed,
-            match: r.match,
-            lists: d.lists.anime || d.lists.movies || d.lists.tv ? d.lists : defaultLists(r.detected.kind),
+            ...r.draft,
+            name: keep.has("name") && d.name ? d.name : r.draft.name || d.name,
+            lists: keep.has("lists") ? d.lists : r.draft.lists,
+            mode: keep.has("mode") ? d.mode : r.draft.mode,
+            direct: { ...r.draft.direct, ...(d.direct?.manual ? { manual: d.direct.manual } : {}) },
           }));
         },
-        (e) => id === runId.current && setAnalysis({ error: e?.message || "Couldn't read this link." }),
+        (e) => id === runId.current && setAnalysis({ error: e?.message || "Couldn't read this site." }),
       );
     },
     [apiKey],
   );
   useEffect(() => {
-    if (!isNew || !draft.sample || analysis?.match) return undefined;
-    const t = setTimeout(() => analyze(draft.sample), ANALYZE_DELAY_MS);
+    if (!isNew || !link || analysis?.summary) return undefined;
+    const t = setTimeout(() => analyze(link), ANALYZE_DELAY_MS);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft.sample]);
+  }, [link]);
 
   const problem = saveProblem(draft);
   const save = async () => {
@@ -218,38 +256,25 @@ function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
         </button>
       </div>
       <div ref={bodyRef} className="cs-body sps">
-        <Group
-          header="Link From the Site"
-          footer={<LinkStatus analysis={analysis} sample={draft.sample} />}
-        >
+        <Group header="Site" footer={<LinkStatus analysis={analysis} link={link} />}>
           <textarea
             className="cs-input"
-            rows={3}
-            placeholder="https://site.com/movie/27205"
+            rows={2}
+            placeholder="https://site.com"
             autoCapitalize="off"
             autoCorrect="off"
             spellCheck={false}
-            value={draft.sample}
+            value={link}
             onChange={(e) => {
               setAnalysis(null);
-              patch({ sample: e.target.value });
+              setLink(e.target.value);
             }}
-            onBlur={() => isNew || !draft.sample || draft.sample === server?.sample || analyze(draft.sample)}
+            onBlur={() => isNew || !link || link === server?.sample || analyze(link)}
           />
         </Group>
 
-        {analysis?.alternatives?.length > 0 && (
-          <Group header="Not This Title?">
-            {analysis.alternatives.map((m) => (
-              <Row
-                key={`${m.kind}:${Object.values(m.ids).join(",")}`}
-                label={`${m.title}${m.year ? ` (${m.year})` : ""}`}
-                detail={KIND_LABEL[m.kind]}
-                onClick={() => analyzeWith(m)}
-              />
-            ))}
-          </Group>
-        )}
+        {analysis?.steps && !analysis.summary && <SmartAddProgress steps={analysis.steps} />}
+        {analysis?.summary && <SummaryCard draft={draft} analysis={analysis} />}
 
         {(draft.templates.movie || draft.templates.tv || draft.templates.anime) && (
           <>
@@ -272,10 +297,11 @@ function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
               ))}
             </Group>
             <TemplatesGroup draft={draft} setDraft={setDraft} apiKey={apiKey} />
+            <AdvancedGroup draft={draft} patch={patch} />
           </>
         )}
 
-        {(error || (problem && draft.sample && analysis?.match)) && (
+        {(error || (problem && draft.sample && analysis?.summary)) && (
           <p className="cs-error" role="alert">
             {error || problem}
           </p>
@@ -308,38 +334,150 @@ function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
     </div>,
     document.body,
   );
-
-  // A different title picked from "Not This Title?": rebuild from it.
-  function analyzeWith(m) {
-    import("../../../utils/customServers/template").then(({ detectTemplate, deriveTemplate }) => {
-      const d = detectTemplate(draft.sample, m);
-      if (!d.ok) return setAnalysis({ error: d.error, alternatives: analysis.alternatives });
-      const templates = { [d.kind]: d.template };
-      const guessed = {};
-      for (const k of ["movie", "tv"]) {
-        const g = !templates[k] && deriveTemplate(d.template, d.kind, k);
-        if (g) (templates[k] = g), (guessed[k] = true);
-      }
-      setAnalysis({ match: m, alternatives: analysis.alternatives.filter((x) => x !== m) });
-      setDraft((dr) => ({ ...dr, templates, guessed, match: m, lists: defaultLists(d.kind) }));
-    });
-  }
 }
 
-function LinkStatus({ analysis, sample }) {
-  if (analysis?.busy) return "Matching the title…";
+function LinkStatus({ analysis, link }) {
   if (analysis?.error) return <span className="sps-err">{analysis.error}</span>;
-  if (analysis?.match) {
-    const m = analysis.match;
-    return (
-      <span className="sps-ok">
-        Matched {m.title}
-        {m.year ? ` (${m.year})` : ""} · {KIND_LABEL[m.kind]} on {m.source === "anilist" ? "AniList" : "TMDB"}
-        {sample.startsWith("http://") && !isLocalAddress(sample) ? " · Plain http link" : ""}
-      </span>
-    );
+  if (analysis?.steps && !analysis.summary) return "Reading the site…";
+  if (analysis?.summary) {
+    return link.startsWith("http://") && !isLocalAddress(link) ? <span className="sps-ok">Plain http link</span> : null;
   }
-  return "Open a movie or an episode on the site, copy the link and paste it here.";
+  return "Paste the site's address, or a link to any movie or episode on it. Super Player works out the rest.";
+}
+
+const STEP_ICON = { pending: "·", running: "", done: "✓", failed: "✕", skipped: "–" };
+
+/** Smart add's progress, one row per step. */
+function SmartAddProgress({ steps }) {
+  return (
+    <Group header="Checking the Site" footer="Usually done in under 20 seconds.">
+      <div className="cs-test">
+        {SMART_STEPS.map((st) => {
+          const cur = steps[st.id] || { state: "pending" };
+          return (
+            <div key={st.id} className={`cs-step is-${cur.state}`}>
+              <span className="cs-step-icon" aria-hidden="true">
+                {cur.state === "running" ? <span className="cs-spinner" /> : STEP_ICON[cur.state]}
+              </span>
+              <span className="cs-step-text">
+                <span className="cs-step-label">{st.label}</span>
+                {cur.detail && <span className="cs-step-detail">{cur.detail}</span>}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </Group>
+  );
+}
+
+/** "Movies ✓ TV ✓ Anime ✗ · TMDB ids · Direct API found · ads blocked". */
+function SummaryCard({ draft, analysis }) {
+  return (
+    <Group header="Summary" footer="All filled in for you. Change anything below if you like.">
+      <div className="cs-summary">
+        <SiteLabel server={draft} />
+        <div className="cs-summary-line">{analysis.summary}</div>
+        {analysis.titleIssues.map((t) => (
+          <div key={t} className="cs-summary-warn">
+            {t}
+          </div>
+        ))}
+      </div>
+    </Group>
+  );
+}
+
+const MODE_LABEL = { auto: "Direct, page if it fails", direct: "Direct only", page: "Page" };
+
+/**
+ * Advanced (collapsed): Direct mode on / off, what was learned per kind, and
+ * the hand-written API fallback for sites that couldn't be learned.
+ */
+function AdvancedGroup({ draft, patch }) {
+  const [open, setOpen] = useState(false);
+  const [manualOpen, setManualOpen] = useState(!!draft.direct?.manual);
+  const directOn = draft.mode !== "page";
+  const manual = draft.direct?.manual || null;
+  const setManual = (m) => patch({ direct: { ...draft.direct, manual: m } });
+  const learned = ["movie", "tv", "anime"].filter((k) => draft.templates[k]);
+  const manualError = manual ? validateDirect(manual) : null;
+  return (
+    <Group
+      header="Advanced"
+      footer={
+        open
+          ? "Direct plays straight from the site's own API, like Cinejoy: no page, no ads, no redirects. Super Player learns the API by itself when you test the site."
+          : null
+      }
+    >
+      <Row label="Advanced" value={MODE_LABEL[draft.mode]} onClick={() => setOpen(!open)} chevron={false} accessory={<span className={"cs-disclosure" + (open ? " is-open" : "")} aria-hidden="true" />} />
+      {open && (
+        <>
+          <SwitchRow label="Direct (bypass page, like Cinejoy)" value={directOn} onChange={(v) => patch({ mode: v ? "auto" : "page" })} />
+          {directOn && <SwitchRow label="Use the page if Direct fails" value={draft.mode === "auto"} onChange={(v) => patch({ mode: v ? "auto" : "direct" })} />}
+          {directOn &&
+            learned.map((k) => (
+              <Row
+                key={k}
+                label={`${KIND_LABEL[k]} API`}
+                detail={draft.direct?.[k] ? new URL(draft.direct[k].url.replace(/\{[a-z]+\}/g, "1")).host + " · learned ✓" : draft.directNotes?.[k] || "Learned during the Test"}
+              />
+            ))}
+          {directOn && learned.some((k) => draft.direct?.[k]) && (
+            <Row
+              label="Forget Learned API"
+              center
+              chevron={false}
+              onClick={() => patch({ direct: manual ? { manual } : {}, directNotes: {}, learnTried: {} })}
+            />
+          )}
+          {directOn && (
+            <Row label="Manual API (fallback)" value={manual ? "On" : "Off"} onClick={() => setManualOpen(!manualOpen)} chevron={false} accessory={<span className={"cs-disclosure" + (manualOpen ? " is-open" : "")} aria-hidden="true" />} />
+          )}
+          {directOn && manualOpen && <ManualDirect manual={manual} setManual={setManual} error={manualError} />}
+        </>
+      )}
+    </Group>
+  );
+}
+
+const blankManual = () => ({ url: "", method: "GET", headers: {}, body: null, extract: { type: "path", path: "" }, streamHeaders: {}, source: "manual" });
+
+/** Hand-written API fields: address, method, headers, body, where the stream is. */
+function ManualDirect({ manual, setManual, error }) {
+  const m = manual || blankManual();
+  const set = (p) => setManual({ ...m, ...p, source: "manual" });
+  const field = (label, value, onChange, { rows = 1, placeholder = "" } = {}) => (
+    <div className="cs-tpl">
+      <div className="cs-tpl-head">
+        <span className="cs-tpl-kind">{label}</span>
+      </div>
+      <textarea className="cs-input is-mono" rows={rows} autoCapitalize="off" autoCorrect="off" spellCheck={false} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
+  return (
+    <>
+      {field("API address", m.url, (v) => set({ url: v.trim() }), { rows: 2, placeholder: "https://site.com/api/source/{tmdb}?s={season}&e={episode}" })}
+      <ChoiceList options={[{ value: "GET", label: "GET" }, { value: "POST", label: "POST" }]} value={m.method} onChange={(v) => set({ method: v })} />
+      {field("Headers", headerLines(m.headers), (v) => set({ headers: parseHeaderLines(v) }), { rows: 2, placeholder: "Referer: https://site.com/" })}
+      {m.method === "POST" && field("Body", m.body || "", (v) => set({ body: v || null }), { rows: 2, placeholder: '{"id":{tmdb},"season":{season},"episode":{episode}}' })}
+      <ChoiceList
+        options={[
+          { value: "path", label: "Stream at a path", detail: "Like data.sources.0.file" },
+          { value: "regex", label: "Stream by regex", detail: "First match (or group 1)" },
+        ]}
+        value={m.extract.type}
+        onChange={(v) => set({ extract: v === "path" ? { type: "path", path: "" } : { type: "regex", pattern: DEFAULT_STREAM_PATTERN } })}
+      />
+      {m.extract.type === "path"
+        ? field("Path to the stream", m.extract.path, (v) => set({ extract: { type: "path", path: v.trim() } }), { placeholder: "data.sources.0.file" })
+        : field("Regex", m.extract.pattern, (v) => set({ extract: { type: "regex", pattern: v } }))}
+      {field("Stream headers", headerLines(m.streamHeaders), (v) => set({ streamHeaders: parseHeaderLines(v) }), { rows: 2, placeholder: "Referer: https://site.com/" })}
+      <Row label={error ? error : "Saved with the site; the Test checks it"} detail={null} />
+      {manual && <Row label="Remove Manual API" danger center chevron={false} onClick={() => setManual(null)} />}
+    </>
+  );
 }
 
 /** One editable link template per kind the chosen lists need. */
@@ -429,8 +567,8 @@ function TestPanel({ server, autoStart }) {
         <div key={kind} className="cs-test">
           {kinds.length > 1 && <div className="cs-test-kind">{KIND_LABEL[kind]} link</div>}
           {steps.map((st) => (
-            <div key={st.id} className={"cs-step" + (st.ok ? " is-ok" : " is-bad")}>
-              <span className="cs-step-icon" aria-hidden="true">{st.ok ? "✓" : "✕"}</span>
+            <div key={st.id} className={"cs-step" + (st.neutral ? " is-neutral" : st.ok ? " is-ok" : " is-bad")}>
+              <span className="cs-step-icon" aria-hidden="true">{st.neutral ? "–" : st.ok ? "✓" : "✕"}</span>
               <span className="cs-step-text">
                 <span className="cs-step-label">{st.label}</span>
                 <span className="cs-step-detail">{st.detail}</span>
@@ -439,7 +577,7 @@ function TestPanel({ server, autoStart }) {
           ))}
         </div>
       ))}
-      {state?.running && <Row label="Testing…" detail="Up to 15 s per link" chevron={false} />}
+      {state?.running && <Row label="Testing…" detail="Up to 15 s per link, then the direct API" chevron={false} />}
       {!state?.running && <Row label={state ? "Test Again" : "Test"} center chevron={false} onClick={run} />}
       {state?.result?.playable && <Row label="Play Test" center chevron={false} onClick={() => playTest(server, state.result.playable.url)} />}
     </Group>
