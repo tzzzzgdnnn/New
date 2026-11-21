@@ -464,6 +464,7 @@ function upgrade(wv) {
       const pdur = Number(d.data?.duration);
       if (pdur > 0 && wrongVideo(pdur)) return embedFailed(`wrong video (${Math.round(pdur)} s)`);
       if (cz && pdur > 0) { revealEmbed(); armPlayWatch(); }
+      else if (cz) graceEmbed();
     }
     // Embed players that post PLAYER_EVENT (Cinezo's player.cinezo.live,
     // Vidfast): a play / timeupdate past 0 s means it is running, even
@@ -555,8 +556,14 @@ function upgrade(wv) {
   let embedReady = !GATE;
   let readyTimer = null;
   cleanups.push(() => clearTimeout(readyTimer));
-  const gateEmbed = () => {
+  // Cinezo's player page is heavy: on a phone it can take 20-30 s before it
+  // reports in, then a few more to report the episode's length.
+  const CINEZO_READY_MS = window.__sbEmbedReadyMs || 40000;
+  const CINEZO_GRACE_MS = window.__sbEmbedReadyMs || 20000; // after its first player event
+  let graced = false;
+  const gateEmbed = (u) => {
     if (!GATE) return;
+    graced = false;
     embedReady = false;
     clearTimeout(readyTimer);
     // Covered by our own card (on top of it), not hidden: a hidden frame is
@@ -566,7 +573,15 @@ function upgrade(wv) {
     // the loading screen now, so the box shows at once and the embed loads in a
     // visible frame (a hidden one never started Cinezo's player in WebKit).
     queueMicrotask(() => { fire("dom-ready"); fire("did-finish-load"); });
-    readyTimer = setTimeout(() => embedFailed("it didn't load"), EMBED_READY_MS);
+    readyTimer = setTimeout(() => embedFailed("it didn't load"), /(^|\.)cinezo\./i.test(hostOf(u || "")) ? CINEZO_READY_MS : EMBED_READY_MS);
+  };
+  // Cinezo said it is alive (a player event, no length yet): give it a while
+  // longer to find the stream, once.
+  const graceEmbed = () => {
+    if (!GATE || embedReady || graced) return;
+    graced = true;
+    clearTimeout(readyTimer);
+    readyTimer = setTimeout(() => embedFailed("it didn't load"), CINEZO_GRACE_MS);
   };
   const revealEmbed = () => {
     if (embedReady || isBlank(iframe.src)) return;
@@ -1072,7 +1087,7 @@ function upgrade(wv) {
       stallMs: GATE ? EMBED_READY_MS : LOAD_TIMEOUT_MS,
       play: (u) => {
         sandboxFor(u);
-        gateEmbed();
+        gateEmbed(u);
         setFrame(u);
         postContext(u);
       },
