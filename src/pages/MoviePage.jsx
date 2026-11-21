@@ -835,8 +835,9 @@ export default function MoviePage({
       anilistId: (isAnime && anilistData?.id) || null,
       dubMode,
       progressKey,
+      runtime: details?.runtime || null, // minutes (web: a server's video far longer than this is the wrong one)
     });
-  }, [title, isAnime, item.id, anilistData?.id, dubMode, progressKey]);
+  }, [title, isAnime, item.id, anilistData?.id, dubMode, progressKey, details?.runtime]);
 
   // iOS: Resume / Play / Restart. `pct` changes whenever progress is saved.
   const resumeSeconds = useMemo(

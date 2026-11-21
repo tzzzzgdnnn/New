@@ -151,7 +151,8 @@ async function watchRun({ src, message, stored = null, foreign = false, follow =
 }
 
 const CINEZO = "https://player.cinezo.live/embed/movie/550";
-const PLAYER_EVENT = { type: "PLAYER_EVENT", data: { event: "timeupdate", currentTime: 3, duration: 0, tmdbId: 550, mediaType: "movie" } };
+const PLAYER_EVENT = { type: "PLAYER_EVENT", data: { event: "timeupdate", currentTime: 3, duration: 8340, tmdbId: 550, mediaType: "movie" } };
+win.__sbPlayAfterTapMs = 200;
 
 test("#26: Cinezo's PLAYER_EVENT counts as started (Auto keeps it)", async () => {
   const r = await watchRun({ src: CINEZO, message: PLAYER_EVENT });
@@ -162,8 +163,12 @@ test("#26: Cinezo's PLAYER_EVENT counts as started (Auto keeps it)", async () =>
 test("#26: Cinezo's PLAYER_EVENT as a JSON string counts too; a ready player at 0 s waits for the tap", async () => {
   const r = await watchRun({ src: CINEZO, message: JSON.stringify(PLAYER_EVENT) });
   assert.deepEqual(r.picks, []);
-  const zero = await watchRun({ src: CINEZO, message: { type: "PLAYER_EVENT", data: { event: "play", currentTime: 0 } } });
+  const zero = await watchRun({ src: CINEZO, message: { type: "PLAYER_EVENT", data: { event: "play", currentTime: 0, duration: 8340 } } });
   assert.equal(zero.fails, 0, "a player that said it is ready is kept (waits for the viewer's tap)");
+  const ghost = await watchRun({ src: CINEZO, message: { type: "PLAYER_EVENT", data: { event: "play", currentTime: 0, duration: 0 } } });
+  assert.equal(ghost.fails, 1, "Cinezo's play event with no duration (no stream) is not ready: next server");
+  const md = await watchRun({ src: CINEZO, message: { type: "MEDIA_DATA", data: { id: 550, progress: { watched: 0, duration: 0 } } } });
+  assert.equal(md.fails, 1, "Cinezo's MEDIA_DATA alone is not ready (#26 ghost)");
   const other = await watchRun({ src: CINEZO, message: PLAYER_EVENT, foreign: true });
   assert.equal(other.fails, 1, "PLAYER_EVENT from another window is ignored");
 });
@@ -214,6 +219,8 @@ test("web: a ready message reveals the embed; a hand-picked server that 404s sho
   let wv = await mount("https://player.cinezo.live/embed/tv/306499/1/1");
   let iframe = wv.querySelector("iframe");
   win.dispatchEvent(new win.MessageEvent("message", { data: { type: "MEDIA_DATA", data: { id: 306499 } }, source: iframe.contentWindow }));
+  assert.equal(wv.querySelector(".sb-native-card").style.display, "flex", "Cinezo's MEDIA_DATA alone keeps our card");
+  win.dispatchEvent(new win.MessageEvent("message", { data: { type: "PLAYER_EVENT", data: { event: "timeupdate", currentTime: 0, duration: 2580 } }, source: iframe.contentWindow }));
   assert.equal(wv.querySelector(".sb-native-card").style.display, "none");
   await unmount(wv);
   localStorage.setItem("streambert_serverAutoPick", "false");
@@ -225,4 +232,62 @@ test("web: a ready message reveals the embed; a hand-picked server that 404s sho
   assert.match(wv.querySelector(".sb-native-card").textContent, /Not available on this server/);
   await unmount(wv);
   localStorage.clear();
+});
+
+test("#26: Cinezo playing a stand-in or a far longer video is the wrong one: next server at once", async () => {
+  localStorage.clear();
+  for (const [ctx, dur] of [
+    [{ type: "tv", tmdbId: 90249, season: 1, episode: 1, progressKey: null }, 9469], // Cinezo's "2012"
+    [{ type: "tv", tmdbId: 91421, season: 1, episode: 1, runtime: 42, progressKey: null }, 7000],
+    [{ type: "movie", tmdbId: 777, runtime: 95, progressKey: null }, 12000],
+  ]) {
+    win.__sbCtx = ctx;
+    const src = ctx.type === "tv" ? `https://player.cinezo.live/embed/tv/${ctx.tmdbId}/1/1` : `https://player.cinezo.live/embed/movie/${ctx.tmdbId}`;
+    const wv = await mount(src);
+    const iframe = wv.querySelector("iframe");
+    const picks = [];
+    const onPick = (e) => picks.push(e.detail);
+    win.addEventListener("sb-select-server", onPick);
+    win.dispatchEvent(new win.MessageEvent("message", { data: { type: "PLAYER_EVENT", data: { event: "timeupdate", currentTime: 4, duration: dur } }, source: iframe.contentWindow }));
+    win.removeEventListener("sb-select-server", onPick);
+    assert.equal(iframe.getAttribute("src"), "about:blank", `${dur} s video for ${ctx.type} ${ctx.tmdbId} dropped`);
+    assert.equal(picks.length, 1, "Auto moved on");
+    await unmount(wv);
+  }
+  // A real episode (close to its runtime) stays.
+  win.__sbCtx = { type: "tv", tmdbId: 1396, season: 1, episode: 1, runtime: 58, progressKey: null };
+  const wv = await mount("https://player.cinezo.live/embed/tv/1396/1/1");
+  const iframe = wv.querySelector("iframe");
+  win.dispatchEvent(new win.MessageEvent("message", { data: { type: "PLAYER_EVENT", data: { event: "timeupdate", currentTime: 4, duration: 3500 } }, source: iframe.contentWindow }));
+  assert.notEqual(iframe.getAttribute("src"), "about:blank");
+  await unmount(wv);
+});
+
+test("#26: Cinezo ready but not playing within the window after the tap: next server, no endless spinner", async () => {
+  localStorage.clear();
+  win.__sbCtx = { type: "tv", tmdbId: 1396, season: 1, episode: 1, runtime: 58, progressKey: null };
+  const wv = await mount("https://player.cinezo.live/embed/tv/1396/1/1");
+  const iframe = wv.querySelector("iframe");
+  let fails = 0;
+  wv.addEventListener("did-fail-load", () => fails++);
+  iframe.dispatchEvent(new win.Event("load"));
+  win.dispatchEvent(new win.MessageEvent("message", { data: { type: "PLAYER_EVENT", data: { event: "play", currentTime: 0, duration: 3500 } }, source: iframe.contentWindow }));
+  await tick(400);
+  assert.equal(fails, 0, "no tap yet: the ready player waits");
+  wv.dispatchEvent(new win.PointerEvent("pointerdown", { bubbles: true }));
+  await tick(400);
+  assert.equal(fails, 1, "tapped, never played: next server");
+  await unmount(wv);
+  // Tapped and playing: kept.
+  const wv2 = await mount("https://player.cinezo.live/embed/tv/1396/1/1");
+  const f2 = wv2.querySelector("iframe");
+  let fails2 = 0;
+  wv2.addEventListener("did-fail-load", () => fails2++);
+  f2.dispatchEvent(new win.Event("load"));
+  win.dispatchEvent(new win.MessageEvent("message", { data: { type: "PLAYER_EVENT", data: { event: "play", currentTime: 0, duration: 3500 } }, source: f2.contentWindow }));
+  wv2.dispatchEvent(new win.PointerEvent("pointerdown", { bubbles: true }));
+  win.dispatchEvent(new win.MessageEvent("message", { data: { type: "PLAYER_EVENT", data: { event: "timeupdate", currentTime: 2, duration: 3500 } }, source: f2.contentWindow }));
+  await tick(400);
+  assert.equal(fails2, 0, "playing after the tap: kept");
+  await unmount(wv2);
 });
