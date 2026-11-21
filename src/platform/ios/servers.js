@@ -2,7 +2,7 @@
 // Edit servers.json on the ios-app branch to fix a dead/moved server without
 // rebuilding the app.
 import bundled from "../../../servers.json";
-import { PLAYER_SOURCES, WEB_UNFRAMEABLE, WEB_ALLOWED, webEmbedRank } from "../../utils/api";
+import { PLAYER_SOURCES, WEB_UNFRAMEABLE, WEB_ALLOWED, WEB_PLAYER_URLS, webEmbedRank } from "../../utils/api";
 import { customPlayerSources, listCustomServers, serverFits, setCustomServersApplyHook } from "./customServers";
 
 export const SERVERS_BRANCH =
@@ -66,6 +66,17 @@ function customSources() {
   return customPlayerSources().map((src) => ({ ...src, customFits: fits.get(src.id) }));
 }
 
+/** Web app: a server's bare player page in place of its site page (WEB_PLAYER_URLS, #26). */
+export function webPlayerUrls(s) {
+  const p = WEB_PLAYER_URLS[s.id];
+  if (!p) return s;
+  return {
+    ...s,
+    movieUrl: (id) => fill(p.movie, { id }),
+    ...(p.tv ? { tvUrl: (id, season, ep) => fill(p.tv, { id, season, ep }) } : {}),
+  };
+}
+
 export function applyServers(cfg) {
   if (!valid(cfg)) return false;
   _lastCfg = cfg;
@@ -109,6 +120,7 @@ export function applyServers(cfg) {
     // fixes #19: only the servers verified playing on the web, Vidfast first.
     const web = [...builtins, ...added]
       .filter((s) => WEB_ALLOWED.has(s.id) && !WEB_BLOCKED.has(s.id))
+      .map((s) => webPlayerUrls(s))
       .sort((a, b) => webEmbedRank(a.id) - webEmbedRank(b.id));
     PLAYER_SOURCES.splice(0, PLAYER_SOURCES.length, ...web);
   } else {
