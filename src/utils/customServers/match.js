@@ -4,6 +4,8 @@
 //   tmdb(path)          -> TMDB v3 JSON (path like "/movie/27205")
 //   anilist(query, vars) -> AniList GraphQL `data`
 import { analyzeUrl, detectTemplate, titleWords } from "./template";
+import { idHints, pageFacts, similarity, convertIds } from "./idmap";
+import { numberingFor, seasonCounts } from "./episodes";
 
 /** Each lookup gives up after this long; the whole match never waits on one slow call. */
 export const LOOKUP_TIMEOUT_MS = 5000;
@@ -76,70 +78,126 @@ export function cleanPageTitle(t) {
     .trim();
 }
 
+/** How close a hit's names are to the link's words: shared words, or a loose match for typos. */
+function closeness(guess, hit) {
+  let best = 0;
+  for (const n of [hit.title, ...(hit.altTitles || [])]) {
+    const f = similarity(guess, n);
+    best = Math.max(best, titleOverlap(guess, n), f >= 0.8 ? f : 0);
+  }
+  return best;
+}
+
 /** Score of a hit against what the link itself says. */
-function score(hit, a, idInLink) {
+function score(hit, a, idInLink, labelled = false) {
   let s = idInLink ? 50 : 0;
-  const names = [hit.title, ...(hit.altTitles || [])];
-  const overlap = a.titleGuess ? Math.max(...names.map((n) => titleOverlap(a.titleGuess, n))) : 0;
+  if (labelled) s += 20; // the link names the id's kind ("/anilist/21")
+  const overlap = a.titleGuess ? closeness(a.titleGuess, hit) : 0;
   // An id from the link whose title has nothing to do with the link's words
   // (TMDB tv/1 "Pride" for ".../family-guy-y6bs3k/1/1") is not a match.
   if (a.titleGuess) s += overlap >= 0.99 ? 40 : overlap >= 0.5 ? 20 : idInLink && titleWords(a.titleGuess).length >= 2 ? -70 : -25;
-  if (a.yearGuess && hit.year) s += a.yearGuess === hit.year ? 15 : 0;
-  if (a.kind) s += a.kind === hit.kind ? 20 : -20;
+  if (a.yearGuess && hit.year) s += a.yearGuess === hit.year ? 15 : Math.abs(a.yearGuess - hit.year) > 1 ? -10 : 0;
+  if (a.kind) s += a.kind === hit.kind || (a.kind === "anime" && hit.animeVia) ? 20 : -20;
   if (!idInLink && overlap < 0.5) s -= 100; // a search hit must at least share the title
   return s;
 }
 
 const settle = (promises) => Promise.allSettled(promises).then((r) => r.filter((x) => x.status === "fulfilled").map((x) => x.value));
 
+const ANILIST_ONE = `
+query ($id: Int, $mal: Int) {
+  Media(id: $id, idMal: $mal, type: ANIME) { id idMal format episodes seasonYear title { romaji english native } }
+}`;
+
+const JUNK_TITLE = /quick check|just a moment|attention required|verify|access denied|not found|error|captcha|security check|loading|^home$|^watch$/i;
+
+/** A path segment that is the site's own id for the title: a slug with a site id, or a number / token. */
+function siteToken(sample, a) {
+  if (a.slugSegment && a.siteId) return a.slugSegment;
+  let path = "";
+  try {
+    path = new URL(sample).pathname;
+  } catch {
+    return null;
+  }
+  const segs = path.split("/").filter(Boolean);
+  const kindish = /^(movie|movies|film|films|tv|series|show|shows|anime|watch|play|embed|player|details|info|title|v|e|s|ep)$/i;
+  // Season / episode numbers at the end are not the title's id.
+  let end = segs.length;
+  while (end > 0 && /^\d{1,4}$/.test(segs[end - 1]) && end > 1 && !kindish.test(segs[end - 2])) end--;
+  for (let i = end - 1; i >= 0; i--) {
+    const x = segs[i];
+    if (kindish.test(x) || x.length < 2) continue;
+    if (/^\d+$/.test(x) || /\d/.test(x)) return x;
+  }
+  return null;
+}
+
 /**
  * Match a sample link to a title and build its template.
  * @param {string} sample
- * @param {{ tmdb?: Function, anilist?: Function, prefer?: "movie"|"tv"|"anime"|null,
- *           timeoutMs?: number }} deps
+ * @param {{ tmdb?: Function, anilist?: Function, arm?: Function, page?: Function,
+ *           prefer?: "movie"|"tv"|"anime"|null, timeoutMs?: number, pageTitle?: string|null }} deps
+ *   arm(url) -> ARM anime-mapping JSON; page() -> the sample page's HTML (or null)
  * @returns {Promise<{ ok: boolean, error?: string, match?: object, detected?: object,
- *                     alternatives?: object[] }>}
+ *                     alternatives?: object[], guesses?: object[], via?: string, numbering?: string }>}
  */
-export async function matchSample(sample, { tmdb, anilist, prefer = null, timeoutMs = LOOKUP_TIMEOUT_MS, pageTitle = null } = {}) {
+export async function matchSample(sample, { tmdb, anilist, arm, page = null, prefer = null, timeoutMs = LOOKUP_TIMEOUT_MS, pageTitle = null } = {}) {
   const a = analyzeUrl(sample);
   if (!a.ok) return { ok: false, error: a.error };
+  const hints = idHints(sample);
   const kindHint = a.kind || prefer;
   const t = (p, what) => withTimeout(Promise.resolve().then(p), timeoutMs, what);
-  const ids = (a.idNumbers || a.numbers).filter((n) => n > 0 && !(n === a.yearGuess)).slice(0, MAX_ID_CANDIDATES);
+  const labelledNums = new Set(hints.labelled.map((l) => l.value));
+  const ids = (a.idNumbers || a.numbers).filter((n) => n > 0 && !(n === a.yearGuess) && !labelledNums.has(n)).slice(0, MAX_ID_CANDIDATES);
   const errors = [];
   const note = (e) => {
     errors.push(e?.message || String(e));
     return null;
   };
+  const notFound = (e) => (e?.status === 404 || /404|not found/i.test(e?.message || "") ? [] : note(e));
+  const tmdbKinds = kindHint === "movie" || kindHint === "tv" ? [kindHint] : ["movie", "tv"];
+  const asAnime = (hit) => (a.kind === "anime" ? { ...hit, kind: "anime", animeVia: hit.kind } : hit);
+  const byTmdbId = (n, kinds, extra = {}) =>
+    kinds.map((k) =>
+      t(() => tmdb(`/${k}/${n}`), "TMDB")
+        .then((d) => (d?.id === n ? [{ hit: fromTmdb(k, d), idInLink: true, ...extra }] : []))
+        .catch(notFound),
+    );
+  const findTmdb = (id, source, extra = {}) =>
+    t(() => tmdb(`/find/${id}?external_source=${source}`), "TMDB")
+      .then((r) => [
+        ...(r?.movie_results || []).map((d) => fromTmdb("movie", d, source === "imdb_id" ? id : null)),
+        ...(r?.tv_results || []).map((d) => fromTmdb("tv", d, source === "imdb_id" ? id : null)),
+      ].map((hit) => ({ hit: source === "tvdb_id" ? { ...hit, ids: { ...hit.ids, tvdb: id } } : hit, idInLink: true, ...extra })))
+      .catch(note);
+  const anilistOne = (vars, extra = {}) =>
+    t(() => anilist(ANILIST_ONE, vars), "AniList")
+      .then((d) => (d?.Media ? [{ hit: { ...fromAnilist(d.Media), ...(vars.mal && !vars.id ? { viaMal: true } : {}) }, idInLink: true, ...extra }] : []))
+      .catch(notFound);
   const jobs = [];
 
-  // IMDb id in the link: TMDB's /find answers exactly.
-  if (tmdb) {
-    for (const imdb of a.imdb) {
+  // Ids the link labels ("/anilist/21", "?mal=21", "/tvdb/81189", "kitsu=12"): only that kind.
+  for (const { kind, value } of hints.labelled) {
+    const L = { labelled: true };
+    if (kind === "tmdb" && tmdb) jobs.push(...byTmdbId(value, tmdbKinds, L).map((p) => p.then((x) => (x || []).map((f) => ({ ...f, hit: asAnime(f.hit) })))));
+    if (kind === "tvdb" && tmdb) jobs.push(findTmdb(value, "tvdb_id", L).then((x) => (x || []).map((f) => ({ ...f, hit: { ...asAnime(f.hit), viaTvdb: true } }))));
+    if (kind === "anilist" && anilist) jobs.push(anilistOne({ id: value }, L));
+    if (kind === "mal" && anilist) jobs.push(anilistOne({ mal: value }, L));
+    if (kind === "kitsu" && (arm || anilist)) {
       jobs.push(
-        t(() => tmdb(`/find/${imdb}?external_source=imdb_id`), "TMDB")
-          .then((r) => [
-            ...(r?.movie_results || []).map((d) => fromTmdb("movie", d, imdb)),
-            ...(r?.tv_results || []).map((d) => fromTmdb("tv", d, imdb)),
-          ].map((hit) => ({ hit, idInLink: true })))
+        t(() => convertIds({ kitsu: value }, ["anilist", "mal"], { arm }), "ARM")
+          .then((x) => (x.anilist && anilist ? anilistOne({ id: x.anilist }, L) : []))
+          .then((list) => (list || []).map((f) => ({ ...f, hit: { ...f.hit, ids: { ...f.hit.ids, kitsu: value }, viaKitsu: true } })))
           .catch(note),
       );
     }
   }
-  // Numbers in the link as TMDB ids (the kinds the link hints at).
-  if (tmdb && kindHint !== "anime") {
-    const kinds = kindHint === "movie" || kindHint === "tv" ? [kindHint] : ["movie", "tv"];
-    for (const n of ids) {
-      for (const k of kinds) {
-        jobs.push(
-          t(() => tmdb(`/${k}/${n}`), "TMDB")
-            .then((d) => (d?.id === n ? [{ hit: fromTmdb(k, d), idInLink: true }] : []))
-            .catch((e) => (e?.status === 404 || /404|not found/i.test(e?.message || "") ? [] : note(e))),
-        );
-      }
-    }
-  }
-  // Numbers as AniList / MAL ids (anime links, or links with no kind word).
+  // IMDb id in the link: TMDB's /find answers exactly.
+  if (tmdb) for (const imdb of a.imdb) jobs.push(findTmdb(imdb, "imdb_id"));
+  // Unlabelled numbers as TMDB ids (the kinds the link hints at).
+  if (tmdb && kindHint !== "anime") for (const n of ids) jobs.push(...byTmdbId(n, tmdbKinds));
+  // Unlabelled numbers as AniList / MAL ids (anime links, or links with no kind word).
   if (anilist && ids.length && (kindHint === "anime" || !kindHint)) {
     jobs.push(
       t(() => anilist(ANILIST_BY_IDS, { ids, mal: ids }), "AniList")
@@ -150,76 +208,154 @@ export async function matchSample(sample, { tmdb, anilist, prefer = null, timeou
         .catch(note),
     );
   }
-  // No usable id: search by the title in the link.
-  const searches = [];
-  if (a.titleGuess) {
-    if (tmdb && kindHint !== "anime") {
-      const q = encodeURIComponent(a.titleGuess);
-      const multi = (path) =>
+  // By the title in the link (site ids and the year already stripped).
+  const searchTitle = (query, year, kind) => {
+    const out = [];
+    if (!query) return out;
+    if (tmdb && kind !== "anime") {
+      const q = encodeURIComponent(query);
+      const run = (path) =>
         t(() => tmdb(path), "TMDB")
           .then((r) =>
             (r?.results || [])
-              .filter((d) => (d.media_type || kindHint) === "movie" || (d.media_type || kindHint) === "tv")
+              .filter((d) => (d.media_type || kind) === "movie" || (d.media_type || kind) === "tv")
               .slice(0, 5)
-              .map((d) => ({ hit: fromTmdb(d.media_type || kindHint, d), idInLink: false })),
+              .map((d) => ({ hit: fromTmdb(d.media_type || kind, d), idInLink: false })),
           )
           .catch(note);
-      searches.push(multi(`/search/multi?query=${q}`));
+      out.push(run(`/search/multi?query=${q}`));
       // The kind's own search takes the year as a filter (multi ignores it).
-      if (kindHint === "movie" && a.yearGuess) searches.push(multi(`/search/movie?query=${q}&year=${a.yearGuess}`));
-      if (kindHint === "tv" && a.yearGuess) searches.push(multi(`/search/tv?query=${q}&first_air_date_year=${a.yearGuess}`));
+      if (kind === "movie" && year) out.push(run(`/search/movie?query=${q}&year=${year}`));
+      if (kind === "tv" && year) out.push(run(`/search/tv?query=${q}&first_air_date_year=${year}`));
     }
-    if (anilist && (kindHint === "anime" || !kindHint)) {
-      searches.push(
-        t(() => anilist(ANILIST_SEARCH, { q: a.titleGuess }), "AniList")
+    if (anilist && (kind === "anime" || !kind)) {
+      out.push(
+        t(() => anilist(ANILIST_SEARCH, { q: query }), "AniList")
           .then((d) => (d?.Page?.media || []).slice(0, 4).map((m) => ({ hit: fromAnilist(m), idInLink: false })))
           .catch(note),
       );
     }
+    return out;
+  };
+
+  const rank = (list, against = a) =>
+    list
+      .map((f) => ({ ...f, s: score(f.hit, against, f.idInLink, f.labelled) + (prefer && f.hit.kind === prefer ? 5 : 0) }))
+      .sort((x, y) => y.s - x.s);
+  let found = (await settle([...jobs, ...searchTitle(a.titleGuess, a.yearGuess, kindHint)])).flat().filter(Boolean);
+  let ranked = rank(found);
+  // Nothing close: the title with a word less at either end (extra words in the slug).
+  const words = titleWords(a.titleGuess);
+  if (!(ranked[0]?.s >= MIN_SCORE) && words.length >= 3) {
+    const more = (await settle([...searchTitle(words.slice(0, -1).join(" "), a.yearGuess, kindHint), ...searchTitle(words.slice(1).join(" "), a.yearGuess, kindHint)])).flat().filter(Boolean);
+    found = [...found, ...more];
+    ranked = rank(found);
   }
 
-  const found = (await settle([...jobs, ...searches])).flat().filter(Boolean);
-  const ranked = found
-    .map((f) => ({ ...f, s: score(f.hit, a, f.idInLink) + (prefer && f.hit.kind === prefer ? 5 : 0) }))
-    .sort((x, y) => y.s - x.s);
-  // The best hit whose template actually places the title in the link.
-  for (const r of ranked) {
-    if (r.s < MIN_SCORE) break;
-    const hit = r.hit.viaMal ? { ...r.hit, ids: { mal: r.hit.ids.mal } } : r.hit;
-    const detected = detectTemplate(sample, hit);
-    if (detected.ok) {
-      return {
+  // The page's own facts, read once and only when needed.
+  let facts;
+  const readPage = async () => {
+    if (facts !== undefined) return facts;
+    facts = null;
+    if (page) {
+      const html = await t(() => page(), "page").catch(() => null);
+      if (html) facts = pageFacts(html);
+    }
+    if (!facts?.title && pageTitle) facts = { ...(facts || { ids: {} }), title: pageTitle, year: facts?.year || Number(/\b(19|20)\d\d\b/.exec(pageTitle)?.[0]) || null };
+    return facts;
+  };
+  /** Titles the page names: its own ids first, then its title searched. */
+  const pageHits = async () => {
+    const f = await readPage();
+    if (!f) return [];
+    const kind = f.kind || (a.kind === "movie" || a.kind === "tv" ? a.kind : null) || prefer;
+    const own = [];
+    if (tmdb && f.ids?.tmdb) own.push(...byTmdbId(f.ids.tmdb, f.ids.tmdbKind ? [f.ids.tmdbKind] : kind === "movie" || kind === "tv" ? [kind] : ["movie", "tv"]));
+    if (tmdb && f.ids?.imdb) own.push(findTmdb(f.ids.imdb, "imdb_id"));
+    if (anilist && f.ids?.anilist) own.push(anilistOne({ id: f.ids.anilist }));
+    if (anilist && !f.ids?.anilist && f.ids?.mal) own.push(anilistOne({ mal: f.ids.mal }));
+    const clean = cleanPageTitle(f.title);
+    const usable = clean && !JUNK_TITLE.test(clean);
+    const hits = [];
+    for (const x of (await settle(own)).flat().filter(Boolean)) hits.push({ ...x, idInLink: false, pageId: true, s: 100 });
+    if (usable) {
+      const year = f.year || a.yearGuess || null;
+      const pa = { ...a, titleGuess: clean, yearGuess: year, kind: kind === "movie" || kind === "tv" || kind === "anime" ? kind : a.kind };
+      const searched = (await settle(searchTitle(clean, year, pa.kind))).flat().filter(Boolean);
+      hits.push(...rank(searched, pa).filter((r) => r.s >= MIN_SCORE));
+    }
+    return hits.sort((x, y) => y.s - x.s);
+  };
+
+  const done = (r, hit, detected, extra = {}) =>
+    withNumbering(
+      {
         ok: true,
         match: hit,
         detected,
-        alternatives: ranked.filter((o) => o !== r && o.s >= MIN_SCORE).slice(0, 3).map((o) => o.hit),
-      };
-    }
-  }
-  // The page's own title (og:title / <title> / JSON-LD), when the link's words weren't enough.
-  if (pageTitle && tmdb && !matchSample.inner) {
-    const clean = cleanPageTitle(pageTitle);
-    const junk = /quick check|just a moment|attention required|verify|access denied|not found|error|captcha|security check|loading/i.test(clean || "");
-    const related = !a.titleGuess || titleWords(a.titleGuess).length < 2 || titleOverlap(a.titleGuess, clean) >= 0.3;
-    if (clean && !junk && related && titleWords(clean).join(" ") !== titleWords(a.titleGuess).join(" ")) {
-      const year = /\b(19|20)\d\d\b/.exec(pageTitle)?.[0] || a.yearGuess || "";
-      const kindWord = a.kind === "tv" || a.kind === "movie" ? `/${a.kind}` : "";
-      const synthetic = `${a.origin}${kindWord}/${clean.toLowerCase().replace(/[^a-z0-9]+/g, "-")}${year ? `-${year}` : ""}`;
-      matchSample.inner = true;
-      try {
-        const r = await matchSample(synthetic, { tmdb, anilist, prefer: prefer || a.kind, timeoutMs });
-        if (r.ok) {
-          const detected = detectTemplate(sample, r.match);
-          if (detected.ok) return { ...r, detected, via: "page title" };
+        alternatives: ranked.filter((o) => o !== r && o.s >= MIN_SCORE && o.hit !== hit).slice(0, 3).map((o) => o.hit),
+        ...extra,
+      },
+      { tmdb, t, a },
+    );
+  const forTemplate = (h) =>
+    h.viaMal ? { ...h, ids: { mal: h.ids.mal } } : h.viaKitsu ? { ...h, ids: { kitsu: h.ids.kitsu } } : h.viaTvdb ? { ...h, ids: { tvdb: h.ids.tvdb } } : h;
+
+  // The best hit whose template actually places the title in the link.
+  for (const r of ranked) {
+    if (r.s < MIN_SCORE) break;
+    const hit = forTemplate(r.hit);
+    // A bare number with no title words is checked against the page: a site's
+    // own number that happens to be some TMDB id is not that title.
+    if (r.idInLink && !r.labelled && !titleWords(a.titleGuess).length && !a.imdb.length && page) {
+      const f = await readPage();
+      const confirmed = f && ((f.ids?.tmdb && f.ids.tmdb === hit.ids.tmdb) || (f.ids?.imdb && f.ids.imdb === hit.ids.imdb));
+      const clean = cleanPageTitle(f?.title);
+      if (!confirmed && clean && !JUNK_TITLE.test(clean) && Math.max(titleOverlap(clean, hit.title), similarity(clean, hit.title)) < 0.5) {
+        const other = (await pageHits())[0];
+        if (other && other.s >= MIN_SCORE) {
+          const token = siteToken(sample, a);
+          const m = { ...forTemplate(other.hit), siteValue: token };
+          const det = token ? detectTemplate(sample, m) : { ok: false };
+          if (det.ok) return done(other, m, det, { via: "page title", siteId: token });
         }
-      } finally {
-        matchSample.inner = false;
       }
     }
+    const detected = detectTemplate(sample, hit);
+    if (detected.ok) return done(r, hit, detected);
   }
-  if (!found.length && errors.length) return { ok: false, error: `Couldn't reach the title database (${errors[0]}).` };
+
+  // The page's own title / ids, when the link's words weren't enough.
+  const fromPage = page || pageTitle ? await pageHits() : [];
+  for (const r of fromPage) {
+    const hit = forTemplate(r.hit);
+    let detected = detectTemplate(sample, hit);
+    let extra = { via: "page title" };
+    if (!detected.ok) {
+      // The link holds the site's own id for the title, not TMDB's: {site}.
+      const token = siteToken(sample, a);
+      if (token) {
+        const m = { ...hit, siteValue: token };
+        detected = detectTemplate(sample, m);
+        if (detected.ok) return done(r, m, detected, { ...extra, siteId: token });
+      }
+      continue;
+    }
+    return done(r, hit, detected, extra);
+  }
+
+  if (!found.length && !fromPage.length && errors.length) return { ok: false, error: `Couldn't reach the title database (${errors[0]}).` };
   // Never a dead end: the closest titles, to pick from.
-  const guesses = ranked.filter((r) => r.s > -50).slice(0, 3).map((r) => r.hit);
+  const seen = new Set();
+  const guesses = [...fromPage, ...ranked.filter((r) => r.s > -50)]
+    .map((r) => r.hit)
+    .filter((h) => {
+      const k = `${h.kind}:${h.ids.tmdb ?? h.ids.anilist ?? h.ids.mal}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .slice(0, 5);
   return {
     ok: false,
     guesses,
@@ -228,5 +364,31 @@ export async function matchSample(sample, { tmdb, anilist, prefer = null, timeou
       : a.titleGuess
         ? `Couldn't find "${a.titleGuess}"${a.yearGuess ? ` (${a.yearGuess})` : ""} on TMDB yet; Super Player keeps looking through the site's own links.`
         : "Couldn't tell which title this link is; Super Player keeps looking through the site's own links.",
+  };
+}
+
+/**
+ * A TV link with an episode number but no season, for a show with more than
+ * one season: the site counts episodes from 1 across seasons ({absolute}).
+ */
+async function withNumbering(res, { tmdb, t, a }) {
+  const d = res.detected;
+  if (!tmdb || !d?.ok || d.kind !== "tv" || !res.match?.ids?.tmdb) return res;
+  if (!d.placeholders.includes("episode") || d.placeholders.includes("season")) return res;
+  const tv = await t(() => tmdb(`/tv/${res.match.ids.tmdb}`), "TMDB").catch(() => null);
+  const counts = seasonCounts(tv);
+  const episode = Math.max(0, ...(a.trailing || []), ...(a.numbers || []).filter((n) => n <= 9999 && n !== a.yearGuess && n !== res.match.ids.tmdb));
+  const numbering = numberingFor({ hasSeason: false, episode, counts });
+  if (numbering !== "absolute") return { ...res, numbering };
+  const template = d.template.replace("{episode}", "{absolute}");
+  return {
+    ...res,
+    numbering,
+    detected: {
+      ...d,
+      template,
+      placeholders: d.placeholders.map((p) => (p === "episode" ? "absolute" : p)),
+      warnings: d.warnings.filter((w) => !/season/i.test(w)).concat("Episodes are counted from 1 across all seasons (absolute numbering)."),
+    },
   };
 }
