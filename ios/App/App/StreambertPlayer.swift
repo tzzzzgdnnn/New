@@ -1343,7 +1343,7 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
     private static func streamKind(_ url: URL, headers: [String: String],
                                    done: @escaping (String, String?, URL) -> Void) {
         var req = URLRequest(url: url, timeoutInterval: kindSniffTimeout)
-        headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
+        req.sbApply(headers)
         let byExtension = url.pathExtension.lowercased() == "mp4" ? "mp4" : "hls"
         Task {
             do {
@@ -2595,8 +2595,14 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
             try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         }
         try? AVAudioSession.sharedInstance().setActive(true)
+        // Referer / Origin / UA / cookies go with every request of the asset:
+        // the playlist, its keys and its segments, http ones inside an https
+        // playlist included (ATS allows arbitrary loads).
         var opts: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": headers]
         if !cookies.isEmpty { opts[AVURLAssetHTTPCookiesKey] = cookies }
+        if #available(iOS 16.0, *), let ua = headers.first(where: { $0.key.caseInsensitiveCompare("User-Agent") == .orderedSame })?.value {
+            opts[AVURLAssetHTTPUserAgentKey] = ua
+        }
         let asset = AVURLAsset(url: url, options: opts)
         let item = AVPlayerItem(asset: asset)
         // Quality choice survives server switches and failover.

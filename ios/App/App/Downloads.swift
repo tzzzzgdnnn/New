@@ -297,23 +297,43 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
     private func planMP4(_ url: URL, headers: [String: String], done: @escaping ([DLUnit], Int64) -> Void) {
         var req = URLRequest(url: url, timeoutInterval: 20)
         req.httpMethod = "HEAD"
-        headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
+        req.sbApply(headers)
         URLSession.shared.dataTask(with: req) { _, resp, _ in
             let http = resp as? HTTPURLResponse
-            let length = Int64(http?.value(forHTTPHeaderField: "Content-Length") ?? "") ?? 0
-            let ranges = (http?.value(forHTTPHeaderField: "Accept-Ranges") ?? "").contains("bytes")
-            guard length > 0, ranges else {
-                done([DLUnit(url: url.absoluteString, file: "parts/0", kind: "part")], length); return
+            let headOK = http.map { (200..<300).contains($0.statusCode) } ?? false
+            let length = headOK ? (Int64(http?.value(forHTTPHeaderField: "Content-Length") ?? "") ?? 0) : 0
+            let ranges = headOK && (http?.value(forHTTPHeaderField: "Accept-Ranges") ?? "").contains("bytes")
+            if length > 0, ranges { self.rangedPlan(url, length: length, done: done); return }
+            // Many plain-http file servers refuse HEAD or don't list Accept-Ranges
+            // there: ask for one byte; a 206 with the total size means ranges work.
+            var probe = URLRequest(url: url, timeoutInterval: 20)
+            probe.sbApply(headers)
+            probe.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+            Task {
+                // Only the response head is read: a server that ignores Range
+                // would otherwise send the whole file here.
+                var total: Int64 = 0
+                if let r = try? await URLSession.shared.bytes(for: probe) {
+                    r.0.task.cancel()
+                    if let p = r.1 as? HTTPURLResponse, p.statusCode == 206,
+                       let cr = p.value(forHTTPHeaderField: "Content-Range"),
+                       let t = cr.split(separator: "/").last.flatMap({ Int64($0) }) { total = t }
+                }
+                if total > 0 { self.rangedPlan(url, length: total, done: done); return }
+                done([DLUnit(url: url.absoluteString, file: "parts/0", kind: "part")], length)
             }
-            let perConnection = (length + Int64(Self.connectionsPerJob) - 1) / Int64(Self.connectionsPerJob)
-            let chunk = max(1, min(Self.mp4ChunkBytes, perConnection))
-            let count = (length + chunk - 1) / chunk
-            done((0..<count).map { i in
-                let a = i * chunk
-                let b = min(length, a + chunk) - 1
-                return DLUnit(url: url.absoluteString, file: "parts/\(i)", range: "bytes=\(a)-\(b)", kind: "part")
-            }, length)
         }.resume()
+    }
+
+    private func rangedPlan(_ url: URL, length: Int64, done: @escaping ([DLUnit], Int64) -> Void) {
+        let perConnection = (length + Int64(Self.connectionsPerJob) - 1) / Int64(Self.connectionsPerJob)
+        let chunk = max(1, min(Self.mp4ChunkBytes, perConnection))
+        let count = (length + chunk - 1) / chunk
+        done((0..<count).map { i in
+            let a = i * chunk
+            let b = min(length, a + chunk) - 1
+            return DLUnit(url: url.absoluteString, file: "parts/\(i)", range: "bytes=\(a)-\(b)", kind: "part")
+        }, length)
     }
 
     /// HLS: fetch the media playlist(s), turn every segment / key / init map
@@ -364,7 +384,7 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
     private func fetchText(_ url: URL, headers: [String: String], timeout: TimeInterval = 20,
                            done: @escaping (String?, URL) -> Void) {
         var req = URLRequest(url: url, timeoutInterval: timeout)
-        headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
+        req.sbApply(headers)
         URLSession.shared.dataTask(with: req) { data, resp, _ in
             let ok = (resp as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
             done(ok ? data.flatMap { String(data: $0, encoding: .utf8) } : nil, resp?.url ?? url)
@@ -552,13 +572,13 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
     private func contentLength(_ url: URL, headers: [String: String], done: @escaping (Int64) -> Void) {
         var head = URLRequest(url: url, timeoutInterval: Self.measureTimeout)
         head.httpMethod = "HEAD"
-        headers.forEach { head.setValue($1, forHTTPHeaderField: $0) }
+        head.sbApply(headers)
         URLSession.shared.dataTask(with: head) { _, resp, _ in
             if let h = resp as? HTTPURLResponse, (200..<300).contains(h.statusCode), h.expectedContentLength > 0 {
                 done(h.expectedContentLength); return
             }
             var get = URLRequest(url: url, timeoutInterval: Self.measureTimeout)
-            headers.forEach { get.setValue($1, forHTTPHeaderField: $0) }
+            get.sbApply(headers)
             get.setValue("bytes=0-0", forHTTPHeaderField: "Range")
             URLSession.shared.dataTask(with: get) { data, resp, _ in
                 guard let h = resp as? HTTPURLResponse, (200..<300).contains(h.statusCode) else { done(0); return }
@@ -746,7 +766,7 @@ final class DownloadManager: NSObject, URLSessionDownloadDelegate {
             if let t = notBefore["\(id)|\(i)"], t > now { continue }
             guard let url = URL(string: u.url) else { fail(id, "Bad segment address"); return }
             var req = URLRequest(url: url)
-            job.headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
+            req.sbApply(job.headers)
             if let r = u.range { req.setValue(r, forHTTPHeaderField: "Range") }
             let task: URLSessionDownloadTask
             if u.range == nil, let data = takeResumeData(dir, i) {
@@ -1245,5 +1265,17 @@ final class LocalMediaServer {
 
     private func send(_ c: NWConnection, _ data: Data) {
         c.send(content: data, completion: .contentProcessed { _ in c.cancel() })
+    }
+}
+
+extension URLRequest {
+    /// The stream's headers (Referer / Origin / User-Agent / Cookie). A Cookie
+    /// header from the page is sent as is: the shared cookie store must not
+    /// replace it (http and https hosts alike).
+    mutating func sbApply(_ headers: [String: String]) {
+        headers.forEach { setValue($1, forHTTPHeaderField: $0) }
+        if headers.keys.contains(where: { $0.caseInsensitiveCompare("Cookie") == .orderedSame }) {
+            httpShouldHandleCookies = false
+        }
     }
 }
