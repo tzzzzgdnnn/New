@@ -491,7 +491,7 @@ function upgrade(wv) {
   // after EMBED_READY_MS, or on an error message, the next server takes over
   // (Auto) or our own "not available" card shows.
   const GATE = BROWSER_ONLY;
-  const EMBED_READY_MS = 20000;
+  const EMBED_READY_MS = 25000;
   let embedReady = !GATE;
   let readyTimer = null;
   cleanups.push(() => clearTimeout(readyTimer));
@@ -695,7 +695,8 @@ function upgrade(wv) {
     return true;
   };
   const inParty = () => !!window.__sbWatchParty;
-  const titleKeyOf = (c) => `${c?.type}:${c?.tmdbId}:${c?.season ?? ""}:${c?.episode ?? ""}`;
+  // Same key before and after the page fills in the episode (null -> 1 on Play).
+  const titleKeyOf = (c) => (c?.type === "tv" ? `tv:${c?.tmdbId}:${c?.season ?? 1}:${c?.episode ?? 1}` : `${c?.type}:${c?.tmdbId}`);
   const directMissed = new Set(); // titles Cinejoy had no playable stream for (web)
   const partyTries = new Map(); // title url -> direct retries in this party
   const partyNoSync = (embedUrl) => {
@@ -1002,7 +1003,9 @@ function upgrade(wv) {
     // No load event in time: the next mirror takes over, else the page hears
     // did-fail-load and fails over to another server.
     webFallback = createFallback([url, ...mirrorsFor(url)], {
-      stallMs: LOAD_TIMEOUT_MS,
+      // Web: a slow player page (Cinezo's is heavy) is given the whole ready
+      // window; its ready message, not the load event, decides (EMBED_READY_MS).
+      stallMs: GATE ? EMBED_READY_MS : LOAD_TIMEOUT_MS,
       play: (u) => {
         sandboxFor(u);
         gateEmbed();
