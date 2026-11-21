@@ -106,6 +106,103 @@ final class AdFilter {
     }
 }
 
+// MARK: - Stream body probe
+
+/// Reads the first bytes of a sniffed stream link (with the headers and
+/// cookies it plays with) and says when it plainly isn't a video: a web
+/// page, a JSON / wrapped answer, an error status, or a "playlist" that
+/// doesn't start with #EXTM3U. AVPlayer reports those only as
+/// CoreMediaErrorDomain 1718449215 ('fmt?'), so the Test and the player
+/// check the body first and move on to the next link the page fetched.
+/// Unknown or unreachable bodies are never rejected here (AVPlayer decides).
+enum StreamProbe {
+    static let timeout: TimeInterval = 8
+    static let headBytes = 1024
+
+    /// nil when the body can be a stream; else why it can't (shown in the Test).
+    static func problem(head: Data, contentType: String?, status: Int?, url: URL) -> String? {
+        if let st = status, st >= 400 { return "The stream link answered HTTP \(st)" }
+        if head.isEmpty { return status == nil ? nil : "The stream link answered with an empty body" }
+        let b = [UInt8](head.prefix(16))
+        // Binary media: MPEG-TS, MP4 / fMP4 boxes, WebM, ID3-tagged audio.
+        if b.first == 0x47 { return nil }
+        if b.count >= 8, let box = String(bytes: b[4..<8], encoding: .ascii),
+           ["ftyp", "moov", "moof", "styp", "sidx", "free", "mdat"].contains(box) { return nil }
+        if b.count >= 4, b[0] == 0x1A, b[1] == 0x45, b[2] == 0xDF, b[3] == 0xA3 { return nil }
+        if b.count >= 3, b[0] == 0x49, b[1] == 0x44, b[2] == 0x33 { return nil }
+        var text = String(decoding: head, as: UTF8.self)
+        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("#EXTM3U") { return nil }
+        let lower = text.prefix(64).lowercased()
+        if lower.hasPrefix("<!doctype") || lower.hasPrefix("<html") || lower.hasPrefix("<head") || lower.hasPrefix("<body") || lower.hasPrefix("<?xml") || lower.hasPrefix("<") {
+            return "The stream link answered with a web page, not a video"
+        }
+        if lower.hasPrefix("{") || lower.hasPrefix("[") {
+            return "The stream link answered with JSON (an API or wrapped link), not a playlist"
+        }
+        let type = (contentType ?? "").lowercased()
+        let saysPlaylist = type.contains("mpegurl") || url.absoluteString.lowercased().contains("m3u8")
+        // Readable text that should have been a playlist (encrypted / encoded wrappers, error text).
+        let printable = b.allSatisfy { $0 == 9 || $0 == 10 || $0 == 13 || ($0 >= 32 && $0 < 127) }
+        if saysPlaylist && printable { return "The playlist link didn't answer with a playlist (no #EXTM3U)" }
+        if type.hasPrefix("text/html") { return "The stream link answered with a web page, not a video" }
+        return nil
+    }
+
+    /// Fetches the first bytes and replies (on main) with `problem(...)`.
+    static func check(_ url: URL, headers: [String: String], cookies: [HTTPCookie], done: @escaping (String?) -> Void) {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { done(nil); return }
+        var req = URLRequest(url: url, timeoutInterval: StreamProbe.timeout)
+        var h = headers
+        if !cookies.isEmpty, !h.keys.contains(where: { $0.caseInsensitiveCompare("Cookie") == .orderedSame }),
+           let c = HTTPCookie.requestHeaderFields(with: cookies)["Cookie"] { h["Cookie"] = c }
+        req.sbApply(h)
+        Task {
+            var verdict: String? = nil
+            do {
+                let (stream, resp) = try await URLSession.shared.bytes(for: req)
+                var head = Data()
+                for try await byte in stream {
+                    head.append(byte)
+                    if head.count >= StreamProbe.headBytes { break }
+                }
+                stream.task.cancel()
+                let http = resp as? HTTPURLResponse
+                verdict = StreamProbe.problem(head: head, contentType: http?.value(forHTTPHeaderField: "Content-Type"),
+                                  status: http?.statusCode, url: resp.url ?? url)
+            } catch {
+                verdict = nil // unreachable here: let the player try it
+            }
+            let result = verdict
+            DispatchQueue.main.async { done(result) }
+        }
+    }
+
+    /// The first of `urls` whose body can be a stream (index), plus why each earlier one was skipped.
+    static func firstGood(_ urls: [URL], headers: [String: String], cookies: [HTTPCookie],
+                          done: @escaping (Int?, [String]) -> Void) {
+        var skipped: [String] = []
+        func step(_ n: Int) {
+            guard n < urls.count else { done(nil, skipped); return }
+            StreamProbe.check(urls[n], headers: headers, cookies: cookies) { why in
+                if let why = why { skipped.append(why); sbLog("stream probe skip \(urls[n].host ?? "?"): \(why)"); step(n + 1) }
+                else { done(n, skipped) }
+            }
+        }
+        step(0)
+    }
+
+    /// AVPlayer's 'fmt?' and friends in words.
+    static func playerError(_ e: Error?) -> String {
+        guard let ns = e as NSError? else { return "The player couldn't open the stream" }
+        if ns.domain == "CoreMediaErrorDomain" && ns.code == 1718449215 {
+            return "The stream isn't in a format the player can read (CoreMedia 'fmt?')"
+        }
+        return ns.localizedDescription
+    }
+}
+
 // MARK: - Playability check
 
 /// Opens a stream in a muted, off-screen AVPlayer with the page's headers
@@ -120,6 +217,15 @@ final class PlayabilityCheck {
 
     func run(url: URL, headers: [String: String], cookies: [HTTPCookie], completion: @escaping (Bool, String) -> Void) {
         self.completion = completion
+        // The body first: a web page / JSON / non-playlist answer fails here with a reason.
+        StreamProbe.check(url, headers: headers, cookies: cookies) { [weak self] why in
+            guard let self = self, self.completion != nil else { return }
+            if let why = why { self.finish(false, why); return }
+            self.openPlayer(url: url, headers: headers, cookies: cookies)
+        }
+    }
+
+    private func openPlayer(url: URL, headers: [String: String], cookies: [HTTPCookie]) {
         var opts: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": headers]
         if !cookies.isEmpty { opts[AVURLAssetHTTPCookiesKey] = cookies }
         let item = AVPlayerItem(asset: AVURLAsset(url: url, options: opts))
@@ -135,7 +241,7 @@ final class PlayabilityCheck {
                         ? String(format: "%d min", Int(secs / 60)) : "live or unknown length"
                     self?.finish(true, "Ready to play (\(length))")
                 case .failed:
-                    self?.finish(false, it.error?.localizedDescription ?? "The player couldn't open the stream")
+                    self?.finish(false, StreamProbe.playerError(it.error))
                 default: break
                 }
             }
@@ -246,7 +352,7 @@ final class ServerTestMessageHandler: NSObject, WKScriptMessageHandlerWithReply 
                              "headers": r.headers.filter { $0.key.lowercased() != "cookie" },
                              "page": r.page.map { $0.absoluteString as Any } ?? NSNull()]
             // The stream, then the page's other playlists in order: the first that opens counts.
-            let urls = [r.url] + Array(r.alternates.prefix(3))
+            let urls = [r.url] + Array(r.alternates.prefix(5))
             var attempt: ((Int, String?) -> Void)? = nil
             attempt = { n, firstError in
                 let check = PlayabilityCheck()
@@ -258,7 +364,9 @@ final class ServerTestMessageHandler: NSObject, WKScriptMessageHandlerWithReply 
                         st["url"] = urls[n].absoluteString
                         out["stream"] = st
                     }
-                    out["playable"] = ok ? ["ok": true, "detail": detail] : ["ok": false, "error": firstError ?? detail]
+                    out["playable"] = ok
+                        ? ["ok": true, "detail": n > 0 ? "\(detail) · link \(n + 1) of \(urls.count) (\(firstError ?? "the first didn't open"))" : detail]
+                        : ["ok": false, "error": urls.count > 1 ? "\(firstError ?? detail) (all \(urls.count) links the page fetched failed)" : (firstError ?? detail)]
                     sbLog("test \(cand.id): stream \(kind) in \(ms) ms, playable \(ok) (\(n + 1)/\(urls.count))")
                     self?.finishRun(id)
                     done(out)

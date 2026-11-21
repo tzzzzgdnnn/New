@@ -943,3 +943,66 @@ test("generic learner maps a Cinejoy-shaped API: body server, bundle list, every
   setDirectHttp(null);
   await CS.deleteCustomServer(s.id);
 });
+
+// ── Engine: per-site wait everywhere, stream bodies validated, generic page titles ──
+test("engine: every hidden page of a site waits its per-link setting (no hard-coded 15 s)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const s = { id: "custom-wait", name: "Slow", site: "slow.test", linkWaitMs: 90000, templates: { movie: "https://slow.test/m/{tmdb}" } };
+  assert.equal(CS.linkWaitOf(s), 90000);
+  assert.equal(CS.linkWaitOf({}), CS.LINK_WAIT.def, "no setting: the default wait");
+  assert.equal(CS.candidateFor(s, "https://slow.test/m/1").timeoutMs, 90000, "playback candidates use the site's wait");
+  let sent = null;
+  window.webkit = { messageHandlers: { sbServerTest: { postMessage: async (m) => ((sent = m), { page: { ok: true, status: 200, title: "Slow" }, stream: { ok: false }, playable: { ok: false } }) } } };
+  const r = await CS.nativeTry(s, "https://slow.test/m/1");
+  delete window.webkit;
+  assert.equal(sent.candidate.timeoutMs, 90000, "Test / smart add pages get the site's wait");
+  const st = CS.pageSteps(r, { title: "X", want: { title: "X", kind: "movie" }, site: "Slow" }).find((x) => x.id === "stream");
+  assert.match(st.detail, /within 90 s/, "the message names the wait actually used");
+  assert.doesNotMatch(st.detail, /15 s/);
+  const SITE = await import("../src/utils/customServers/site.js");
+  assert.equal(SITE.pageWait({ waitMs: 300000 }, 20000), 300000, "site.js renders: the site's wait, up to 5 min");
+  assert.equal(SITE.pageWait({}, 20000), 20000);
+  const siteSrc = readFileSync("src/utils/customServers/site.js", "utf8");
+  assert.doesNotMatch(siteSrc, /net\.render\([^)]*timeoutMs:\s*\d/, "no literal render timeouts in site.js");
+});
+
+test("engine: generic page titles are neutral, real other titles still fail", async () => {
+  const { checkTitle } = await import("../src/utils/customServers/direct.js");
+  const eq2 = { title: "The Equalizer 2", kind: "movie" };
+  assert.equal(checkTitle("Fly Stream - Now Playing", eq2, ["Flystream", "flystream"]), "unknown", "site name written apart + Now Playing");
+  assert.equal(checkTitle("Now Playing", eq2, []), "unknown");
+  assert.equal(checkTitle("Quick check · Site", eq2, ["Site"]), "unknown");
+  assert.equal(checkTitle("Watch Stream Player", eq2, []), "unknown");
+  assert.equal(checkTitle("Watch Inception (2010) - Fly Stream", { title: "Inception", kind: "movie" }, ["flystream"]), "match", "the title next to the site's name still matches");
+  assert.equal(checkTitle("Watch The Dark Knight Rises Online", eq2, []), "mismatch", "a page naming another title still fails");
+  // pageSteps adds the page's / link's domain name as a site word.
+  const steps = CS.pageSteps({ page: { ok: true, status: 200, title: "Fly Stream - Now Playing", url: "https://flystream.net/movie/345887" }, stream: { ok: true, url: "https://cdn.test/a.m3u8" }, playable: { ok: true } }, { title: "The Equalizer 2", want: eq2, site: "Movies site", link: "https://flystream.net/movie/345887" });
+  const t = steps.find((x) => x.id === "title");
+  assert.equal(t.ok, true);
+  assert.equal(t.neutral, true);
+  assert.equal(t.detail, "The page doesn't name the title");
+});
+
+test("engine: sniffed stream bodies are checked (#EXTM3U / media bytes) and the next link is tried", async () => {
+  const { readFileSync } = await import("node:fs");
+  const cs = readFileSync("ios/App/App/CustomServers.swift", "utf8");
+  const sp = readFileSync("ios/App/App/StreambertPlayer.swift", "utf8");
+  assert.match(cs, /enum StreamProbe/);
+  assert.match(cs, /hasPrefix\("#EXTM3U"\)/, "a playlist must start with #EXTM3U");
+  assert.match(cs, /answered with a web page/);
+  assert.match(cs, /answered with JSON/);
+  assert.match(cs, /1718449215/, "'fmt?' named in words");
+  // PlayabilityCheck (Test + Direct checks) probes the body before AVPlayer.
+  assert.match(cs, /func run\(url: URL[^]*?StreamProbe\.check\(url/);
+  // Test: every link the page fetched is tried in order.
+  assert.match(cs, /\[r\.url\] \+ Array\(r\.alternates\.prefix\(\d+\)\)/);
+  // Player: the first link whose body is a stream is played.
+  assert.match(sp, /StreamProbe\.firstGood\(urls/);
+  // Alternates carry every other sniffed link (files too), deduplicated, not only playlists.
+  assert.match(sp, /let ordered = hls \+ streams\.filter/);
+  // No site names in engine logic.
+  for (const name of ["flystream", "basementx", "movy.sx", "fmfau"]) {
+    const probe = cs.slice(cs.indexOf("enum StreamProbe"), cs.indexOf("// MARK: - Playability check"));
+    assert.ok(!probe.toLowerCase().includes(name), `${name} not in StreamProbe`);
+  }
+});

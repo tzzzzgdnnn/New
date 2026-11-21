@@ -22,17 +22,19 @@ export const siteAdderEnabled = () => {
 };
 
 /** The `net` discoverSite / resolveSite expect, backed by the native bridge. */
-export function nativeNet() {
+export function nativeNet({ waitMs = 0 } = {}) {
   const b = bridge();
   if (!b) throw new Error("Site adding needs the iPhone app");
   let carry = { cookie: null, userAgent: null };
   return {
+    /** The site's per-link wait: site.js never gives a hidden page less. */
+    waitMs: Number(waitMs) || 0,
     async fetch(url, { headers = {}, method = "GET", body = null, timeoutMs = 12000, bytes = null } = {}) {
       const h = { ...headers };
       if (carry.userAgent && !h["User-Agent"]) h["User-Agent"] = carry.userAgent;
       return b.postMessage({ op: "fetch", url, method, headers: h, body, timeoutMs, bytes });
     },
-    async render(url, { play = false, search = null, timeoutMs = 15000 } = {}) {
+    async render(url, { play = false, search = null, timeoutMs = Math.max(15000, Number(waitMs) || 0) } = {}) {
       const r = await b.postMessage({ op: "render", url, script: collectorScript({ play, search }), timeoutMs });
       const top = (r?.frames || []).find((f) => f.top);
       const challenge = !!r?.challenge || (top && isChallenge({ status: 200, text: top.html }));
@@ -91,7 +93,7 @@ export function normalizeSiteServer(s, idPrefix) {
 export async function resolveSiteServer(s, ctx) {
   const want = { title: ctx.title || ctx.name, year: ctx.year, type: ctx.type === "tv" ? "tv" : "movie", season: ctx.season, episode: ctx.episode };
   if (!want.title || !siteAdderEnabled()) return null;
-  const net = nativeNet();
+  const net = nativeNet({ waitMs: s.linkWaitMs });
   const r = await resolveSite(s.recipe, want, { net });
   if (!r.ok) return null;
   if (s.mirror) {

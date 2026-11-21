@@ -1030,7 +1030,11 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         let learnLog: [String: Any]? = cand.learn
             ? ["requests": slot.learnRequests, "scripts": slot.learnScripts] : nil
         let streamPage = best.page
-        let alternates = hls.map { $0.url }.filter { $0 != best.url && !$0.absoluteString.lowercased().contains("audio") }
+        // Every other link the page fetched (playlists first, then files): the Test and
+        // the player fall through to them when the first isn't really a stream.
+        let ordered = hls + streams.filter { s in !hls.contains(where: { $0.url == s.url }) }
+        var seenAlt = Set<URL>()
+        let alternates = ordered.map { $0.url }.filter { $0 != best.url && !$0.absoluteString.lowercased().contains("audio") && seenAlt.insert($0).inserted }
         // The winner stays loaded (late subtitles); every other page goes.
         for other in slots.values where other !== slot { drop(other) }
         slots = [:]
@@ -1751,8 +1755,16 @@ final class StreambertBridgeViewController: CAPBridgeViewController, WKScriptMes
         if playerVC == nil {
             presentOnTop(makePlayer(currentServer: r.server.id, sniffBased: true))
         }
-        playerVC?.load(url: r.url, headers: r.headers, cookies: r.cookies, server: r.server.id)
-        playerVC?.setStreamSubtitles(r.subtitles, headers: r.headers)
+        // The first link whose body is really a stream (#EXTM3U or media bytes):
+        // an HTML / JSON / wrapped answer would only fail in AVPlayer as 'fmt?'.
+        let urls = [r.url] + Array(r.alternates.prefix(5))
+        StreamProbe.firstGood(urls, headers: r.headers, cookies: r.cookies) { [weak self] n, skipped in
+            guard let self = self, token == self.resolveToken else { return }
+            let url = urls[n ?? 0]
+            if !skipped.isEmpty { sbLog("player: \(skipped.count) sniffed link(s) skipped; playing \(url.absoluteString)") }
+            self.playerVC?.load(url: url, headers: r.headers, cookies: r.cookies, server: r.server.id)
+            self.playerVC?.setStreamSubtitles(r.subtitles, headers: r.headers)
+        }
     }
 
     /// A custom site's first play: what its page did, so JS can learn its

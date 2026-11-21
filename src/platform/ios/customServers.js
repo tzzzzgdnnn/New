@@ -40,6 +40,8 @@ export const TEST_SNIFF_TIMEOUT_MS = 45000;
 export const LEARN_TIME = Object.freeze({ min: 60000, max: 900000, step: 15000, def: 300000 });
 export const LINK_WAIT = Object.freeze({ min: 15000, max: 300000, step: 5000, def: TEST_SNIFF_TIMEOUT_MS });
 export const clampMs = (v, lim) => Math.min(lim.max, Math.max(lim.min, Math.round((Number(v) || lim.def) / 1000) * 1000));
+/** The site's own per-link wait (Add Site sheet): every hidden page of that site waits this long, playback and Test alike. */
+export const linkWaitOf = (s) => clampMs(s?.linkWaitMs, LINK_WAIT);
 
 /** At most this many of a site's own servers are kept per site. */
 export const MAX_SITE_SERVERS = 8;
@@ -692,7 +694,7 @@ if (typeof window !== "undefined") {
 }
 
 /** One native candidate for a server's link. */
-export const candidateFor = (s, url, { id = s.id, label = s.name, timeoutMs = CUSTOM_SNIFF_TIMEOUT_MS, cache = true, tap = s.tap || null, tapOnly = false } = {}) => ({
+export const candidateFor = (s, url, { id = s.id, label = s.name, timeoutMs = linkWaitOf(s), cache = true, tap = s.tap || null, tapOnly = false } = {}) => ({
   id,
   label,
   url,
@@ -895,7 +897,7 @@ export function sampleNumbers(template, sample) {
 const nativeTryRaw = (...a) => nativeTry(...a);
 
 /** Open one link in the hidden page (native), with the learn log on. */
-export async function nativeTry(server, url, { timeoutMs = TEST_SNIFF_TIMEOUT_MS, learn = true, tap, tapOnly = false } = {}) {
+export async function nativeTry(server, url, { timeoutMs = linkWaitOf(server), learn = true, tap, tapOnly = false } = {}) {
   try {
     const r = await nativeTest().postMessage({
       candidate: { ...candidateFor(server, url, { id: server.id, timeoutMs, cache: false, ...(tap !== undefined ? { tap } : {}), tapOnly }), learn },
@@ -903,7 +905,7 @@ export async function nativeTry(server, url, { timeoutMs = TEST_SNIFF_TIMEOUT_MS
     // The scheme the page loaded on (after any http ↔ https fallback) goes first next time.
     if (r?.page?.url && (r.page.ok || r.stream?.ok)) rememberScheme(r.page.url);
     if (r?.page?.fallback) diag("custom", `${server.name}: ${r.page.fallback}`);
-    return r;
+    return r && typeof r === "object" ? { ...r, waitMs: timeoutMs } : r;
   } catch (e) {
     return { ok: false, error: e?.message || String(e) };
   }
@@ -921,7 +923,7 @@ export async function nativePlayable(url, headers) {
 }
 
 /** Steps for what one hidden page did (page, stream, playable, title, ads). */
-export function pageSteps(r, { title, want, site, t0 = Date.now() }) {
+export function pageSteps(r, { title, want, site, link = null, t0 = Date.now() }) {
   const steps = [];
   const page = r?.page || {};
   steps.push({
@@ -946,7 +948,7 @@ export function pageSteps(r, { title, want, site, t0 = Date.now() }) {
       ? `${(stream.kind || "hls").toUpperCase()} in ${((stream.ms ?? Date.now() - t0) / 1000).toFixed(1)} s${method ? ` · ${method.label.split(" · ").slice(1).join(" · ")}` : ""}`
       : page.humanCheck
         ? `The site shows a human check (${page.humanCheck}) before it plays. Super Player never ticks it for you, so this site can't play in the background.`
-        : stream.error || (page.ok ? `No video stream within ${TEST_SNIFF_TIMEOUT_MS / 1000} s${page.taps?.length ? ` (pressed ${[...new Set(page.taps)].slice(0, 3).join(", ")})` : ""}` : "Skipped: the page didn't load"),
+        : stream.error || (page.ok ? `No video stream within ${Math.round((r?.waitMs || TEST_SNIFF_TIMEOUT_MS) / 1000)} s${page.taps?.length ? ` (pressed ${[...new Set(page.taps)].slice(0, 3).join(", ")})` : ""}` : "Skipped: the page didn't load"),
   });
   const play = r?.playable || {};
   steps.push({
@@ -956,7 +958,9 @@ export function pageSteps(r, { title, want, site, t0 = Date.now() }) {
     detail: play.ok ? play.detail || "Ready to play" : stream.ok ? play.error || "The player couldn't open the stream" : "Skipped: no stream",
   });
   // The page's title against TMDB's: the link must open the title asked for.
-  const verdict = page.title ? checkTitle(page.title, want, [site || ""]) : "unknown";
+  // The site's own name and its domain's name are the site, not a title.
+  const hostName = (u) => { try { return new URL(u).hostname.replace(/^www\./, "").split(".").slice(0, -1).join(" "); } catch { return ""; } };
+  const verdict = page.title ? checkTitle(page.title, want, [site || "", hostName(page.url), hostName(link)].filter(Boolean)) : "unknown";
   steps.push({
     id: "title",
     ok: verdict !== "mismatch",
@@ -1148,7 +1152,7 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
       results.push({ kind, steps });
       continue;
     }
-    push(...pageSteps(r, { title: link.title, want: link.want, site: server.name, t0 }));
+    push(...pageSteps(r, { title: link.title, want: link.want, site: server.name, link: link.url, t0 }));
     // Recipe: the last button pressed before the stream showed.
     if (works && r?.page?.taps?.length) tap = r.page.taps[r.page.taps.length - 1];
     for (const l of r?.page?.servers || []) if (!seenServers.includes(l)) seenServers.push(l);
@@ -1172,7 +1176,7 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
           label: `Also plays ${x.title}`,
           detail: ok
             ? `${(rx.stream.kind || "hls").toUpperCase()} in ${((rx.stream.ms || 0) / 1000).toFixed(1)} s`
-            : pageSteps(rx, { title: x.title, want: x.want, site: server.name }).find((st) => !st.ok && !st.neutral)?.detail || "No stream",
+            : pageSteps(rx, { title: x.title, want: x.want, site: server.name, link: x.url }).find((st) => !st.ok && !st.neutral)?.detail || "No stream",
         });
       }
     }

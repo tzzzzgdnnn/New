@@ -587,6 +587,8 @@ export function endpointCandidates(patterns, bases, kind, values) {
 
 // ── Title checks ─────────────────────────────────────────────────────────
 
+/** Words a page title uses for the player itself, never for a film or show on their own. */
+const PAGE_WORDS = new Set(["now", "playing", "watching", "play", "quick", "check", "official", "site", "loading", "please", "wait", "your", "welcome", "watchnow", "nowplaying", "media", "server", "servers", "source", "sources", "net", "to", "lol", "sx", "com", "org", "cc", "tv"]);
 const GENERIC = new Set(["watch", "online", "free", "full", "movie", "movies", "hd", "stream", "streaming", "player", "embed", "video", "episode", "season", "series", "tv", "show", "sub", "dub", "english", "eng", "the", "a", "of", "and", "in", "on", "s", "e", "ep", "home", "page", "loading", "just", "moment", "error", "not", "found"]);
 
 /**
@@ -597,9 +599,23 @@ const GENERIC = new Set(["watch", "online", "free", "full", "movie", "movies", "
  * @returns {"match"|"mismatch"|"unknown"}
  */
 export function checkTitle(found, want, siteWords = []) {
-  const ignore = new Set([...GENERIC, ...siteWords.flatMap((w) => titleWords(w))]);
-  const words = titleWords(found).filter((w) => !ignore.has(w) && !/^\d+$/.test(w));
+  const site = siteWords.flatMap((w) => titleWords(w));
+  const ignore = new Set([...GENERIC, ...site]);
+  // The site's name written apart ("Fly Stream" for flystream.net) is the site, not a title.
+  const raw = titleWords(found);
+  const siteJoined = new Set(site.filter((w) => w.length >= 4));
+  const drop = new Set();
+  for (let i = 0; i < raw.length; i++) {
+    let joined = raw[i];
+    for (let j = i + 1; j < Math.min(raw.length, i + 4); j++) {
+      joined += raw[j];
+      if (siteJoined.has(joined)) for (let k = i; k <= j; k++) drop.add(k);
+    }
+  }
+  const words = raw.filter((w, i) => !drop.has(i) && !ignore.has(w) && !/^\d+$/.test(w));
   if (words.length < 1) return "unknown";
+  // Only player / page words left ("Now Playing", "Quick check"): the page doesn't name the title.
+  if (words.every((w) => PAGE_WORDS.has(w))) return "unknown";
   const names = [want.title, ...(want.altTitles || [])].filter(Boolean);
   const best = Math.max(
     0,

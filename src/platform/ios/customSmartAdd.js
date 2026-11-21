@@ -298,7 +298,7 @@ export async function smartAdd(link, { apiKey, onStep = () => {}, deps = {}, sig
         const link0 = kindForLink === "anime-tv" ? await animeOnTvLink(server) : await testLinkAsync(server, k);
         if (!link0.ok) continue;
         const r = await tryPage(server, link0.url, ms);
-        const steps = pageSteps(r, { title: link0.title, want: link0.want, site: base.name });
+        const steps = pageSteps(r, { title: link0.title, want: link0.want, site: base.name, link: link0.url });
         wall = wall || r?.page?.wall || null;
         if (r?.ads) adsOn = adsOn || r.ads.filter !== false;
         const ok = !!r?.stream?.ok && !!r?.playable?.ok;

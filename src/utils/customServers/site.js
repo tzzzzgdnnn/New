@@ -553,6 +553,11 @@ export function normalizeRecipe(r) {
   };
 }
 
+/** Hidden-page floor when the site has no wait of its own. */
+const DEFAULT_PAGE_WAIT_MS = 15000;
+/** How long a hidden page may take: the site's per-link wait (`net.waitMs`, from its settings) or more, never less. */
+export const pageWait = (net, ms = 0) => Math.max(ms || 0, Number(net?.waitMs) || 0, DEFAULT_PAGE_WAIT_MS);
+
 /** Get a page as text: native HTTP first, the hidden web view when Cloudflare (or the site) needs a browser. */
 async function getPage(net, url, { render = false, play = false, search = null, timeoutMs = 15000, headers = {} } = {}) {
   if (!render) {
@@ -560,10 +565,10 @@ async function getPage(net, url, { render = false, play = false, search = null, 
     if (r?.ok && !isChallenge(r)) return { via: "fetch", url: r.url || url, html: r.text || "", res: r };
     if (r && !isChallenge(r) && r.status && r.status !== 403 && r.status !== 503 && r.status !== 429) return { via: "fetch", url, html: "", res: r, error: `HTTP ${r.status}` };
   }
-  let rr = await net.render(url, { play, search, timeoutMs: Math.max(timeoutMs, 15000) });
+  let rr = await net.render(url, { play, search, timeoutMs: pageWait(net, timeoutMs) });
   if (rr?.challenge && net.interactive) {
     const pass = await net.interactive(url);
-    if (pass?.ok) rr = await net.render(url, { play, search, timeoutMs: Math.max(timeoutMs, 15000) });
+    if (pass?.ok) rr = await net.render(url, { play, search, timeoutMs: pageWait(net, timeoutMs) });
   }
   if (rr?.challenge) return { via: "render", url, html: "", res: rr, error: "challenge" };
   const top = (rr?.frames || []).find((f) => f.top) || rr?.frames?.[0];
@@ -723,7 +728,7 @@ export async function discoverSite(link, { net, apiKey = null, onStep = () => {}
     // JSON request it makes.
     let api = [];
     if (!hit) {
-      const r = await net.render(home, { search: q, timeoutMs: 15000 });
+      const r = await net.render(home, { search: q, timeoutMs: pageWait(net) });
       const enc = [q, encodeURIComponent(q), q.replace(/ /g, "+"), q.replace(/ /g, "-")].map((x) => x.toLowerCase());
       const call = (r?.api || []).find((a) => enc.some((e) => (a.url + " " + (a.reqBody || "")).toLowerCase().includes(e)) && jsonTitles(parseJson(a.body), a.url).length);
       if (call) {
@@ -765,7 +770,7 @@ export async function discoverSite(link, { net, apiKey = null, onStep = () => {}
     // 4. Player: load the title page in the hidden web view, play it, and
     // take the first stream it gives (captured, decoded, or behind a mirror).
     go("player");
-    let tp = await getPage(net, best.url, { render: true, play: true, timeoutMs: 20000 });
+    let tp = await getPage(net, best.url, { render: true, play: true, timeoutMs: pageWait(net, 20000) });
     let r = tp.render;
     if (r?.drm) throw new StepError("player", "This site's videos are protected (DRM), so it can't be added.");
     if (tp.error === "challenge") throw new StepError("player", "The site's security check didn't finish on the title page.");
@@ -778,7 +783,7 @@ export async function discoverSite(link, { net, apiKey = null, onStep = () => {}
     if (!streams.length && top) {
       const ep = findEpisode(top.links || [], 1, 1);
       if (ep && ep !== best.url) {
-        tp = await getPage(net, ep, { render: true, play: true, timeoutMs: 20000 });
+        tp = await getPage(net, ep, { render: true, play: true, timeoutMs: pageWait(net, 20000) });
         r = tp.render;
         if (r?.drm) throw new StepError("player", "This site's videos are protected (DRM), so it can't be added.");
         streams = streamsOf(r, ep);
@@ -791,7 +796,7 @@ export async function discoverSite(link, { net, apiKey = null, onStep = () => {}
     if (!streams.length && mirrors.length) {
       // Each server button, in parallel; the first that plays wins.
       const tries = mirrors.slice(0, 4).map((m) => async () => {
-        const mr = await net.render(m.url, { play: true, timeoutMs: 15000 });
+        const mr = await net.render(m.url, { play: true, timeoutMs: pageWait(net) });
         if (mr?.drm) return { drm: true };
         const s = streamsOf(mr, m.url);
         return s.length ? { streams: s, render: mr } : null;
