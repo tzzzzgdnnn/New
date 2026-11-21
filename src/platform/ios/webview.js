@@ -389,6 +389,7 @@ function upgrade(wv) {
   // Every iframe navigation goes through here: a real embed page on screen
   // holds the hidden warm-up player off (no second stream while it plays).
   const setFrame = (u) => {
+    if (playWatch && playWatch.src !== u) playWatch.stop();
     iframe.src = u;
     holdPrewarm(wv, !isBlank(u));
   };
@@ -399,6 +400,50 @@ function upgrade(wv) {
     return t;
   };
   cleanups.push(() => { timers.forEach(clearTimeout); timers.clear(); });
+  const hostOf = (u) => { try { return new URL(u).hostname; } catch { return ""; } };
+  const isCinezo = () => /(^|\.)cinezo\./i.test(hostOf(iframe.src));
+  // A server that plays something else for a title it doesn't have: a video
+  // far longer than the title (TMDB runtime), or Cinezo's stand-in.
+  const wrongVideo = (dur) => {
+    const ctx = currentCtx();
+    if (Math.abs(dur - 9469) < 3 && ctx.tmdbId !== 14161) return true; // Cinezo's stand-in ("2012")
+    const rt = Number(ctx.runtime) * 60;
+    if (rt > 0) return dur > Math.max(rt * 1.8, rt + 30 * 60);
+    return ctx.type === "tv" && dur > 2.25 * 3600; // an episode, runtime unknown
+  };
+  // Cinezo said it has the title: after the viewer's tap it must start
+  // within PLAY_AFTER_TAP_MS, else the next server (Auto) or our card takes
+  // over instead of an endless spinner inside its player (#26).
+  const PLAY_AFTER_TAP_MS = window.__sbPlayAfterTapMs || 20000;
+  let playWatch = null;
+  const armPlayWatch = () => {
+    if (playWatch && playWatch.src === iframe.src) return;
+    playWatch?.stop();
+    const src = iframe.src;
+    let t = null;
+    let done = false;
+    const onTap = () => {
+      if (done || t) return;
+      t = setTimeout(() => {
+        if (done || iframe.src !== src) return stop();
+        stop();
+        embedFailed("it didn't play");
+      }, PLAY_AFTER_TAP_MS);
+    };
+    // A tap inside a cross-origin frame shows up as this window losing focus.
+    const onBlur = () => setTimeout(() => !done && document.activeElement === iframe && onTap(), 0);
+    const stop = () => {
+      done = true;
+      clearTimeout(t);
+      window.removeEventListener("blur", onBlur);
+      wv.removeEventListener("pointerdown", onTap, true);
+      if (playWatch?.src === src) playWatch = null;
+    };
+    window.addEventListener("blur", onBlur);
+    wv.addEventListener("pointerdown", onTap, true);
+    playWatch = { src, stop, tap: onTap };
+  };
+  cleanups.push(() => playWatch?.stop());
   listen(window, "message", (e) => {
     if (e.source !== iframe.contentWindow) return;
     let d = e.data;
@@ -407,13 +452,26 @@ function upgrade(wv) {
     // {event:"status", data:404} for a title it doesn't have (and then shows its
     // own error page): never shown, the next server takes over at once.
     if (d?.event === "status" && Number(d.data) >= 400) return embedFailed(`not on this server (${d.data})`);
+    // Cinezo posts MEDIA_DATA and PLAYER_EVENT "play" for every title, also
+    // one it doesn't have; for those it then plays a stand-in video (the movie
+    // "2012", 9469 s). So for Cinezo only a PLAYER_EVENT with a duration that
+    // fits the title counts as ready (#26).
+    const cz = isCinezo();
     if ((d?.event === "status" && Number(d.data) >= 200 && Number(d.data) < 300) ||
-        d?.type === "PLAYER_EVENT" ||
-        (d?.type === "MEDIA_DATA" && d.data && Object.keys(d.data).length)) revealEmbed();
+        (!cz && d?.type === "PLAYER_EVENT") ||
+        (!cz && d?.type === "MEDIA_DATA" && d.data && Object.keys(d.data).length)) revealEmbed();
+    if (d?.type === "PLAYER_EVENT") {
+      const pdur = Number(d.data?.duration);
+      if (pdur > 0 && wrongVideo(pdur)) return embedFailed(`wrong video (${Math.round(pdur)} s)`);
+      if (cz && pdur > 0) { revealEmbed(); armPlayWatch(); }
+    }
     // Embed players that post PLAYER_EVENT (Cinezo's player.cinezo.live,
     // Vidfast): a play / timeupdate past 0 s means it is running, even
     // before a duration is known, so the no-start watch never skips it (#26).
     if (d?.type === "PLAYER_EVENT" && /^(play|playing|timeupdate)$/.test(d.data?.event || "") && Number(d.data?.currentTime) > 0) {
+      if (cz && !(Number(d.data?.duration) > 0)) return; // Cinezo: not until it knows what it plays
+      revealEmbed();
+      playWatch?.stop();
       startWatch?.started();
       window.__sbEmbedPlayingAt = Date.now();
     }
@@ -423,7 +481,9 @@ function upgrade(wv) {
     const t = Number(x?.currentTime ?? x?.time ?? x?.position);
     const dur = Number(x?.duration);
     if (!(t > 0) || !(dur > 60) || !isFinite(dur) || t > dur + 5) return;
+    if (wrongVideo(dur)) return embedFailed(`wrong video (${Math.round(dur)} s)`);
     revealEmbed();
+    playWatch?.stop();
     startWatch?.started();
     window.__sbEmbedPlayingAt = Date.now(); // the PWA updater waits while an embed plays
     const ctx = currentCtx();
