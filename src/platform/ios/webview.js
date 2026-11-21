@@ -7,7 +7,7 @@
 // player instead: it loads the embeds in a hidden web view, captures the
 // stream and plays it in StreambertPlayer. The iframe is only the fallback.
 import { mirrorsFor } from "./servers";
-import { PLAYER_SOURCES, sourcesForContent, nativeServerList } from "../../utils/api";
+import { PLAYER_SOURCES, sourcesForContent, nativeServerList, serverBlockedFor } from "../../utils/api";
 import { serverKey } from "../../utils/servers/catalog";
 import { createFallback } from "../../utils/servers/fallback";
 import { probeAndRank } from "../../utils/servers/ranking";
@@ -84,7 +84,8 @@ const nativeAvailable = () => !!window.webkit?.messageHandlers?.sbResolve;
 
 /** Server list for the native server menu, built from the latest context. */
 function serverListFor(ctx) {
-  const list = nativeServerList(!!ctx.isAnime, ctx.type === "tv" ? "tv" : "movie");
+  // A server known to play the wrong video for this title is never offered (Cinezo on Baddies).
+  const list = nativeServerList(!!ctx.isAnime, ctx.type === "tv" ? "tv" : "movie").filter((s) => !serverBlockedFor(s.id, ctx));
   if (!ctx.isAnime) return list;
   // ani.pm leads the native menu for anime (Sub and Dub entries).
   return [
@@ -269,7 +270,7 @@ function buildCandidateList(url, ctx) {
     const label = (src?.label || "Server") + (isAnime && src ? suffix : "");
     list.push({ id, label, url: u });
   };
-  const sources = sourcesForContent(isAnime).filter((s) => !s.async && !s.idType);
+  const sources = sourcesForContent(isAnime).filter((s) => !s.async && !s.idType && !serverBlockedFor(s.id, ctx));
   const animeRoute = (s) => {
     if (!isAnime || !s.animeUrl || !ctx.anilistId) return null;
     try {
@@ -292,8 +293,9 @@ function buildCandidateList(url, ctx) {
     return list;
   }
 
-  // 1. The server the viewer picked (the page already built its URL).
-  if (!isBlank(url)) {
+  // 1. The server the viewer picked (the page already built its URL), unless
+  // it is known to play the wrong video for this title.
+  if (!isBlank(url) && !(cur && serverBlockedFor(cur.id, ctx))) {
     add(cur, url);
     for (const m of mirrorsFor(url)) add(cur, m);
   }
@@ -304,6 +306,21 @@ function buildCandidateList(url, ctx) {
     if (!animeRoute(s)) add(s, tmdbUrl(s, ctx));
   }
   return list;
+}
+
+// Vidfast sometimes fails on its first load and plays on a fresh one: it gets
+// one more try (a fresh page) before the servers after it. In the native
+// stream finder (3 pages at a time) the retry goes in the slot that frees up
+// after the next servers, so a working server further down never waits on it.
+const VIDFAST_RE = /(^|\.)vidfast\./i;
+const isVidfastUrl = (u) => { try { return VIDFAST_RE.test(new URL(u).hostname); } catch { return false; } };
+export function withVidfastRetry(candidates, parallel = 3) {
+  const i = candidates.findIndex((c) => c && !c.retry && isVidfastUrl(c.url));
+  if (i < 0 || candidates.some((c) => c?.retry)) return candidates;
+  const c = candidates[i];
+  const out = candidates.slice();
+  out.splice(Math.min(out.length, i + parallel), 0, { ...c, label: c.label, retry: true });
+  return out;
 }
 
 /**
@@ -591,6 +608,7 @@ function upgrade(wv) {
   };
   const embedFailed = (why) => {
     if (isBlank(iframe.src)) return;
+    if (retryVidfast(why)) return; // Vidfast: one fresh load first
     clearTimeout(readyTimer);
     startWatch?.cancel();
     stopWeb();
@@ -672,7 +690,7 @@ function upgrade(wv) {
         }),
       ]);
       if (nativeToken !== token) return;
-      const candidates = withCustom(withMovy(withAnipm(playerOrder(ranked, ctx), anipm), movy), custom, pickedCustomId());
+      const candidates = withVidfastRetry(withCustom(withMovy(withAnipm(playerOrder(ranked, ctx), anipm), movy), custom, pickedCustomId()));
       diag(
         "player",
         `play: candidates in ${Date.now() - tRank} ms (tap→send ${Date.now() - lastNativeAt} ms): ` +
@@ -932,6 +950,7 @@ function upgrade(wv) {
   const autoSwitches = new Map(); // title key -> automatic switches made (hard cap, #19)
   const lastAutoPick = new Map(); // title key -> server the last automatic switch went to
   const nextServer = (why) => {
+    if (retryVidfast(why)) return; // Vidfast: one fresh load before the next server
     const ctx = currentCtx();
     const key = titleKeyOf(ctx);
     const current = menuId(readStored("playerSource"), ctx);
@@ -968,6 +987,36 @@ function upgrade(wv) {
     ev.sbAuto = true; // an automatic switch: the viewer's own choice stays as it was
     window.dispatchEvent(ev);
   };
+  // Vidfast fails now and then on its first load (spinner / no ready sign /
+  // its player errors) and plays on a fresh one. So a Vidfast page that
+  // failed is loaded once more, fresh, before the next server takes over.
+  // Not when it said it doesn't have the title (status 404), played the wrong
+  // video or refused outright: a reload can't change those. Once per episode.
+  let onFreshLoad = null; // Android: forget the streams sniffed from the old page
+  const vidfastRetried = new Set();
+  const retryVidfast = (why) => {
+    const src = iframe.getAttribute("src") || "";
+    if (isBlank(src) || !isVidfastUrl(src) || inParty()) return false;
+    if (/not on this server|wrong video|refused|no direct stream/i.test(String(why || ""))) return false;
+    const key = titleKeyOf(currentCtx());
+    if (vidfastRetried.has(key)) return false;
+    vidfastRetried.add(key);
+    clearTimeout(readyTimer);
+    startWatch?.cancel();
+    stopWeb();
+    diag("player", `vidfast failed (${why}): one fresh load before the next server`);
+    setFrame("about:blank");
+    onFreshLoad?.();
+    showCard("Vidfast didn't start. Trying it once more…", false);
+    later(() => {
+      if (!wv.isConnected || !isBlank(iframe.getAttribute("src") || "")) return; // something else loaded meanwhile
+      sandboxFor(src);
+      gateEmbed(src);
+      setFrame(src);
+      if (!GATE) later(hideCard, 1500);
+    }, 400);
+    return true;
+  };
   // Web app, Auto: a server that refused or never started hands over to the next one.
   const webAutoNext = (why) => { if (BROWSER_ONLY && isAutoPick() && !inParty()) nextServer(why); };
 
@@ -988,6 +1037,7 @@ function upgrade(wv) {
       clearTimeout(sniff.waitTimer);
       sniff = { embed, queue: [], tried: new Set(), fails: 0, playing: false, waitTimer: null };
     };
+    onFreshLoad = () => resetSniff(null);
     const playSniffed = (s) => {
       const ctx = currentCtx();
       const embed = sniff.embed;
@@ -1070,6 +1120,18 @@ function upgrade(wv) {
     // stream instead (everyone in the party then plays the same source).
     if (import.meta.env.VITE_WEB && !import.meta.env.VITE_ANDROID && inParty()) {
       partyNoSync(url);
+      return;
+    }
+    // A server known to play the wrong video for this title (Cinezo on
+    // Baddies) is never shown: Auto goes to the next server, a pick by hand
+    // gets our card saying why.
+    const blockedSrc = PLAYER_SOURCES.find((p) => { try { return new URL(p.movieUrl?.("1") || "").host === new URL(url).host; } catch { return false; } });
+    const blockedWhy = blockedSrc && serverBlockedFor(blockedSrc.id, currentCtx());
+    if (blockedWhy) {
+      setFrame("about:blank");
+      diag("player", `${blockedSrc.label} skipped: ${blockedWhy}`);
+      if (isAutoPick() && !inParty()) nextServer(blockedWhy);
+      else showCard(`${blockedSrc.label} ${blockedWhy}. Pick another server.`, false);
       return;
     }
     // A custom site never loads in the visible web view: its ads and pop-ups

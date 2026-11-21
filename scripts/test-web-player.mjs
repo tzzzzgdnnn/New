@@ -196,8 +196,8 @@ test("#19: web Auto failover is bounded (no loop), also with 'auto' stored as th
 // an error page (Vidfast's 404 / "Please Disable Sandbox") is never shown.
 test("web: embed hidden until ready; Vidfast status 404 skips at once, never shown", async () => {
   localStorage.clear();
-  win.__sbCtx = { type: "tv", tmdbId: 306499, season: 1, episode: 1, progressKey: null };
-  const wv = await mount("https://vidfast.vc/tv/306499/1/1");
+  win.__sbCtx = { type: "tv", tmdbId: 1399, season: 1, episode: 1, progressKey: null };
+  const wv = await mount("https://vidfast.vc/tv/1399/1/1");
   const iframe = wv.querySelector("iframe");
   const card = wv.querySelector(".sb-native-card");
   assert.equal(card.style.display, "flex", "our card covers the embed while it loads");
@@ -215,10 +215,10 @@ test("web: embed hidden until ready; Vidfast status 404 skips at once, never sho
 
 test("web: a ready message reveals the embed; a hand-picked server that 404s shows our own card", async () => {
   localStorage.clear();
-  win.__sbCtx = { type: "tv", tmdbId: 306499, season: 1, episode: 1, progressKey: null };
-  let wv = await mount("https://player.cinezo.live/embed/tv/306499/1/1");
+  win.__sbCtx = { type: "tv", tmdbId: 1396, season: 1, episode: 1, progressKey: null };
+  let wv = await mount("https://player.cinezo.live/embed/tv/1396/1/1");
   let iframe = wv.querySelector("iframe");
-  win.dispatchEvent(new win.MessageEvent("message", { data: { type: "MEDIA_DATA", data: { id: 306499 } }, source: iframe.contentWindow }));
+  win.dispatchEvent(new win.MessageEvent("message", { data: { type: "MEDIA_DATA", data: { id: 1396 } }, source: iframe.contentWindow }));
   assert.equal(wv.querySelector(".sb-native-card").style.display, "flex", "Cinezo's MEDIA_DATA alone keeps our card");
   win.dispatchEvent(new win.MessageEvent("message", { data: { type: "PLAYER_EVENT", data: { event: "timeupdate", currentTime: 0, duration: 2580 } }, source: iframe.contentWindow }));
   assert.equal(wv.querySelector(".sb-native-card").style.display, "none");
@@ -290,4 +290,77 @@ test("#26: Cinezo ready but not playing within the window after the tap: next se
   await tick(400);
   assert.equal(fails2, 0, "playing after the tap: kept");
   await unmount(wv2);
+});
+
+// Cinezo plays the wrong episodes / shows for the Baddies franchise: never offered or loaded there.
+test("Cinezo is skipped for Baddies (wrong episodes): Auto goes on, a hand pick gets our card", async () => {
+  const { serverBlockedFor, sourcesForTitle } = await import("../src/utils/api.js");
+  assert.ok(serverBlockedFor("cinezo", { type: "tv", tmdbId: 306499 }), "Baddies USA by id");
+  assert.ok(serverBlockedFor("cinezo", { type: "tv", tmdbId: 999999001, title: "Baddies Gone Wild 2" }), "by title");
+  assert.equal(serverBlockedFor("cinezo", { type: "tv", tmdbId: 1396, title: "Breaking Bad" }), null);
+  assert.equal(serverBlockedFor("vidfast", { type: "tv", tmdbId: 306499 }), null, "other servers unaffected");
+  assert.ok(sourcesForTitle(false, "tv").some((s) => s.id === "cinezo"), "still listed in general");
+  // Auto: the page loaded Cinezo -> unloaded before it shows, next server picked (never Cinezo).
+  localStorage.clear();
+  localStorage.setItem("streambert_playerSource", JSON.stringify("cinezo"));
+  win.__sbCtx = { type: "tv", tmdbId: 218537, title: "Baddies West", season: 1, episode: 1, progressKey: null };
+  const picks = [];
+  const onPick = (e) => picks.push(e.detail);
+  win.addEventListener("sb-select-server", onPick);
+  let wv = await mount("https://player.cinezo.live/embed/tv/218537/1/1");
+  win.removeEventListener("sb-select-server", onPick);
+  assert.equal(wv.querySelector("iframe").getAttribute("src"), "about:blank", "Cinezo never loaded");
+  assert.equal(picks.length, 1, "Auto moved on");
+  assert.notEqual(picks[0], "cinezo");
+  await unmount(wv);
+  // Picked by hand: our card says why.
+  localStorage.setItem("streambert_serverAutoPick", "false");
+  wv = await mount("https://player.cinezo.live/embed/tv/218537/1/1");
+  assert.equal(wv.querySelector("iframe").getAttribute("src"), "about:blank");
+  assert.match(wv.querySelector(".sb-native-card").textContent, /wrong episodes/);
+  await unmount(wv);
+  localStorage.clear();
+});
+
+test("Vidfast that fails to start gets one fresh load before the next server (once per episode)", async () => {
+  localStorage.clear();
+  win.__sbCtx = { type: "tv", tmdbId: 1396, title: "Breaking Bad", season: 2, episode: 3, progressKey: null };
+  const src = "https://vidfast.vc/tv/1396/2/3";
+  const picks = [];
+  const onPick = (e) => picks.push(e.detail);
+  win.addEventListener("sb-select-server", onPick);
+  const wv = await mount(src);
+  const iframe = wv.querySelector("iframe");
+  await tick(380); // ready window (300 ms in tests) runs out: no ready sign
+  assert.equal(picks.length, 0, "no switch yet: Vidfast retried");
+  assert.match(wv.querySelector(".sb-native-card").textContent, /Trying it once more|Finding the stream/);
+  await tick(450);
+  assert.equal(iframe.getAttribute("src"), src, "the same Vidfast page loaded again");
+  await tick(400); // fails again
+  assert.equal(picks.length, 1, "second failure: next server");
+  assert.notEqual(picks[0], "vidfast");
+  win.removeEventListener("sb-select-server", onPick);
+  await unmount(wv);
+  // A 404 (title not on Vidfast) is not retried.
+  win.__sbCtx = { type: "tv", tmdbId: 1396, title: "Breaking Bad", season: 2, episode: 4, progressKey: null };
+  const p2 = [];
+  const on2 = (e) => p2.push(e.detail);
+  win.addEventListener("sb-select-server", on2);
+  const wv2 = await mount("https://vidfast.vc/tv/1396/2/4");
+  const f2 = wv2.querySelector("iframe");
+  win.dispatchEvent(new win.MessageEvent("message", { data: { event: "status", data: 404 }, source: f2.contentWindow }));
+  win.removeEventListener("sb-select-server", on2);
+  assert.equal(p2.length, 1, "404: next server at once");
+  await unmount(wv2);
+});
+
+test("native candidates: Vidfast's retry slot comes after the next servers, once", async () => {
+  const { withVidfastRetry } = await import("../src/platform/ios/webview.js");
+  const c = (id, url) => ({ id, label: id, url });
+  const list = [c("cinejoy", "https://x.invalid/a#sb-direct"), c("vidfast", "https://vidfast.vc/movie/550"), c("a", "https://a.test/"), c("b", "https://b.test/"), c("d", "https://d.test/")];
+  const out = withVidfastRetry(list);
+  assert.deepEqual(out.map((x) => x.id), ["cinejoy", "vidfast", "a", "b", "vidfast", "d"]);
+  assert.equal(out[4].retry, true);
+  assert.deepEqual(withVidfastRetry(out).length, out.length, "never twice");
+  assert.deepEqual(withVidfastRetry([c("a", "https://a.test/")]).map((x) => x.id), ["a"]);
 });
