@@ -41,7 +41,7 @@ const MIN_YEAR = 1900;
 const MAX_YEAR = 2100;
 // Path words that say what kind of page a link is.
 const KIND_WORDS = {
-  anime: ["anime", "anilist", "mal", "myanimelist"],
+  anime: ["anime", "ani", "anilist", "mal", "myanimelist", "kitsu"],
   tv: ["tv", "series", "show", "shows", "episode", "episodes", "season", "seasons", "serie", "tvshow"],
   movie: ["movie", "movies", "film", "films"],
 };

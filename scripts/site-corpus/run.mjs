@@ -62,8 +62,23 @@ const tmdb = async (path) => {
   e.status = 404;
   throw e;
 };
+// Fake AniList: the corpus anime (AniList / MAL ids, title search).
+const ANIME = corpus.titles.anime;
+const asMedia = (a) => ({ id: a.anilist, idMal: a.mal, format: "TV", episodes: null, seasonYear: a.year, title: { romaji: a.title, english: a.title, native: null } });
+const anilist = async (query, vars = {}) => {
+  const ids = (v) => (Array.isArray(v) ? v : v == null ? [] : [v]).map(Number);
+  if (/Media\(id/.test(query)) {
+    const hit = ANIME.find((a) => (vars.id != null && a.anilist === +vars.id) || (vars.id == null && vars.mal != null && a.mal === +vars.mal));
+    return { Media: hit ? asMedia(hit) : null };
+  }
+  if (/byId/.test(query)) {
+    return { byId: { media: ANIME.filter((a) => ids(vars.ids).includes(a.anilist)).map(asMedia) }, byMal: { media: ANIME.filter((a) => ids(vars.mal).includes(a.mal)).map(asMedia) } };
+  }
+  const q = norm(vars.q);
+  return { Page: { media: ANIME.filter((a) => q && norm(a.title).includes(q)).map(asMedia) } };
+};
 const analyze = (url, prefer) =>
-  matchSample(url, { tmdb, anilist: async () => ({}), prefer, timeoutMs: 2000 }).then((r) => (r.ok ? { ...r, templates: { [r.detected.kind]: r.detected.template } } : r));
+  matchSample(url, { tmdb, anilist, prefer, timeoutMs: 2000 }).then((r) => (r.ok ? { ...r, templates: { [r.detected.kind]: r.detected.template } } : r));
 
 /** Fixture HTTP for one site: routes.json maps path(+query) -> { file, status }. */
 function fixtureHttp(site) {

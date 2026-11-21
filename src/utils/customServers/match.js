@@ -228,7 +228,8 @@ export async function matchSample(sample, { tmdb, anilist, arm, page = null, pre
       if (kind === "movie" && year) out.push(run(`/search/movie?query=${q}&year=${year}`));
       if (kind === "tv" && year) out.push(run(`/search/tv?query=${q}&first_air_date_year=${year}`));
     }
-    if (anilist && (kind === "anime" || !kind)) {
+    // TV-worded links too ("/watch/<slug>-episode-7"): an anime may be linked like a show.
+    if (anilist && (kind === "anime" || kind === "tv" || !kind)) {
       out.push(
         t(() => anilist(ANILIST_SEARCH, { q: query }), "AniList")
           .then((d) => (d?.Page?.media || []).slice(0, 4).map((m) => ({ hit: fromAnilist(m), idInLink: false })))
@@ -287,8 +288,21 @@ export async function matchSample(sample, { tmdb, anilist, arm, page = null, pre
     return hits.sort((x, y) => y.s - x.s);
   };
 
-  const done = (r, hit, detected, extra = {}) =>
-    withNumbering(
+  const done = (r, hit, detected, extra = {}) => {
+    // An episode link that reads as anime (Sub / Dub in it, or episodes with no
+    // season) by title, and the same title is on AniList: the anime link.
+    const tpl = detected?.template || "";
+    if (detected?.ok && detected.kind === "tv" && /\{(slug|title)\}/.test(tpl) && /\{episode\}/.test(tpl) && (/\{lang\}/.test(tpl) || !/\{season\}/.test(tpl))) {
+      const ani = ranked.find((o) => o.hit.kind === "anime" && o.hit.ids?.anilist && o.hit.source === "anilist" && closeness(hit.title, o.hit) >= 0.8);
+      if (ani) {
+        const h = { ...ani.hit, title: hit.title, year: hit.year ?? ani.hit.year, ids: { ...ani.hit.ids, ...(hit.ids?.tmdb ? { tmdb: hit.ids.tmdb } : {}) } };
+        const det = detectTemplate(sample, { ...h, kind: "anime" });
+        if (det.ok && det.kind === "anime") {
+          return withNumbering({ ok: true, match: h, detected: det, alternatives: [hit], animeFrom: "tv", ...extra }, { tmdb, t, a });
+        }
+      }
+    }
+    return withNumbering(
       {
         ok: true,
         match: hit,
@@ -298,6 +312,7 @@ export async function matchSample(sample, { tmdb, anilist, arm, page = null, pre
       },
       { tmdb, t, a },
     );
+  };
   // The match keeps every id; its template only the one the link holds.
   const forTemplate = (h) => (h.viaMal ? { ...h, ids: { mal: h.ids.mal } } : h);
   const detectFor = (h) =>

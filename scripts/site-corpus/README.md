@@ -9,8 +9,9 @@ known-failing sites are listed and never fail the run. Sites without fixtures
 (7movies, videasy) are skipped.
 
 Baseline 2026-11-21 (after 1f87c26): 11/18 sites fully learned, 26/35 routes (74%).
+With the fake AniList (corpus anime) and anime link detection: 12/18, 27/35 (77%); ani-pm passes.
 Failing offline: m-zone (keeps /details/ links; switching to /embed/ needs a
-page try), ani-pm (no title links matched), movy (built-in; stays
+page try), movy (built-in; stays
 http because the fixture has no "/"), vidsrc-sh, 2embed, autoembed, multiembed
 (TV link shape not learned).
 
