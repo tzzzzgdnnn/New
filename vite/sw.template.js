@@ -41,10 +41,20 @@ self.addEventListener("activate", (e) => {
   );
 });
 
-async function trim(name, max) {
+async function trimNow(name, max) {
   const c = await caches.open(name);
   const keys = await c.keys();
   for (let i = 0; i < keys.length - max; i++) await c.delete(keys[i]);
+}
+// #19: one trim per cache every few seconds, not one per poster (a Home load
+// started hundreds of trims at once, each listing up to 600 entries).
+const trimTimers = {};
+function trim(name, max) {
+  if (trimTimers[name]) return Promise.resolve();
+  trimTimers[name] = setTimeout(() => {
+    trimNow(name, max).catch(() => {}).finally(() => { trimTimers[name] = 0; });
+  }, 5000);
+  return Promise.resolve();
 }
 
 self.addEventListener("fetch", (e) => {

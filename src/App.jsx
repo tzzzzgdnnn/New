@@ -849,6 +849,12 @@ export default function App() {
   // Home keep-alive + its scroll position (see the Home render below).
   const homeSeenRef = useRef(false);
   if (page === "home") homeSeenRef.current = true;
+  // Web app (#19): iPhone Safari kills the page (WebContent jetsam, then "A
+  // problem repeatedly occurred") when the hidden Home's hundreds of decoded
+  // posters stay in memory under a title page with its player and server
+  // page. On the web, Home stays mounted across the tabs only; opening a
+  // title lets it go (rebuilt from the cached rows on the way back).
+  if (import.meta.env.VITE_WEB && !["home", "search", "history", "downloads", "settings"].includes(page)) homeSeenRef.current = false;
   const homeScrollRef = useRef(0);
   const lastPageRef = useRef(page);
   useLayoutEffect(() => {
@@ -856,8 +862,15 @@ export default function App() {
     const prev = lastPageRef.current;
     lastPageRef.current = page;
     if (!main || prev === page) return;
-    if (page === "home") main.scrollTop = homeScrollRef.current;
-    else main.scrollTop = 0;
+    if (page === "home") {
+      const y = homeScrollRef.current;
+      main.scrollTop = y;
+      // A Home rebuilt from scratch (web, after a title) is short for a moment:
+      // set the spot again once its rows are back, unless the viewer scrolled.
+      if (y > 0) [80, 300, 800].forEach((ms) => setTimeout(() => {
+        if (pageRef.current === "home" && Math.abs(main.scrollTop - y) > 4 && main.scrollTop < 4) main.scrollTop = y;
+      }, ms));
+    } else main.scrollTop = 0;
   }, [page]);
   useEffect(() => {
     const main = document.querySelector(".main");

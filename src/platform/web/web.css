@@ -38,3 +38,7 @@ html.sb-web .player-wrap iframe {
 
 /* Web app: downloads need the iPhone or Android app. */
 .sb-download-btn { display: none !important; }
+
+/* #19: Home rails off screen are not laid out or painted (and their lazy
+   posters not loaded) until scrolled near, on the web app. */
+html.sb-web .sb-row-section { content-visibility: auto; contain-intrinsic-size: auto 260px; }

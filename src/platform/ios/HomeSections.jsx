@@ -47,15 +47,34 @@ function RowTitle({ title, sub }) {
 const ratingOf = (ratingsMap, item) =>
   ratingsMap?.[`${item.media_type === "tv" ? "tv" : "movie"}_${item.id}`] || {};
 
+/** Cards a rail renders at first; more are added as it is scrolled (#19). */
+const RAIL_FIRST = 14;
+const RAIL_STEP = 14;
+/**
+ * A rail renders its first RAIL_FIRST cards and adds RAIL_STEP more each time
+ * it is scrolled near its end. Home has ~20 rails of up to 120 titles; every
+ * card rendered at once meant 400+ decoded posters (300+ MB) on the phone,
+ * which got the web app killed by iPhone Safari (#19).
+ */
+export function useRailWindow(len) {
+  const [shown, setShown] = useState(RAIL_FIRST);
+  const onScroll = (e) => {
+    const el = e.currentTarget;
+    if (shown < len && el.scrollLeft + el.clientWidth * 2 >= el.scrollWidth) setShown((n) => Math.min(len, n + RAIL_STEP));
+  };
+  return [Math.min(shown, len), onScroll];
+}
+
 export function PosterRail({ title, sub, items, onSelect, watched, onMarkWatched, onMarkUnwatched, ratingsMap }) {
   // Kids profiles see only verified kid-rated titles, never a locked card.
   const visible = useKidsFilter(items);
+  const [shown, onScroll] = useRailWindow(visible?.length || 0);
   if (!visible?.length) return null;
   return (
     <div className="section sb-row-section">
       <RowTitle title={title} sub={sub} />
-      <div className="sb-row">
-        {visible.map((item) => {
+      <div className="sb-row" onScroll={onScroll}>
+        {visible.slice(0, shown).map((item) => {
           const rd = ratingOf(ratingsMap, item);
           return (
             <div className="sb-row-item" key={`${item.media_type}_${item.id}`}>
@@ -79,12 +98,13 @@ export function PosterRail({ title, sub, items, onSelect, watched, onMarkWatched
 
 export function WideRail({ title, items: all, progress, onSelect }) {
   const items = useKidsFilter(all);
+  const [shown, onScroll] = useRailWindow(items?.length || 0);
   if (!items?.length) return null;
   return (
     <div className="section sb-row-section">
       <RowTitle title={title} />
-      <div className="sb-row">
-        {items.map((item) => {
+      <div className="sb-row" onScroll={onScroll}>
+        {items.slice(0, shown).map((item) => {
           const pk =
             item.media_type === "movie"
               ? `movie_${item.id}`
