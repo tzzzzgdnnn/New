@@ -946,11 +946,13 @@ export function pageSteps(r, { title, want, site, link = null, t0 = Date.now() }
   const page = r?.page || {};
   steps.push({
     id: "page",
-    ok: !!page.ok && !page.wall,
+    ok: !!page.ok && !page.wall && !(page.status >= 400),
     label: "Page reached",
     detail: page.wall
       ? `${page.wall}: the site shows a bot check to the app`
-      : page.ok
+      : page.status >= 400
+        ? `The site answered HTTP ${page.status}${page.status === 404 ? ": no page at this link" : ""}`
+        : page.ok
         ? `${page.status ? `HTTP ${page.status}` : "Loaded"}${page.ms != null ? ` in ${(page.ms / 1000).toFixed(1)} s` : ""}`
         : page.error || (page.status ? `The site answered HTTP ${page.status}` : r?.error || "No answer from the site"),
   });
@@ -1205,7 +1207,8 @@ async function testServerRun(server, { onStep, retest, retestServers = retest, s
     if (!blocked && !r?.stream?.ok && r?.page?.ok) {
       r = await looking(`Trying ${link.title} again`, () => nativeTry(server, link.url, { learn: server.mode !== "page" }));
     }
-    const works = !!r?.stream?.ok && !!r?.playable?.ok;
+    // A 404 / error page never counts, even when some stream played on it (a wrong link).
+    const works = !!r?.stream?.ok && !!r?.playable?.ok && !(r?.page?.status >= 400);
     if (!works && signal?.aborted) {
       // Stopped mid-try: nothing learned is overwritten.
       push({ id: "stopped", ok: keptBefore, neutral: true, label: "Stopped", detail: keptBefore ? "Kept: worked before" : "Stopped before a stream showed" });

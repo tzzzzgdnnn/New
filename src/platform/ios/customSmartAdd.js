@@ -301,7 +301,7 @@ export async function smartAdd(link, { apiKey, onStep = () => {}, deps = {}, sig
         const steps = pageSteps(r, { title: link0.title, want: link0.want, site: base.name, link: link0.url });
         wall = wall || r?.page?.wall || null;
         if (r?.ads) adsOn = adsOn || r.ads.filter !== false;
-        const ok = !!r?.stream?.ok && !!r?.playable?.ok;
+        const ok = !!r?.stream?.ok && !!r?.playable?.ok && !(r?.page?.status >= 400);
         const title = steps.find((s) => s.id === "title");
         if (title && !title.ok) titleIssues.push(`${KIND_WORD[k]}: ${title.detail}`);
         if (r?.page?.humanCheck) humanCheck = humanCheck || r.page.humanCheck;

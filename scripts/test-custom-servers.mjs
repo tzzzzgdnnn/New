@@ -1068,3 +1068,29 @@ test("Test: site servers are checked in parallel (at most 4 at once)", async () 
   assert.ok(peak > 1 && peak <= CS.SERVER_CHECKS_AT_ONCE, `peak ${peak}`);
   await CS.deleteCustomServer(s.id);
 });
+
+test("engine: an HTTP 404 page is not 'reached' and never counts as working", async () => {
+  const r = { page: { ok: true, status: 404, title: "Not found", url: "https://x.test/tv/1396/1/1" }, stream: { ok: true, kind: "hls", url: "https://cdn.test/a.m3u8" }, playable: { ok: true } };
+  const page = CS.pageSteps(r, { title: "Breaking Bad", want: { title: "Breaking Bad", kind: "tv" }, site: "X" }).find((s) => s.id === "page");
+  assert.equal(page.ok, false);
+  assert.match(page.detail, /HTTP 404: no page at this link/);
+  window.webkit = { messageHandlers: { sbServerTest: { postMessage: async (m) => (m.candidate ? r : { ok: true }) } } };
+  const s = await CS.saveCustomServer({ name: "NF", mode: "page", templates: { movie: "https://x.test/m/{tmdb}" }, lists: { movies: true }, testRounds: 1 });
+  const t = await CS.testServer(s, { retest: false });
+  delete window.webkit;
+  assert.equal(t.ok, false);
+  assert.deepEqual(t.verified, []);
+  await CS.deleteCustomServer(s.id);
+});
+
+test("engine: playlists are followed master -> variant -> segment; disguised / refused pieces fail with a reason", async () => {
+  const { readFileSync } = await import("node:fs");
+  const cs = readFileSync("ios/App/App/CustomServers.swift", "utf8");
+  assert.match(cs, /#EXT-X-STREAM-INF", base: base\)/, "master -> first variant");
+  assert.match(cs, /firstUri\(media, after: nil/, "variant -> first segment");
+  assert.match(cs, /disguised as PNG images/);
+  assert.match(cs, /disguised as JPEG images/);
+  assert.match(cs, /video pieces answered HTTP/);
+  assert.match(cs, /DRM-protected; Super Player never plays around DRM/, "DRM is reported, never bypassed");
+  assert.doesNotMatch(cs, /guard let \(/, "no tuple patterns in guard let (Swift rejects them)");
+});

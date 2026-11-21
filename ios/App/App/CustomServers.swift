@@ -150,33 +150,97 @@ enum StreamProbe {
         return nil
     }
 
-    /// Fetches the first bytes and replies (on main) with `problem(...)`.
+    /// The first `limit` bytes of `url` with the play headers (nil when unreachable).
+    private static func head(_ url: URL, headers: [String: String], limit: Int) async -> (Data, HTTPURLResponse?)? {
+        var req = URLRequest(url: url, timeoutInterval: StreamProbe.timeout)
+        req.sbApply(headers)
+        do {
+            let (stream, resp) = try await URLSession.shared.bytes(for: req)
+            var data = Data()
+            for try await byte in stream {
+                data.append(byte)
+                if data.count >= limit { break }
+            }
+            stream.task.cancel()
+            return (data, resp as? HTTPURLResponse)
+        } catch {
+            return nil
+        }
+    }
+
+    /// First URI line of a playlist after `tag` (or the first media line), resolved against `base`.
+    static func firstUri(_ text: String, after tag: String?, base: URL) -> URL? {
+        var armed = tag == nil
+        for raw in text.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            if let t = tag, line.hasPrefix(t) { armed = true; continue }
+            if line.hasPrefix("#") { continue }
+            if armed { return URL(string: line, relativeTo: base)?.absoluteURL }
+        }
+        return nil
+    }
+
+    /// nil when a media piece (segment) can be played; else why not.
+    static func segmentProblem(head: Data, status: Int?) -> String? {
+        if let st = status, st >= 400 { return "The video pieces answered HTTP \(st) (the host refuses them)" }
+        let b = [UInt8](head.prefix(16))
+        guard !b.isEmpty else { return nil }
+        if b[0] == 0x47 { return nil }
+        if b.count >= 8, let box = String(bytes: b[4..<8], encoding: .ascii),
+           ["ftyp", "moov", "moof", "styp", "sidx", "free", "mdat"].contains(box) { return nil }
+        if b.count >= 3, b[0] == 0x49, b[1] == 0x44, b[2] == 0x33 { return nil }
+        if b.count >= 4, b[0] == 0x89, b[1] == 0x50, b[2] == 0x4E, b[3] == 0x47 { return "The video pieces are disguised as PNG images, which the player can't read" }
+        if b.count >= 3, b[0] == 0xFF, b[1] == 0xD8, b[2] == 0xFF { return "The video pieces are disguised as JPEG images, which the player can't read" }
+        if b.count >= 4, String(bytes: b[0..<4], encoding: .ascii) == "GIF8" { return "The video pieces are disguised as GIF images, which the player can't read" }
+        let text = String(decoding: head.prefix(64), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if text.hasPrefix("<") { return "The video pieces answered with a web page, not video" }
+        if text.hasPrefix("{") || text.hasPrefix("[") { return "The video pieces answered with JSON, not video" }
+        return nil
+    }
+
+    /// Fetches the first bytes and replies (on main) with `problem(...)`. A playlist is
+    /// followed (master -> first variant -> first segment) and each step checked too.
     static func check(_ url: URL, headers: [String: String], cookies: [HTTPCookie], done: @escaping (String?) -> Void) {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { done(nil); return }
-        var req = URLRequest(url: url, timeoutInterval: StreamProbe.timeout)
         var h = headers
         if !cookies.isEmpty, !h.keys.contains(where: { $0.caseInsensitiveCompare("Cookie") == .orderedSame }),
            let c = HTTPCookie.requestHeaderFields(with: cookies)["Cookie"] { h["Cookie"] = c }
-        req.sbApply(h)
+        let hdrs = h
         Task {
-            var verdict: String? = nil
-            do {
-                let (stream, resp) = try await URLSession.shared.bytes(for: req)
-                var head = Data()
-                for try await byte in stream {
-                    head.append(byte)
-                    if head.count >= StreamProbe.headBytes { break }
-                }
-                stream.task.cancel()
-                let http = resp as? HTTPURLResponse
-                verdict = StreamProbe.problem(head: head, contentType: http?.value(forHTTPHeaderField: "Content-Type"),
-                                  status: http?.statusCode, url: resp.url ?? url)
-            } catch {
-                verdict = nil // unreachable here: let the player try it
-            }
-            let result = verdict
-            DispatchQueue.main.async { done(result) }
+            let verdict = await StreamProbe.verdict(url, headers: hdrs)
+            DispatchQueue.main.async { done(verdict) }
         }
+    }
+
+    private static func verdict(_ url: URL, headers: [String: String]) async -> String? {
+        guard let top = await StreamProbe.head(url, headers: headers, limit: 65536) else { return nil }
+        let (data, resp) = top
+        let base = resp?.url ?? url
+        if let why = StreamProbe.problem(head: data.prefix(StreamProbe.headBytes), contentType: resp?.value(forHTTPHeaderField: "Content-Type"),
+                                         status: resp?.statusCode, url: base) { return why }
+        var text = String(decoding: data, as: UTF8.self)
+        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+        guard text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTM3U") else { return nil }
+        if text.contains("SAMPLE-AES") || text.contains("skd://") || text.contains("com.apple.streamingkeydelivery") {
+            return "The stream is DRM-protected; Super Player never plays around DRM"
+        }
+        var media = text
+        var mediaBase = base
+        if text.contains("#EXT-X-STREAM-INF") {
+            guard let variant = StreamProbe.firstUri(text, after: "#EXT-X-STREAM-INF", base: base) else { return nil }
+            guard let vh = await StreamProbe.head(variant, headers: headers, limit: 65536) else { return nil }
+            let (vd, vr) = vh
+            if let st = vr?.statusCode, st >= 400 { return "The playlist's quality link answered HTTP \(st)" }
+            let vt = String(decoding: vd, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard vt.hasPrefix("#EXTM3U") else { return "The playlist's quality link didn't answer with a playlist (no #EXTM3U)" }
+            media = vt
+            mediaBase = vr?.url ?? variant
+        }
+        guard let seg = StreamProbe.firstUri(media, after: nil, base: mediaBase) else { return nil }
+        guard let sh = await StreamProbe.head(seg, headers: headers, limit: StreamProbe.headBytes) else { return nil }
+        let (sd, sr) = sh
+        return StreamProbe.segmentProblem(head: sd, status: sr?.statusCode)
     }
 
     /// The first of `urls` whose body can be a stream (index), plus why each earlier one was skipped.
