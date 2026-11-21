@@ -19,6 +19,7 @@ import {
   MAX_TEXT,
 } from "../../utils/customServers/direct";
 import { originOf } from "../../utils/customServers/template";
+import { withSchemeFallback } from "../../utils/customServers/scheme";
 import { diag } from "../../utils/diag";
 
 /** Play waits at most this long for a site's API before using its page. */
@@ -36,8 +37,13 @@ const MAX_SCRIPT_BYTES = 2 * 1024 * 1024;
 export const SAFARI_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 
-/** One request through the native HTTP client; text out. */
-async function nativeRequest({ url, method = "GET", headers = {}, body = null, timeoutMs = DIRECT_TIMEOUT_MS }) {
+/**
+ * One request through the native HTTP client; text out. A link that can't
+ * be reached on its scheme is tried once on the other (http ↔ https).
+ */
+const nativeRequest = (req) => withSchemeFallback(req.url, (url) => nativeRequestOnce({ ...req, url }));
+
+async function nativeRequestOnce({ url, method = "GET", headers = {}, body = null, timeoutMs = DIRECT_TIMEOUT_MS }) {
   const res = await CapacitorHttp.request({
     url,
     method,

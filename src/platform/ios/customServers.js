@@ -16,6 +16,7 @@ import { buildUrl, deriveTemplate, hasDuplicateId, normalizeSlugStyle, originOf,
 import { DIRECT_METHODS, EXTRACT_TYPES, validateDirect, checkTitle } from "../../utils/customServers/direct";
 import { cachedResolve, directHttp, learnDirect, testDirect, DIRECT_TIMEOUT_MS } from "./customDirect";
 import { resolveSite } from "../../utils/customServers/lookup";
+import { rememberScheme, schemeFields } from "../../utils/customServers/scheme";
 import { matchSample, withTimeout, LOOKUP_TIMEOUT_MS } from "../../utils/customServers/match";
 import { isAutoPick } from "./autoServer";
 import { diag } from "../../utils/diag";
@@ -628,6 +629,8 @@ export const candidateFor = (s, url, { id = s.id, label = s.name, timeoutMs = CU
   id,
   label,
   url,
+  // http ↔ https fallback: the native page opens loadUrl (else url) and, when it can't be reached, altUrl.
+  ...schemeFields(url),
   lockHost: s.site,
   timeoutMs,
   cache,
@@ -821,9 +824,13 @@ export function sampleNumbers(template, sample) {
 /** Open one link in the hidden page (native), with the learn log on. */
 export async function nativeTry(server, url, { timeoutMs = TEST_SNIFF_TIMEOUT_MS, learn = true, tap, tapOnly = false } = {}) {
   try {
-    return await nativeTest().postMessage({
+    const r = await nativeTest().postMessage({
       candidate: { ...candidateFor(server, url, { id: server.id, timeoutMs, cache: false, ...(tap !== undefined ? { tap } : {}), tapOnly }), learn },
     });
+    // The scheme the page loaded on (after any http ↔ https fallback) goes first next time.
+    if (r?.page?.url && (r.page.ok || r.stream?.ok)) rememberScheme(r.page.url);
+    if (r?.page?.fallback) diag("custom", `${server.name}: ${r.page.fallback}`);
+    return r;
   } catch (e) {
     return { ok: false, error: e?.message || String(e) };
   }
