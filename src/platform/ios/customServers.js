@@ -20,6 +20,7 @@ import { rememberScheme, schemeFields } from "../../utils/customServers/scheme";
 import { matchSample, withTimeout, LOOKUP_TIMEOUT_MS } from "../../utils/customServers/match";
 import { isAutoPick } from "./autoServer";
 import { diag } from "../../utils/diag";
+import { methodOfTry } from "../../utils/customServers/method";
 
 /** localStorage key (app-wide, listed in BACKUP_KEYS). */
 export const CUSTOM_SERVERS_KEY = "customServers";
@@ -170,7 +171,13 @@ export function normalizeSiteServers(list) {
   for (const x of list) {
     const label = typeof x === "string" ? x : x?.label;
     if (typeof label !== "string" || !label.trim() || out.some((o) => o.label === label.trim())) continue;
-    out.push({ label: label.trim().slice(0, 60), works: x?.works === true ? true : x?.works === false ? false : null, at: Number(x?.at) || 0 });
+    out.push({
+      label: label.trim().slice(0, 60),
+      works: x?.works === true ? true : x?.works === false ? false : null,
+      at: Number(x?.at) || 0,
+      // How its stream was found ("HLS (m3u8) · followed the embedded player on …"), shown by the Test.
+      ...(typeof x?.method === "string" && x.method ? { method: x.method.slice(0, 160) } : {}),
+    });
     if (out.length >= MAX_SITE_SERVERS) break;
   }
   return out;
@@ -562,7 +569,10 @@ export async function customCandidates(ctx, opts = {}) {
         if (s.kind === "site") {
           if (!siteAdderEnabled()) return null;
           const r = await resolveSiteServer(s, ctx).catch(() => null);
-          return r ? candidateFor(s, r.url) : null;
+          if (!r) return null;
+          // A stream the page gave plays in the native player with the page's headers; the page is the fallback.
+          if (r.direct) return [{ ...candidateFor(s, `${r.url}#sb-direct`, { cache: false }), referer: r.page, headers: r.headers, direct: true }, candidateFor(s, r.page)];
+          return candidateFor(s, r.url);
         }
         const tpl = templateFor(s, { isAnime, type, dubMode });
         if (!tpl) return [];
@@ -882,12 +892,15 @@ export function pageSteps(r, { title, want, site, t0 = Date.now() }) {
         : page.error || (page.status ? `The site answered HTTP ${page.status}` : r?.error || "No answer from the site"),
   });
   const stream = r?.stream || {};
+  // Which technique found it (embedded player, button pressed, the page's own player).
+  const method = methodOfTry(r, { link: page.url || null });
   steps.push({
     id: "stream",
     ok: !!stream.ok,
     label: "Stream found",
+    ...(method ? { method: method.id } : {}),
     detail: stream.ok
-      ? `${(stream.kind || "hls").toUpperCase()} in ${((stream.ms ?? Date.now() - t0) / 1000).toFixed(1)} s`
+      ? `${(stream.kind || "hls").toUpperCase()} in ${((stream.ms ?? Date.now() - t0) / 1000).toFixed(1)} s${method ? ` · ${method.label.split(" · ").slice(1).join(" · ")}` : ""}`
       : page.humanCheck
         ? `The site shows a human check (${page.humanCheck}) before it plays. Super Player never ticks it for you, so this site can't play in the background.`
         : stream.error || (page.ok ? `No video stream within ${TEST_SNIFF_TIMEOUT_MS / 1000} s${page.taps?.length ? ` (pressed ${[...new Set(page.taps)].slice(0, 3).join(", ")})` : ""}` : "Skipped: the page didn't load"),
@@ -1094,19 +1107,20 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
       }
       if (retest && old?.works === true) {
         siteServers.push({ ...old });
-        push({ id: `srv-${label}`, ok: true, label: `Server: ${label}`, detail: "Kept: worked before" });
+        push({ id: `srv-${label}`, ok: true, label: `Server: ${label}`, detail: `Kept: worked before${old.method ? ` (${old.method})` : ""}` });
         continue;
       }
       const rs = await nativeTry(server, link.url, { learn: false, tap: label, tapOnly: true });
       const ok = !!rs?.stream?.ok && !!rs?.playable?.ok;
-      siteServers.push({ label, works: ok, at: Date.now() });
+      const how = ok ? methodOfTry(rs, { link: link.url }) : null;
+      siteServers.push({ label, works: ok, at: Date.now(), ...(how ? { method: how.label } : {}) });
       push({
         id: `srv-${label}`,
         ok: true,
         neutral: !ok,
         label: `Server: ${label}`,
         detail: ok
-          ? old ? (old.works === false ? "Fixed: works now, added to your servers" : "Works, added to your servers") : "New: works, added to your servers"
+          ? (old ? (old.works === false ? "Fixed: works now, added to your servers" : "Works, added to your servers") : "New: works, added to your servers") + (how ? ` (${how.label})` : "")
           : old ? "Still doesn't play" : "New: doesn't play, not added",
       });
     }

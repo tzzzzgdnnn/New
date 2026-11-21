@@ -572,3 +572,34 @@ test("#27 movy.sx: https first, TV names {season}/{episode}, already built in as
   assert.deepEqual(builtInFor("https://www.movy.sx/movie/27205"), { id: "movy-direct", label: "Movy" });
   assert.equal(builtInFor("https://flystream.net/movie/27205"), null);
 });
+
+test("techniques: the Test names the method that found each stream", async () => {
+  const M = await import("../src/utils/customServers/method.js");
+  const embed = M.methodOfTry({ stream: { ok: true, kind: "hls", url: "https://cdn.x/m.m3u8", page: "https://vidplay.site/e/1" }, page: { url: "https://site.tv/watch/1", taps: ["Server 2"] } });
+  assert.equal(embed.id, "embed");
+  assert.equal(embed.host, "vidplay.site");
+  assert.match(embed.label, /^HLS \(m3u8\) · followed the embedded player on vidplay\.site, after pressing “Server 2”$/);
+  const own = M.methodOfTry({ stream: { ok: true, kind: "mp4", url: "https://cdn.site.tv/a.mp4", page: "https://www.site.tv/watch/1" }, page: { url: "https://site.tv/watch/1" } });
+  assert.equal(own.id, "page");
+  assert.equal(own.label, "MP4 · sniffed from the site's own player");
+  assert.equal(M.methodOf({ how: "api", url: "https://c/x.m3u8", pageUrl: "https://s.tv/" }).id, "api");
+  assert.equal(M.methodOf({ direct: true }).id, "direct");
+  assert.equal(M.methodOfTry({ stream: { ok: false } }), null);
+  // Page Test step carries it; site servers keep it through normalize.
+  const steps = CS.pageSteps({ page: { ok: true, url: "https://site.tv/w" }, stream: { ok: true, kind: "hls", ms: 1200, page: "https://vidplay.site/e" }, playable: { ok: true } }, { title: "X", want: {}, site: "Site" });
+  const st = steps.find((s) => s.id === "stream");
+  assert.equal(st.method, "embed");
+  assert.match(st.detail, /^HLS in 1\.2 s · followed the embedded player on vidplay\.site$/);
+  assert.equal(CS.normalizeSiteServers([{ label: "S1", works: true, method: "MP4 · x" }])[0].method, "MP4 · x");
+  assert.equal("method" in CS.normalizeSiteServers([{ label: "S1" }])[0], false);
+});
+
+test("whole-site play: the page's stream goes to the native player with Referer/UA, cookies only on the same site", async () => {
+  const SS = await import("../src/platform/ios/siteServers.js");
+  const carried = { cookie: "sid=1", userAgent: "UA-9" };
+  const same = SS.playHeaders("https://cdn.site.tv/m.m3u8", "https://site.tv/watch/1", carried);
+  assert.deepEqual(same, { Referer: "https://site.tv/", Origin: "https://site.tv", Cookie: "sid=1", "User-Agent": "UA-9" });
+  const other = SS.playHeaders("https://cdn.other.net/m.m3u8", "https://site.tv/watch/1", carried);
+  assert.equal(other.Cookie, undefined, "never hand the site's cookies to another host");
+  assert.equal(other["User-Agent"], "UA-9");
+});

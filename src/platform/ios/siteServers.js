@@ -5,6 +5,8 @@
 // play time. Challenges, captchas, logins and DRM are never bypassed; cookies /
 // UA are carried over only from a final page that is not a challenge.
 import { collectorScript } from "../../utils/customServers/collector";
+import { siteDomain } from "../../utils/customServers/template";
+import { methodOf } from "../../utils/customServers/method";
 import { discoverSite, resolveSite, streamHeaders, normalizeRecipe, isChallenge } from "../../utils/customServers/site";
 
 const bridge = () => window.webkit?.messageHandlers?.sbSiteRender || null;
@@ -55,7 +57,9 @@ export async function addSiteFromLink(link, { apiKey = null, onStep } = {}) {
   if (!play?.ok) return { ok: false, step: "stream", error: `Found a video, but it didn't play: ${play?.detail || "unknown error"}` };
   const servers = [siteServer(res, null)];
   for (const m of res.mirrors || []) servers.push(siteServer(res, m));
-  return { ok: true, servers, detail: play.detail };
+  const st = res.stream.stream;
+  const method = methodOf({ kind: st.kind, url: st.url, how: st.how, streamPage: st.page, site: res.recipe?.home }).label;
+  return { ok: true, servers, detail: play.detail, method };
 }
 
 const siteServer = (res, mirror) => ({
@@ -87,11 +91,21 @@ export function normalizeSiteServer(s, idPrefix) {
 export async function resolveSiteServer(s, ctx) {
   const want = { title: ctx.title || ctx.name, year: ctx.year, type: ctx.type === "tv" ? "tv" : "movie", season: ctx.season, episode: ctx.episode };
   if (!want.title || !siteAdderEnabled()) return null;
-  const r = await resolveSite(s.recipe, want, { net: nativeNet() });
+  const net = nativeNet();
+  const r = await resolveSite(s.recipe, want, { net });
   if (!r.ok) return null;
   if (s.mirror) {
     const m = (r.mirrors || []).find((x) => x.label === s.mirror);
     return m ? { url: m.url, page: r.page } : null;
   }
-  return r.direct?.[0] ? { url: r.direct[0].url, page: r.page, direct: true } : { url: r.page, page: r.page };
+  const d = r.direct?.[0];
+  return d ? { url: d.url, page: r.page, direct: true, headers: playHeaders(d.url, r.page, net.carried()) } : { url: r.page, page: r.page };
+}
+
+/** Headers the native player sends for a stream the page gave: Referer / Origin and the
+ * page's User-Agent; the page's cookies only when the stream is on the same site. */
+export function playHeaders(streamUrl, page, carried = {}) {
+  const h = streamHeaders(page, carried);
+  if (h.Cookie && siteDomain(streamUrl) !== siteDomain(page)) delete h.Cookie;
+  return h;
 }
