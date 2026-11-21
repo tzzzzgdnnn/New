@@ -6,6 +6,7 @@
 import { resolveCinejoy } from "../../utils/servers/cinejoy";
 import { fetchImdbId, lastTmdbKey } from "../../utils/api";
 import { diag } from "../../utils/diag";
+import { streamMaxHeight } from "../../utils/servers/quality";
 
 export const CINEJOY_ID = "cinejoy-direct";
 export const CINEJOY_LABEL = "Cinejoy";
@@ -30,7 +31,9 @@ const playableHere = async (url) => {
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout?.(5000) });
     if (!r.ok || /dontscrape/.test(r.url)) return false;
-    return (await r.text()).startsWith("#EXTM3U");
+    const text = await r.text();
+    // Tallest rendition, for the best-quality pick across upstreams.
+    return text.startsWith("#EXTM3U") ? { ok: true, height: streamMaxHeight(text) } : false;
   } catch {
     return false;
   }
@@ -41,7 +44,8 @@ const playableNatively = async (url) => {
   try {
     const { CapacitorHttp } = await import("@capacitor/core");
     const r = await CapacitorHttp.get({ url, responseType: "text", connectTimeout: 5000, readTimeout: 5000 });
-    return r.status < 400 && String(r.data || "").startsWith("#EXTM3U");
+    const text = String(r.data || "");
+    return r.status < 400 && text.startsWith("#EXTM3U") ? { ok: true, height: streamMaxHeight(text) } : false;
   } catch {
     return false;
   }
@@ -99,7 +103,7 @@ export function prefetchCinejoy(ctx, { now = Date.now } = {}) {
   })()
     .then((r) => {
       entry.result = r;
-      diag("player", `cinejoy ${key}: ${r.server} stream in ${now() - started} ms`);
+      diag("player", `cinejoy ${key}: ${r.server} stream${r.height ? ` (${r.height}p)` : ""} in ${now() - started} ms`);
       return r;
     })
     .catch((e) => {

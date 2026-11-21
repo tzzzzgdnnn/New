@@ -5,6 +5,7 @@
 // Platform-neutral: the caller passes fetch. The API sends
 // Access-Control-Allow-Origin: *, so plain fetch works in the app's web view.
 
+import { rankByQuality } from "./quality";
 export const CINEJOY_API = "https://api2.wing.st";
 // English-audio upstreams, fastest first. (Warsaw/Munich/Paris are dubbed.)
 export const CINEJOY_SERVERS = ["Light", "Nebula", "Sirius", "Rigel", "Polaris"];
@@ -102,27 +103,55 @@ export function pickCinejoyStream(data) {
 }
 
 /**
- * Ask every upstream at once; the first with a stream wins.
+ * Ask every upstream at once and play the best picture (best-quality rule):
+ * once one has a stream, the others get QUALITY_GRACE_MS more to answer, then
+ * the tallest rendition wins (rankByQuality). `verify(url)` may answer true /
+ * false or { ok, height } (height read from the master playlist).
  * q: { type: "movie"|"tv", tmdbId, season?, episode?, imdbId?, year?, title? }
  */
-export function resolveCinejoy(fetchFn, q, servers = CINEJOY_SERVERS, verify = null) {
+export const QUALITY_GRACE_MS = 1500;
+export function resolveCinejoy(fetchFn, q, servers = CINEJOY_SERVERS, verify = null, { graceMs = QUALITY_GRACE_MS } = {}) {
   return new Promise((resolve, reject) => {
     let left = servers.length;
-    const miss = () => --left === 0 && reject(new Error("cinejoy: no server has this title"));
+    const hits = [];
+    let timer = null;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (!hits.length) return reject(new Error("cinejoy: no server has this title"));
+      const best = rankByQuality(hits)[0];
+      resolve({ ok: true, server: best.server, source: best.source, subtitles: best.subtitles, height: best.height || 0 });
+    };
+    const settle = () => {
+      if (--left === 0) finish();
+    };
+    const hit = (h) => {
+      hits.push(h);
+      // No way to read the picture size (no verify): first stream, no wait.
+      // A 1080p+ stream is as good as it gets here: no need to wait either.
+      if (!verify || h.height >= 1080) return finish();
+      if (!timer && !done) timer = setTimeout(finish, graceMs);
+    };
     for (const server of servers) {
       const { path, payload } = cinejoyRequest(server, q);
       call(fetchFn, path, payload)
         .then((env) => {
-          const hit = env.status >= 200 && env.status < 300 && pickCinejoyStream(env.data);
-          if (!hit) return miss();
-          if (!verify) return resolve({ ok: true, server, ...hit });
+          const found = env.status >= 200 && env.status < 300 && pickCinejoyStream(env.data);
+          if (!found) return;
+          if (!verify) return hit({ server, ...found, height: 0 });
           // Only a playlist this browser can actually read counts.
-          return Promise.resolve(verify(hit.source)).then(
-            (good) => (good ? resolve({ ok: true, server, ...hit }) : miss()),
-            miss,
+          return Promise.resolve(verify(found.source)).then(
+            (v) => {
+              const ok = v === true || !!v?.ok;
+              if (ok) hit({ server, ...found, height: Number(v?.height) || 0 });
+            },
+            () => {},
           );
         })
-        .catch(miss);
+        .catch(() => {})
+        .finally(settle);
     }
   });
 }
