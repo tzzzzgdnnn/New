@@ -8,6 +8,7 @@ import { CapacitorHttp } from "@capacitor/core";
 import {
   buildDirectRequest,
   checkAnswer,
+  directServerVariant,
   endpointCandidates,
   extractStream,
   extractorFor,
@@ -163,6 +164,7 @@ export async function learnDirect({ kind, values, want, stream, streamHeaders = 
       headers: def.headers,
       body: def.body ?? null,
       extract: def.extract,
+      ...(def.server ? { server: def.server } : {}),
       streamHeaders: { ...pageHeaders(page), ...streamHeaders, "User-Agent": SAFARI_UA },
       source: "auto",
       learnedAt: Date.now(),
@@ -231,4 +233,24 @@ export async function testDirect(def, values, want, { playable = null } = {}) {
   else if (r.ok) play = { ok: false, error: "Checking playback needs the iPhone app." };
   steps.push({ id: "d-playable", ok: !!play.ok, label: "Direct: stream playable", detail: play.ok ? play.detail || "Ready to play" : play.error });
   return { ok: steps.every((s) => s.ok), steps, stream: r.stream || null };
+}
+
+/**
+ * Try every server the site's API offers (?sub=vortex, nova, zen…), not only
+ * the first that works: [{ value, ok, stream?, detail }], in the API's order.
+ * Stops trying (the rest marked not tried) when `signal` aborts.
+ */
+export async function testApiServers(def, values, want, { playable = null, signal = null } = {}) {
+  const out = [];
+  for (const value of def?.server?.list || []) {
+    if (signal?.aborted) {
+      out.push({ value, ok: false, tried: false, detail: "Not tried (stopped)" });
+      continue;
+    }
+    const v = directServerVariant(def, value);
+    const r = v ? await resolveDirect(v, values, want) : { ok: false, error: "No request" };
+    let play = r.ok ? (playable ? await playable(r.stream, def.streamHeaders || {}) : { ok: true }) : { ok: false, error: r.error };
+    out.push({ value, ok: !!play.ok, tried: true, stream: r.stream || null, detail: play.ok ? r.stream : play.error || r.error });
+  }
+  return out;
 }

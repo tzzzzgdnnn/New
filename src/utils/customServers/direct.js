@@ -273,7 +273,7 @@ export function templatizeRequest(req, values, kind) {
 /** Fill a request template for a title: { url, method, headers, body } or null. */
 export function buildDirectRequest(def, values) {
   if (!def?.url) return null;
-  const url = buildUrl(def.url, values);
+  const url = buildOptional(def.url, values);
   if (!url) return null;
   let body = null;
   if (def.body) {
@@ -355,7 +355,8 @@ export function learnFromLog(log, { stream = null, values, kind }) {
       lastError = t.error;
       return null;
     }
-    return { ...t, extract };
+    const server = apiServersFrom(r, reqs, reqs.map((x) => x.text));
+    return { ...t, extract, ...(server ? { server } : {}) };
   };
   // 1. An answer that holds the very stream the page played.
   if (stream) {
@@ -598,4 +599,169 @@ export function checkAnswer(text, want) {
   // A title field on an episode answer is often the episode's name: only movies are checked by title.
   if (typeof title === "string" && want.title && want.kind === "movie") return checkTitle(title, want);
   return "unknown";
+}
+
+// ── Recipes that work for every title ────────────────────────────────────
+// A learned API call is saved once and reused for all shows and movies:
+//  - apiServersFrom: the API's own servers (?sub=vortex, ?server=…), each
+//    its own Sources entry (directServerVariant builds that server's call)
+//  - deriveDirect: the movie call turned into the TV call (and back) when the
+//    API names the kind (?mediaType=movie, /movie/{tmdb})
+//  - buildDirectRequest drops optional query fields a title has no value for
+//    ({imdb}, {year}, {title}) as long as an id is still sent
+
+/** Query keys / body fields that pick one of the API's servers. */
+const SERVER_KEY = /^(sub|server|srv|servername|server_name|provider|source|src|host|mirror|embed)$/i;
+/** Query keys / body fields that name the kind of title. */
+const MEDIA_KEY = /^(media_?type|mediatype|type|kind|content_?type|category)$/i;
+/** A value that looks like a server name, not an id, a language or a placeholder. */
+const SERVER_VALUE = /^(?=.*[a-z])[a-z0-9][\w.-]{1,31}$/i;
+const NOT_SERVER = /^(sub|dub|raw|movie|tv|anime|true|false|on|off|auto|default|en|eng)$/i;
+/** At most this many API servers become Sources entries. */
+export const MAX_API_SERVERS = 8;
+
+const queryPairs = (url) => {
+  const q = String(url || "").split("#")[0].split("?")[1] || "";
+  return q
+    .split("&")
+    .filter(Boolean)
+    .map((p) => {
+      const i = p.indexOf("=");
+      const dec = (s) => {
+        try {
+          return decodeURIComponent(s.replace(/\+/g, " "));
+        } catch {
+          return s;
+        }
+      };
+      return i < 0 ? [dec(p), ""] : [dec(p.slice(0, i)), dec(p.slice(i + 1))];
+    });
+};
+const pathOf = (url) => String(url || "").split(/[?#]/)[0];
+
+/** Names a server list item can carry (a string, or an object's name/id/key). */
+function itemNames(x) {
+  if (typeof x === "string") return [x];
+  if (x && typeof x === "object") return ["value", "key", "id", "slug", "name", "server", "code"].map((k) => x[k]).filter((v) => typeof v === "string");
+  return [];
+}
+
+/** Arrays in an answer that list the current server among others. */
+function serverListsIn(obj, current, out = [], depth = 0) {
+  if (depth > MAX_PATH_DEPTH || obj == null || typeof obj !== "object") return out;
+  if (Array.isArray(obj)) {
+    const names = obj.map((x) => itemNames(x));
+    if (obj.length > 1 && names.some((n) => n.some((v) => v.toLowerCase() === current.toLowerCase()))) {
+      const idx = names.flat().findIndex((v) => v.toLowerCase() === current.toLowerCase());
+      // the field the current server matched (value/key/id/…) names every item
+      const field = typeof obj[0] === "string" ? null : ["value", "key", "id", "slug", "name", "server", "code"].find((k) => obj.some((x) => String(x?.[k] ?? "").toLowerCase() === current.toLowerCase()));
+      out.push(obj.map((x) => (typeof x === "string" ? x : field ? x?.[field] : itemNames(x)[0])).filter((v) => typeof v === "string"));
+      if (idx < 0) out.pop();
+    }
+    for (const x of obj) serverListsIn(x, current, out, depth + 1);
+  } else for (const v of Object.values(obj)) serverListsIn(v, current, out, depth + 1);
+  return out;
+}
+
+/**
+ * The API's own servers for a learned call: the query key that picks one,
+ * the server the page used and every server the API offers (from other calls
+ * the page made to the same address, or a list in an answer), or null.
+ * @param {{url}} req the call that gave the stream
+ * @param {Array<{url, text?}>} others the page's other calls
+ * @param {string[]} texts answers to look in for a server list
+ */
+export function apiServersFrom(req, others = [], texts = []) {
+  const pairs = queryPairs(req?.url);
+  const hit = pairs.find(([k, v]) => SERVER_KEY.test(k) && SERVER_VALUE.test(v) && !NOT_SERVER.test(v) && !/^\d+$/.test(v));
+  if (!hit) return null;
+  const [param, current] = hit;
+  const seen = new Map([[current.toLowerCase(), current]]);
+  const add = (v) => {
+    if (typeof v === "string" && SERVER_VALUE.test(v) && !NOT_SERVER.test(v) && !seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v);
+  };
+  for (const o of others) {
+    if (!o?.url || pathOf(o.url) !== pathOf(req.url)) continue;
+    for (const [k, v] of queryPairs(o.url)) if (k === param) add(v);
+  }
+  for (const t of texts) {
+    const json = parseJson(String(t || "").slice(0, MAX_TEXT));
+    if (json) for (const list of serverListsIn(json, current)) list.forEach(add);
+  }
+  return { param, current, list: [...seen.values()].slice(0, MAX_API_SERVERS) };
+}
+
+const replaceParam = (url, param, value) =>
+  String(url).replace(new RegExp(`([?&]${escapeRe(param)}=)[^&#]*`), (_, pre) => pre + encodeURIComponent(value));
+
+/** A direct definition with another of the API's servers picked, or null. */
+export function directServerVariant(def, value) {
+  if (!def?.url || !def.server?.param || value == null) return null;
+  const url = replaceParam(def.url, def.server.param, value);
+  if (url === def.url && String(value).toLowerCase() !== String(def.server.current).toLowerCase()) return null;
+  return { ...def, url, server: { ...def.server, current: String(value) } };
+}
+
+/** Display name of an API server ("vortex" -> "Vortex"). */
+export const apiServerLabel = (v) => String(v).replace(/[-_.]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+/**
+ * The call for another kind of title from a learned one: the kind field
+ * switched (mediaType=movie -> tv, /movie/{tmdb} -> /tv/{tmdb}) and the
+ * season/episode added or dropped. Null when the API doesn't name the kind.
+ */
+export function deriveDirect(def, from, to) {
+  if (!def?.url || from === to || !["movie", "tv"].includes(from) || !["movie", "tv"].includes(to)) return null;
+  const word = { movie: "movie", tv: "tv" };
+  let url = def.url;
+  let switched = false;
+  const [base, query = ""] = url.split("?");
+  let path = base;
+  let q = query;
+  // ?mediaType=movie / &type=tv
+  q = q.replace(/(^|&)([^=&]+)=([^&]*)/g, (all, pre, k, v) => {
+    if (MEDIA_KEY.test(decodeURIComponent(k)) && v.toLowerCase() === word[from]) {
+      switched = true;
+      return `${pre}${k}=${word[to]}`;
+    }
+    return all;
+  });
+  // /movie/{tmdb} <-> /tv/{tmdb}/{season}/{episode}
+  if (!switched) {
+    const re = from === "movie" ? /\/movies?\/(\{(?:tmdb|imdb)\})(?![^/]*\{)/ : /\/tv\/(\{(?:tmdb|imdb)\})\/\{season\}\/\{episode\}/;
+    if (re.test(path)) {
+      path = path.replace(re, to === "tv" ? "/tv/$1/{season}/{episode}" : "/movie/$1");
+      switched = "path";
+    }
+  }
+  if (!switched) return null;
+  if (switched === true) {
+    if (to === "tv" && !/\{episode\}/.test(path + q)) q += `${q ? "&" : ""}season={season}&episode={episode}`;
+    if (to === "movie") q = q.split("&").filter((p) => !/=\{(season|episode)\}$/.test(p)).join("&");
+  }
+  url = q ? `${path}?${q}` : path;
+  let body = def.body;
+  if (body && to === "tv" && !/\{episode\}/.test(body)) {
+    const json = parseJson(body);
+    if (json && typeof json === "object" && !Array.isArray(json)) body = body.replace(/\}\s*$/, `,"season":{season},"episode":{episode}}`);
+  }
+  return { ...def, url, body, derived: from };
+}
+
+/** Fill a template, dropping query fields that are only extra facts ({imdb}, {year}, {title}) when the title has no value for them. */
+function buildOptional(url, values) {
+  const full = buildUrl(url, values);
+  if (full) return full;
+  const [base, query] = url.split("?");
+  if (!query) return null;
+  const OPTIONAL = new Set(["imdb", "year", "title", "slug", "tvdb", "kitsu", "mal"]);
+  const kept = query.split("&").filter((p) => {
+    const phs = templatePlaceholders(p);
+    const missing = phs.filter((ph) => buildUrl(`{${ph}}`, values) == null);
+    return !missing.length || !missing.every((ph) => OPTIONAL.has(ph));
+  });
+  const rest = `${base}${kept.length ? `?${kept.join("&")}` : ""}`;
+  // still needs an id
+  if (!templatePlaceholders(rest).some((p) => ID_PLACEHOLDERS.includes(p))) return null;
+  return buildUrl(rest, values);
 }

@@ -644,3 +644,153 @@ test("Test: retest memory keeps links that worked; Stop keeps what works", async
   assert.deepEqual(CS.listCustomServers().find((x) => x.id === s.id).lastTest, last);
   delete window.webkit;
 });
+
+// ── Direct recipes for every title (fmfau-style API) ─────────────────────
+// A site API like fmfau.com's /api/sources/leibniz?tmdbId=…&mediaType=…&sub=<server>:
+// learned once on one movie, saved as a template, one Sources entry per API
+// server, and reused for another movie and for a TV episode. Offline fixture.
+
+const DR = await import("../src/utils/customServers/direct.js");
+const { setDirectHttp, clearDirectCache } = await import("../src/platform/ios/customDirect.js");
+
+const FM_API = "https://fmfau.com/api/sources/leibniz";
+const FM_TITLES = { 27205: ["Inception", 2010], 155: ["The Dark Knight", 2008], 1399: ["Game of Thrones", 2011] };
+const FM_SERVERS = [
+  { id: "vortex", name: "Vortex" },
+  { id: "nova", name: "Nova" },
+  { id: "zen", name: "Zen" },
+];
+const fmAnswer = (q) => {
+  const [title, year] = FM_TITLES[q.get("tmdbId")] || ["Unknown", 1900];
+  const ep = q.get("mediaType") === "tv" ? `/s${q.get("season")}e${q.get("episode")}` : "";
+  return JSON.stringify({
+    title,
+    year,
+    servers: FM_SERVERS,
+    sources: [{ file: `https://cdn.fmfau.test/hls/${q.get("mediaType")}/${q.get("tmdbId")}${ep}/${q.get("sub")}/master.m3u8`, type: "hls" }],
+  });
+};
+const fmCalls = [];
+const fmHttp = async (req) => {
+  fmCalls.push(req.url);
+  const u = new URL(req.url);
+  if (u.origin + u.pathname !== FM_API || !u.searchParams.get("tmdbId") || !u.searchParams.get("sub")) return { status: 404, text: "", url: req.url };
+  if (u.searchParams.get("mediaType") === "tv" && !u.searchParams.get("episode")) return { status: 400, text: "{}", url: req.url };
+  return { status: 200, text: fmAnswer(u.searchParams), url: req.url };
+};
+const fmLearnUrl = `${FM_API}?tmdbId=27205&mediaType=movie&title=Inception&year=2010&imdbId=tt1375666&sub=vortex&audioPreference=sub`;
+const fmLog = {
+  requests: [
+    { url: fmLearnUrl, method: "GET", headers: { Accept: "application/json" }, status: 200, contentType: "application/json", text: fmAnswer(new URL(fmLearnUrl).searchParams), page: "https://fmfau.com/movie/27205" },
+  ],
+};
+const fmValues = { tmdb: 27205, imdb: "tt1375666", title: "Inception", year: 2010 };
+
+test("direct recipe: fmfau-style API call becomes a template for every title", () => {
+  const r = DR.learnFromLog(fmLog, { stream: "https://cdn.fmfau.test/hls/movie/27205/vortex/master.m3u8", values: fmValues, kind: "movie" });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.def.url, `${FM_API}?tmdbId={tmdb}&mediaType=movie&title={title}&year={year}&imdbId={imdb}&sub=vortex&audioPreference={lang}`);
+  assert.equal(r.def.extract.type, "path");
+  assert.deepEqual(r.def.server, { param: "sub", current: "vortex", list: ["vortex", "nova", "zen"] }, "every server the API offers");
+  // the TV call from the movie one: kind switched, season/episode added
+  const tv = DR.deriveDirect(r.def, "movie", "tv");
+  assert.equal(tv.url, `${FM_API}?tmdbId={tmdb}&mediaType=tv&title={title}&year={year}&imdbId={imdb}&sub=vortex&audioPreference={lang}&season={season}&episode={episode}`);
+  assert.equal(DR.deriveDirect(tv, "tv", "movie").url, r.def.url, "and back");
+  assert.equal(DR.deriveDirect({ url: "https://x.site/api/s?id={tmdb}" }, "movie", "tv"), null, "no kind named: no guess");
+  // another server picked: same recipe, sub= switched
+  assert.match(DR.directServerVariant(r.def, "nova").url, /&sub=nova&/);
+  // a title without an IMDb id still gets a request (optional field dropped)
+  const req = DR.buildDirectRequest(r.def, { tmdb: 155, title: "The Dark Knight", year: 2008 });
+  assert.equal(req.url, `${FM_API}?tmdbId=155&mediaType=movie&title=The%20Dark%20Knight&year=2008&sub=vortex&audioPreference=sub`);
+  assert.equal(DR.buildDirectRequest(r.def, { title: "X" }), null, "an id is still needed");
+  assert.deepEqual(DR.apiServersFrom({ url: "https://a/api?id=1&sub=dub" }), null, "Sub/Dub isn't a server");
+});
+
+test("direct recipe: one Sources entry per API server, used for another movie and a TV episode", async () => {
+  for (const s of CS.listCustomServers()) await CS.deleteCustomServer(s.id);
+  clearDirectCache();
+  setDirectHttp(fmHttp);
+  const learned = DR.learnFromLog(fmLog, { stream: null, values: fmValues, kind: "movie" });
+  const s = await CS.saveCustomServer({
+    name: "fmfau",
+    sample: "https://fmfau.com/movie/27205",
+    templates: { movie: "https://fmfau.com/movie/{tmdb}", tv: "https://fmfau.com/tv/{tmdb}/{season}/{episode}" },
+    lists: { anime: false, movies: true, tv: true },
+    match: inception,
+    direct: { movie: { ...learned.def, source: "auto" } },
+  });
+  const stored = CS.listCustomServers().find((x) => x.id === s.id);
+  assert.deepEqual(stored.direct.movie.server.list, ["vortex", "nova", "zen"], "servers kept with the recipe");
+  const sources = CS.customPlayerSources().filter((x) => CS.baseCustomId(x.id) === s.id);
+  assert.deepEqual(sources.map((x) => x.label), ["fmfau", "fmfau · Vortex", "fmfau · Nova", "fmfau · Zen"]);
+
+  // A different movie (no IMDb id known): every server plays from the API, page last.
+  const movie = await CS.customCandidates({ type: "movie", tmdbId: 155, title: "The Dark Knight", year: 2008 });
+  assert.deepEqual(
+    movie.map((c) => c.url),
+    [
+      "https://cdn.fmfau.test/hls/movie/155/vortex/master.m3u8#sb-direct",
+      "https://cdn.fmfau.test/hls/movie/155/vortex/master.m3u8#sb-direct",
+      "https://cdn.fmfau.test/hls/movie/155/nova/master.m3u8#sb-direct",
+      "https://cdn.fmfau.test/hls/movie/155/zen/master.m3u8#sb-direct",
+      "https://fmfau.com/movie/155",
+    ],
+  );
+  assert.deepEqual(movie.slice(1, 4).map((c) => c.id), sources.slice(1).map((x) => x.id), "entries match the Sources ids");
+
+  // A TV episode: the movie recipe switched to TV, season/episode filled, page kept as fallback.
+  const tv = await CS.customCandidates({ type: "tv", tmdbId: 1399, tmdbSeason: 3, tmdbEpisode: 7, title: "Game of Thrones", year: 2011 });
+  assert.deepEqual(
+    tv.filter((c) => c.direct).map((c) => c.url),
+    ["vortex", "vortex", "nova", "zen"].map((x) => `https://cdn.fmfau.test/hls/tv/1399/s3e7/${x}/master.m3u8#sb-direct`),
+  );
+  assert.ok(tv.some((c) => c.url === "https://fmfau.com/tv/1399/3/7"), "page route still there");
+  assert.ok(fmCalls.some((u) => /mediaType=tv&.*season=3&episode=7/.test(u)));
+  setDirectHttp(null);
+  await CS.deleteCustomServer(s.id);
+});
+
+test("Test tries every API server, not only the first that works; each that plays is added", async () => {
+  for (const s of CS.listCustomServers()) await CS.deleteCustomServer(s.id);
+  clearDirectCache();
+  // 4 servers: vortex (the page's) works, nova works, zen answers with no stream, echo works.
+  const servers = [...FM_SERVERS, { id: "echo", name: "Echo" }];
+  const tried = [];
+  setDirectHttp(async (req) => {
+    const u = new URL(req.url);
+    tried.push(u.searchParams.get("sub"));
+    if (u.searchParams.get("sub") === "zen") return { status: 200, text: JSON.stringify({ title: "Inception", year: 2010, servers, sources: [] }), url: req.url };
+    const r = await fmHttp(req);
+    return { ...r, text: r.text.replace(/"servers":\[[^\]]*\]/, `"servers":${JSON.stringify(servers)}`) };
+  });
+  const log = { requests: [{ ...fmLog.requests[0], text: fmLog.requests[0].text.replace(/"servers":\[[^\]]*\]/, `"servers":${JSON.stringify(servers)}`) }] };
+  const s = await CS.saveCustomServer({
+    name: "fmfau",
+    sample: "https://fmfau.com/movie/27205",
+    templates: { movie: "https://fmfau.com/movie/{tmdb}" },
+    lists: { anime: false, movies: true, tv: false },
+    match: inception,
+  });
+  const link = { url: "https://fmfau.com/movie/27205", values: fmValues, want: { title: "Inception", year: 2010, kind: "movie" } };
+  const page = { stream: { ok: true, url: "https://cdn.fmfau.test/hls/movie/27205/vortex/master.m3u8", headers: {} }, learn: log };
+  // the native headless player, stubbed: every stream with a link opens
+  window.webkit = { messageHandlers: { sbServerTest: { postMessage: async (m) => (m.playable ? { ok: true } : { ok: false }) } } };
+  const d = await CS.directSteps(s, "movie", link, page);
+  delete window.webkit;
+  assert.ok(d.def, d.note);
+  assert.deepEqual(d.def.server.list, ["vortex", "nova", "zen", "echo"]);
+  for (const v of ["vortex", "nova", "zen", "echo"]) assert.ok(tried.includes(v), `${v} tried`);
+  assert.deepEqual(d.def.server.works, ["vortex", "nova", "echo"], "every working server kept, not just the first");
+  const apiSteps = d.steps.filter((x) => x.id.startsWith("api-"));
+  assert.deepEqual(apiSteps.map((x) => [x.label, !x.neutral]), [
+    ["API server: Vortex", true],
+    ["API server: Nova", true],
+    ["API server: Zen", false],
+    ["API server: Echo", true],
+  ], "each server's result in the Test list");
+  await CS.recordDirect(s.id, "movie", d.def, d.note);
+  const sources = CS.customPlayerSources().filter((x) => CS.baseCustomId(x.id) === s.id).map((x) => x.label);
+  assert.deepEqual(sources, ["fmfau", "fmfau · Vortex", "fmfau · Nova", "fmfau · Echo"], "working ones become Sources entries");
+  setDirectHttp(null);
+  await CS.deleteCustomServer(s.id);
+});

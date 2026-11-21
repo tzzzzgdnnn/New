@@ -13,8 +13,8 @@ import { storage, secureStorage } from "../../utils/storage";
 import { fetchImdbId, lastTmdbKey, tmdbFetch } from "../../utils/api";
 import { normalizeSiteServer, resolveSiteServer, siteAdderEnabled } from "./siteServers";
 import { buildUrl, deriveTemplate, hasDuplicateId, normalizeSlugStyle, originOf, siteDomain, templatePlaceholders, TEMPLATE_KINDS, validateTemplate } from "../../utils/customServers/template";
-import { DIRECT_METHODS, EXTRACT_TYPES, validateDirect, checkTitle } from "../../utils/customServers/direct";
-import { cachedResolve, directHttp, learnDirect, testDirect, DIRECT_TIMEOUT_MS } from "./customDirect";
+import { DIRECT_METHODS, EXTRACT_TYPES, validateDirect, checkTitle, deriveDirect, directServerVariant, apiServerLabel, MAX_API_SERVERS } from "../../utils/customServers/direct";
+import { cachedResolve, directHttp, learnDirect, testDirect, testApiServers, DIRECT_TIMEOUT_MS } from "./customDirect";
 import { resolveSite } from "../../utils/customServers/lookup";
 import { rememberScheme, schemeFields } from "../../utils/customServers/scheme";
 import { matchSample, withTimeout, LOOKUP_TIMEOUT_MS } from "../../utils/customServers/match";
@@ -206,8 +206,17 @@ export function normalizeDirect(d) {
     streamHeaders: plainHeaders(d.streamHeaders),
     source: d.source === "manual" ? "manual" : "auto",
     learnedAt: Number(d.learnedAt) || null,
+    ...(normalizeApiServer(d.server) ? { server: normalizeApiServer(d.server) } : {}),
   };
   return validateDirect(def) ? null : def;
+}
+
+/** The API's own servers saved with a recipe ({ param, current, list }), or null. */
+function normalizeApiServer(x) {
+  if (!x || typeof x.param !== "string" || typeof x.current !== "string" || !/^[\w.-]{1,32}$/.test(x.param)) return null;
+  const list = [...new Set([x.current, ...(Array.isArray(x.list) ? x.list : [])].filter((v) => typeof v === "string" && /^[\w.-]{1,32}$/.test(v)))].slice(0, MAX_API_SERVERS);
+  const works = Array.isArray(x.works) ? list.filter((v) => x.works.includes(v)) : null;
+  return { param: x.param, current: x.current, list, ...(works ? { works } : {}) };
 }
 
 // Only string headers, never Cookie or Authorization (nothing session-bound is kept).
@@ -229,7 +238,17 @@ function normalizeDirectMap(m) {
 }
 
 /** The direct definition a server uses for a kind of link (learned first, then hand-written). */
-export const directFor = (s, kind) => (s.mode === "page" ? null : s.direct?.[kind] || s.direct?.manual || null);
+export const directFor = (s, kind) =>
+  s.mode === "page"
+    ? null
+    : s.direct?.[kind] || s.direct?.manual || deriveDirect(s.direct?.[kind === "tv" ? "movie" : "tv"], kind === "tv" ? "movie" : "tv", kind) || null;
+
+/** The API's own servers a site's recipes offer, each its own Sources entry: [{ value, id, label }]. */
+export function apiServersOf(s) {
+  const seen = new Map();
+  for (const d of Object.values(s.direct || {})) for (const v of d?.server?.works || d?.server?.list || []) if (!seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v);
+  return [...seen.values()].map((value) => ({ value, id: siteServerId(s.id, `api-${value}`), label: `${s.name} · ${apiServerLabel(value)}` }));
+}
 
 /** Every saved custom server, in the order they were added. */
 export function listCustomServers() {
@@ -417,6 +436,7 @@ export function customPlayerSources() {
   return listCustomServers().flatMap((s) => [
     { s, id: s.id, label: s.name },
     ...workingSiteServers(s).map((x) => ({ s, id: siteServerId(s.id, x.label), label: `${s.name} · ${x.label}` })),
+    ...(s.mode === "page" ? [] : apiServersOf(s).map((x) => ({ s, id: x.id, label: x.label }))),
   ]).map(({ s, id, label }) => {
     const dubbable = !!s.templates.anime && templatePlaceholders(s.templates.anime).includes("lang");
     return {
@@ -608,9 +628,20 @@ export async function customCandidates(ctx, opts = {}) {
             return [];
           }
           if (r.ok) list.push({ id, label, url: `${r.stream}#sb-direct`, headers: def.streamHeaders, direct: true });
+          // Every server the site's API offers, its own entry: the same recipe with that server picked.
+          const suffix = dubbable ? `:${dubMode}` : "";
+          const extra = await Promise.all(
+            (def.server ? apiServersOf(s) : []).map(async (x) => {
+              const v = directServerVariant(def, x.value);
+              if (!v) return null;
+              const rv = await cachedResolve(`${s.id}:${x.value}:${url}`, v, values, want, { timeoutMs: directTimeoutMs });
+              return rv.ok ? { id: x.id + suffix, label: x.label, url: `${rv.stream}#sb-direct`, headers: def.streamHeaders, direct: true } : null;
+            }),
+          );
+          list.push(...extra.filter(Boolean));
         }
-        if (s.mode !== "direct" || !def) {
-          const learn = s.mode !== "page" && !def && Date.now() - (s.learnTried?.[kind] || 0) > LEARN_RETRY_MS;
+        if (s.mode !== "direct" || !def || def.derived) {
+          const learn = s.mode !== "page" && (!def || def.derived) && Date.now() - (s.learnTried?.[kind] || 0) > LEARN_RETRY_MS;
           if (learn) pendingLearn.set(url, { serverId: s.id, kind, values, want: wantFor(ctx, values, kind) });
           list.push({ ...candidateFor(s, url, { id, label }), ...(learn ? { learn: true } : {}) });
           // The site's own servers, each its own entry: same page, that server's button pressed.
@@ -640,7 +671,7 @@ export async function learnFromPlay(payload) {
   if (!job) return;
   pendingLearn.delete(payload.link);
   const s = listCustomServers().find((x) => x.id === job.serverId);
-  if (!s || directFor(s, job.kind)) return;
+  if (!s || (directFor(s, job.kind) && !directFor(s, job.kind).derived)) return;
   const r = await learnDirect({
     kind: job.kind,
     values: job.values,
@@ -951,7 +982,7 @@ export function pageSteps(r, { title, want, site, t0 = Date.now() }) {
  * Learn (or re-check) Direct mode for one kind after its page was tried.
  * @returns {Promise<{ steps, def, note }>}
  */
-export async function directSteps(server, kind, link, r) {
+export async function directSteps(server, kind, link, r, { signal = null } = {}) {
   const steps = [];
   let def = server.direct?.[kind] || null;
   let note = "";
@@ -988,6 +1019,22 @@ export async function directSteps(server, kind, link, r) {
       note = t.steps.find((x) => !x.ok)?.detail || "The API didn't work on a second try.";
       def = null;
     }
+  }
+  // Every server the API offers is tried (not only the first that works); each one that plays is its own Sources entry.
+  if (def?.server?.list?.length > 1) {
+    const tried = await testApiServers(def, link.values, link.want, { playable: nativePlayable, signal });
+    const before = def.server.works || [];
+    const works = tried.filter((x) => x.ok || (!x.tried && before.includes(x.value))).map((x) => x.value);
+    for (const x of tried) {
+      steps.push({
+        id: `api-${x.value}`,
+        ok: true,
+        neutral: !x.ok,
+        label: `API server: ${apiServerLabel(x.value)}`,
+        detail: x.ok ? "Works, added to your servers" : x.tried ? `Doesn't play, not added (${x.detail || "no stream"})` : before.includes(x.value) ? "Kept: worked before" : x.detail,
+      });
+    }
+    def = { ...def, server: { ...def.server, works } };
   }
   return { steps, def, note };
 }
@@ -1105,7 +1152,7 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
     if (works && r?.page?.taps?.length) tap = r.page.taps[r.page.taps.length - 1];
     for (const l of r?.page?.servers || []) if (!seenServers.includes(l)) seenServers.push(l);
     if (server.mode !== "page") {
-      const d = await directSteps(server, kind, link, r);
+      const d = await directSteps(server, kind, link, r, { signal });
       push(...d.steps);
       await recordDirect(server.id, kind, d.def, d.note);
     }

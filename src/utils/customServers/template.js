@@ -307,7 +307,8 @@ export function detectTemplate(sample, match) {
   // 4. Year, 5. Sub/Dub.
   if (match?.year) take(spansOf(tail, num(String(match.year)), "year"));
   if (kind === "anime" || /(?<![a-z])(sub|dub)(?![a-z])/i.test(tail)) {
-    take(spansOf(tail, /(?<![a-z])(?:sub|dub)(?![a-z])/gi, "lang"));
+    // never a query key (?sub=vortex picks a server, it isn't the language)
+    take(spansOf(tail, /(?<![a-z])(?:sub|dub)(?![a-z])(?!=)/gi, "lang"));
   }
   // 6. Season / episode by position: the plain numbers after the title id.
   if (kind !== "movie") {
