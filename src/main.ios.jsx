@@ -22,6 +22,22 @@ installDiagnostics();
 // Web app: browser stand-in for the app's native downloader (saved for
 // offline), installed before the app asks whether downloads are available.
 let webLaunch = Promise.resolve();
+// #19: a reload the app starts by itself (data restored, new version) happens
+// at most once per 10 minutes. A restore that did not stick (storage full)
+// or an update that kept arriving used to reload the page again and again,
+// and iPhone Safari ends a page that keeps reloading with "A problem
+// repeatedly occurred".
+function reloadOnce(key) {
+  try {
+    const last = Number(sessionStorage.getItem(key) || 0);
+    if (Date.now() - last < 10 * 60 * 1000) return false;
+    sessionStorage.setItem(key, String(Date.now()));
+  } catch {
+    return false; // can't record it: never risk a loop
+  }
+  location.reload();
+  return true;
+}
 if (import.meta.env.VITE_WEB) {
   document.documentElement.classList.add("sb-web");
   // A Home Screen launch first imports the data carried over from Safari
@@ -31,7 +47,7 @@ if (import.meta.env.VITE_WEB) {
   webLaunch = prepareWebLaunch()
     .catch((e) => console.warn("[web] launch prep failed", e))
     .then(() => keepData())
-    .then((restored) => restored && location.reload());
+    .then((restored) => restored && reloadOnce("sb_keep_reload"));
   if (import.meta.env.VITE_ANDROID) {
     document.documentElement.classList.add("sb-android");
     import("./platform/tv/tv.js").then((m) => m.installTV()).catch(() => {});
@@ -120,7 +136,7 @@ if (import.meta.env.VITE_WEB && !import.meta.env.VITE_ANDROID && "serviceWorker"
       const switchIfIdle = () => {
         if (pending && document.visibilityState === "visible" && idle()) {
           pending = false;
-          location.reload();
+          reloadOnce("sb_sw_reload");
         }
       };
       const hadController = !!navigator.serviceWorker.controller;

@@ -30,7 +30,12 @@ function snapshot() {
   return o;
 }
 let t = 0;
+let dirty = true; // something changed since the last copy
 async function backup() {
+  // #19: only when an app key changed (not on every hide / route change: a
+  // full copy of every key is read back and written again each time).
+  if (!dirty) return;
+  dirty = false;
   try {
     const s = snapshot();
     if (!Object.keys(s).length) return; // never overwrite a good copy with nothing
@@ -45,7 +50,7 @@ async function backup() {
     tx.put(s, KEY);
   } catch {}
 }
-const soon = () => { clearTimeout(t); t = setTimeout(backup, 800); };
+const soon = () => { dirty = true; clearTimeout(t); t = setTimeout(backup, 3000); };
 
 /** Resolves true when it restored data (caller reloads). */
 export async function keepData() {
