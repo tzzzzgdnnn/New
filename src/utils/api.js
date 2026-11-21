@@ -494,6 +494,25 @@ export const WEB_PLAYER_URLS = {
     tv: "https://player.cinezo.live/embed/tv/{tmdb}/{season}/{episode}",
   },
 };
+// Servers known to play the WRONG video for some titles (not a missing title,
+// which the player detects by itself): they are left out of Auto, the native
+// server menu and the server sheet for those titles, so Auto goes straight to
+// the next server. Cinezo maps the Zeus Network "Baddies" shows to other
+// episodes / other shows (seen on Baddies USA, West, South: The Reunion).
+const BADDIES_TMDB = [337395, 306499, 291017, 291018, 288715, 275096, 253092, 246811, 273647,
+  286264, 286261, 234927, 218537, 204410, 206457, 206329];
+export const TITLE_SERVER_BLOCKS = {
+  cinezo: { tv: new Set(BADDIES_TMDB), tvTitle: /\bbaddies\b/i, why: "plays the wrong episodes for this show" },
+};
+/** Why `sourceId` must not play this title (ctx: { type, tmdbId, title }), or null. */
+export const serverBlockedFor = (sourceId, ctx) => {
+  const id = String(sourceId || "").split(":")[0];
+  const b = TITLE_SERVER_BLOCKS[id];
+  if (!b || !ctx) return null;
+  if (ctx.type === "tv" && (b.tv?.has(Number(ctx.tmdbId)) || (b.tvTitle && b.tvTitle.test(String(ctx.title || ""))))) return b.why;
+  if (ctx.type === "movie" && b.movie?.has(Number(ctx.tmdbId))) return b.why;
+  return null;
+};
 export const WEB_UNFRAMEABLE = new Set(["aether", "7movies", "hexa", "vidnest"]);
 export const webEmbedRank = (id) => { const i = WEB_EMBED_ORDER.indexOf(id); return i < 0 ? WEB_EMBED_ORDER.length : i; };
 export const PLAYER_SOURCES = BROWSER_ONLY
