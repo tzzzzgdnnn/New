@@ -1550,10 +1550,17 @@ final class PaddedLabel: UILabel {
 // NetPill.hideAfter (Android's 2.5 s controller timeout); a tap on the video
 // brings it back (the PlayerTap rules).
 
-final class NetPillLabel: PaddedLabel {
+final class NetPillLabel: UILabel {
+    private let insets = UIEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
+
+    override func drawText(in rect: CGRect) { super.drawText(in: rect.inset(by: insets)) }
+    override var intrinsicContentSize: CGSize {
+        let s = super.intrinsicContentSize
+        return CGSize(width: s.width + insets.left + insets.right, height: s.height + insets.top + insets.bottom)
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
-        insets = UIEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
         font = .systemFont(ofSize: 13, weight: .medium)
         textColor = .white
         backgroundColor = UIColor(white: 0, alpha: 0x99 / 255.0)
