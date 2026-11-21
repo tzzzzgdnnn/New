@@ -190,8 +190,7 @@ test("web: embed hidden until ready; Vidfast status 404 skips at once, never sho
   const wv = await mount("https://vidfast.vc/tv/306499/1/1");
   const iframe = wv.querySelector("iframe");
   const card = wv.querySelector(".sb-native-card");
-  assert.equal(iframe.style.visibility, "hidden", "hidden while loading");
-  assert.equal(card.style.display, "flex");
+  assert.equal(card.style.display, "flex", "our card covers the embed while it loads");
   assert.match(card.textContent, /Finding the stream/);
   const picks = [];
   const onPick = (e) => picks.push(e.detail);
@@ -210,7 +209,6 @@ test("web: a ready message reveals the embed; a hand-picked server that 404s sho
   let wv = await mount("https://player.cinezo.live/embed/tv/306499/1/1");
   let iframe = wv.querySelector("iframe");
   win.dispatchEvent(new win.MessageEvent("message", { data: { type: "MEDIA_DATA", data: { id: 306499 } }, source: iframe.contentWindow }));
-  assert.equal(iframe.style.visibility, "", "revealed");
   assert.equal(wv.querySelector(".sb-native-card").style.display, "none");
   await unmount(wv);
   localStorage.setItem("streambert_serverAutoPick", "false");

@@ -499,7 +499,8 @@ function upgrade(wv) {
     if (!GATE) return;
     embedReady = false;
     clearTimeout(readyTimer);
-    iframe.style.visibility = "hidden";
+    // Covered by our own card (on top of it), not hidden: a hidden frame is
+    // treated as off screen by WebKit and players wait to start.
     showCard("Finding the stream…", false);
     readyTimer = setTimeout(() => embedFailed("it didn't load"), EMBED_READY_MS);
   };
@@ -507,7 +508,6 @@ function upgrade(wv) {
     if (embedReady || isBlank(iframe.src)) return;
     embedReady = true;
     clearTimeout(readyTimer);
-    iframe.style.visibility = "";
     hideCard();
   };
   const embedFailed = (why) => {
