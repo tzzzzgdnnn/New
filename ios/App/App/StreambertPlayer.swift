@@ -136,7 +136,12 @@ enum SniffScript {
     /// `learn`: custom servers' Test and first play also report the page's
     /// fetch / XHR calls with their answers, and its scripts, so the site's
     /// stream API can be learned (Direct mode). Cookies are never read.
-    static func source(subframesOnly: Bool, nudge: Bool, learn: Bool = false, tap: String? = nil, tapOnly: Bool = false) -> String {
+    /// `mixed`: the hidden custom-server page also reports what an https page
+    /// tried to load over plain http (iframes, scripts, API calls), which
+    /// WebKit blocks as mixed content; StreamSniffer then opens that frame, or
+    /// the page itself, over http. Off for the app's own web view.
+    static func source(subframesOnly: Bool, nudge: Bool, learn: Bool = false, tap: String? = nil, tapOnly: Bool = false,
+                       mixed: Bool = false) -> String {
         let tapJS = tap.flatMap { t -> String? in
             guard let d = try? JSONSerialization.data(withJSONObject: [t]), let a = String(data: d, encoding: .utf8) else { return nil }
             return a
@@ -154,6 +159,29 @@ enum SniffScript {
           var H = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.sbMedia;
           if (!H) return;
           var L = \(learn ? "true" : "false");
+          var MX = \(mixed ? "true" : "false");
+          // Mixed content: http loads an https page can't make (WebKit blocks them; home-network hosts are allowed).
+          var mixedSeen = {};
+          function mixedLocal(h) { return /^(localhost|127\\.|10\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[01])\\.|169\\.254\\.)/.test(h) || /\\.(local|lan|home)$/.test(h) || h.indexOf('.') < 0; }
+          function mixed(what, u) {
+            if (!MX || location.protocol !== 'https:' || !u) return;
+            try {
+              var a = new URL(String(u), location.href);
+              if (a.protocol !== 'http:' || mixedLocal(a.hostname) || mixedSeen[a.href]) return;
+              mixedSeen[a.href] = 1;
+              H.postMessage({ kind: 'mixed', what: what, url: a.href, page: location.href, top: window.top === window });
+            } catch (e) {}
+          }
+          if (MX && location.protocol === 'https:') {
+            var mixedScans = 0;
+            var mixedIv = setInterval(function () {
+              try {
+                document.querySelectorAll('iframe[src],frame[src]').forEach(function (f) { mixed('frame', f.getAttribute('src')); });
+                document.querySelectorAll('script[src]').forEach(function (sc) { mixed('script', sc.getAttribute('src')); });
+              } catch (e) {}
+              if (++mixedScans > 30) clearInterval(mixedIv);
+            }, 700);
+          }
           var LT = \(learnTextLimit), LS = \(learnScriptLimit);
           function learnPost(o) { if (!L) return; try { o.kind = o.kind || 'api'; o.page = location.href; H.postMessage(o); } catch (e) {} }
           function hdrs(h) {
@@ -251,7 +279,7 @@ enum SniffScript {
           var of = window.fetch;
           if (of) window.fetch = function (i, init) {
             var u = typeof i === 'string' ? i : (i && i.url);
-            rep(u);
+            rep(u); mixed('fetch', u);
             var meta = null;
             if (L) {
               try {
@@ -291,7 +319,7 @@ enum SniffScript {
             };
           }
           XMLHttpRequest.prototype.open = function (m, u) {
-            var x = this; rep(u);
+            var x = this; rep(u); mixed('fetch', u);
             try { x.__sbM = String(m || 'GET').toUpperCase(); } catch (e) {}
             try {
               x.addEventListener('load', function () {
@@ -539,6 +567,11 @@ struct SniffCandidate {
     var tap: String? = nil
     /// Press only `tap` among the site's server buttons (one site server picked in the menu).
     var tapOnly = false
+    /// Custom servers, http <-> https fallback: the link to open first (when not
+    /// `url`) and the one to open when that can't be reached. `url` stays the
+    /// link's name in caches and the learn log.
+    var loadUrl: URL? = nil
+    var altUrl: URL? = nil
 
     /// A candidate from the JS bridge ({ id, label, url, lockHost?, timeoutMs?, cache?, referer?, headers?, learn? }).
     static func from(_ d: [String: Any]) -> SniffCandidate? {
@@ -551,7 +584,16 @@ struct SniffCandidate {
                               headers: (d["headers"] as? [String: String]) ?? [:],
                               learn: (d["learn"] as? Bool) ?? false,
                               tap: (d["tap"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(60)) },
-                              tapOnly: (d["tapOnly"] as? Bool) ?? false)
+                              tapOnly: (d["tapOnly"] as? Bool) ?? false,
+                              loadUrl: (d["loadUrl"] as? String).flatMap { URL(string: $0) },
+                              altUrl: (d["altUrl"] as? String).flatMap { URL(string: $0) })
+    }
+
+    /// The links to open, in order: the scheme that worked this session first.
+    var loadOrder: [URL] {
+        let first = loadUrl ?? url
+        guard let alt = altUrl, alt != first else { return [first] }
+        return SchemeMemory.prefers(alt) && !SchemeMemory.prefers(first) ? [alt, first] : [first, alt]
     }
 
     /// Whether `host` is the locked site or one of its subdomains.
@@ -580,6 +622,47 @@ struct SniffReport {
     var taps: [String] = []
     /// The site's own server list (buttons / tabs) seen on the page.
     var siteServers: [String] = []
+    /// The page as it finally loaded (after redirects and any http <-> https fallback).
+    var loadedUrl: URL?
+    /// What the fallback did ("https didn't answer; opened it over http").
+    var fallback: String?
+    /// http loads the https page made that WebKit blocks (mixed content).
+    var mixedBlocked = 0
+}
+
+/// Which scheme each custom site's host answered on this session (host[:port]).
+enum SchemeMemory {
+    private static var worked: [String: String] = [:]
+    private static func key(_ u: URL) -> String? {
+        guard let h = u.host?.lowercased(), !h.isEmpty else { return nil }
+        return h + (u.port.map { ":\($0)" } ?? "")
+    }
+    static func remember(_ u: URL?) {
+        guard let u = u, let s = u.scheme?.lowercased(), s == "http" || s == "https", let k = key(u) else { return }
+        worked[k] = s
+    }
+    static func prefers(_ u: URL) -> Bool {
+        guard let k = key(u) else { return false }
+        return worked[k] == u.scheme?.lowercased()
+    }
+    /// Connection / TLS / ATS failures worth retrying on the other scheme.
+    static func isSchemeFailure(_ e: NSError) -> Bool {
+        guard e.domain == NSURLErrorDomain else { return false }
+        return [NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateHasBadDate,
+                NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasUnknownRoot,
+                NSURLErrorServerCertificateNotYetValid, NSURLErrorClientCertificateRejected,
+                NSURLErrorClientCertificateRequired, NSURLErrorCannotConnectToHost,
+                NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut, NSURLErrorBadServerResponse,
+                NSURLErrorCannotParseResponse, NSURLErrorZeroByteResource,
+                NSURLErrorAppTransportSecurityRequiresSecureConnection].contains(e.code)
+    }
+    static func flipped(_ u: URL) -> URL? {
+        guard var c = URLComponents(url: u, resolvingAgainstBaseURL: false), let s = c.scheme?.lowercased() else { return nil }
+        if s == "https" { c.scheme = "http"; if c.port == 443 { c.port = nil } }
+        else if s == "http" { c.scheme = "https"; if c.port == 80 { c.port = nil } }
+        else { return nil }
+        return c.url
+    }
 }
 
 /// A subtitle file seen on an embed page, with the page's label if it had one.
@@ -621,6 +704,15 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         var learnScripts: [[String: Any]] = []
         var timeout: Timer?
         var settle: Timer?
+        /// http <-> https fallback: links still to open after the current one.
+        var pendingLoads: [URL] = []
+        /// Mixed content: http frames the https page couldn't open, and hosts
+        /// opened on purpose (allowed past the site lock).
+        var mixedFrames: [URL] = []
+        var mixedTimer: Timer?
+        var framesFollowed = 0
+        var pageSwitchedToHTTP = false
+        var allowedHosts = Set<String>()
         init(index: Int, webView: WKWebView) { self.index = index; self.webView = webView }
     }
 
@@ -699,7 +791,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     }
 
     private func drop(_ slot: Slot) {
-        slot.timeout?.invalidate(); slot.settle?.invalidate()
+        slot.timeout?.invalidate(); slot.settle?.invalidate(); slot.mixedTimer?.invalidate()
         let wv = slot.webView
         wv.stopLoading()
         wv.configuration.userContentController.removeScriptMessageHandler(forName: "sbMedia")
@@ -774,7 +866,10 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         cfg.allowsPictureInPictureMediaPlayback = false
         cfg.preferences.javaScriptCanOpenWindowsAutomatically = false
         let ucc = WKUserContentController()
-        ucc.addUserScript(WKUserScript(source: SniffScript.source(subframesOnly: false, nudge: true, learn: c.learn, tap: c.tap, tapOnly: c.tapOnly),
+        // Plain-http custom sites: keep http as asked (fallbacks are ours), and report blocked mixed content.
+        if #available(iOS 14.5, *) { cfg.upgradeKnownHostsToHTTPS = false }
+        ucc.addUserScript(WKUserScript(source: SniffScript.source(subframesOnly: false, nudge: true, learn: c.learn, tap: c.tap, tapOnly: c.tapOnly,
+                                                                  mixed: c.lockHost != nil),
                                        injectionTime: .atDocumentStart, forMainFrameOnly: false))
         ucc.add(WeakHandler(self), name: "sbMedia")
         if c.lockHost != nil {
@@ -797,7 +892,10 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         container.insertSubview(wv, at: 0)
         let slot = Slot(index: i, webView: wv)
         slots[i] = slot
-        wv.load(URLRequest(url: c.url))
+        let order = c.loadOrder
+        slot.pendingLoads = Array(order.dropFirst())
+        // With a fallback waiting, a dead scheme gives up after 8 s instead of WebKit's 60.
+        wv.load(URLRequest(url: order[0], cachePolicy: .useProtocolCachePolicy, timeoutInterval: order.count > 1 ? 8 : 60))
         let limit = c.timeout ?? Self.perServerTimeout
         slot.timeout = Timer.scheduledTimer(withTimeInterval: limit, repeats: false) { [weak self, weak slot] _ in
             guard let self = self, let slot = slot, self.slots[slot.index] === slot else { return }
@@ -842,6 +940,9 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
                 r.siteServers.append(String(l.prefix(60)))
             }
             reports[slot.index] = r
+            return
+        case "mixed":
+            noteMixed(slot, b)
             return
         case "wall":
             var r = reports[slot.index, default: SniffReport()]
@@ -993,7 +1094,7 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             let host = navigationAction.request.url?.host
             let toMain = navigationAction.targetFrame == nil || navigationAction.targetFrame?.isMainFrame == true
             if cand.lockHost != nil, toMain, navigationAction.request.url?.scheme?.hasPrefix("http") == true,
-               !cand.allows(host: host) {
+               !cand.allows(host: host), !slot.allowedHosts.contains(host?.lowercased() ?? "") {
                 sbLog("blocked redirect from \(cand.id) to \(host ?? "?")")
                 reports[slot.index, default: SniffReport()].redirectsBlocked.append(host ?? "?")
                 decisionHandler(.cancel); return
@@ -1013,6 +1114,11 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         if navigationResponse.isForMainFrame, let slot = slot(for: webView),
            let http = navigationResponse.response as? HTTPURLResponse {
+            // nginx & co: "plain HTTP request was sent to HTTPS port" -> open it over https.
+            if [400, 426, 497].contains(http.statusCode), http.url?.scheme?.lowercased() == "http",
+               tryNextScheme(slot, because: "HTTP \(http.statusCode) on http") {
+                decisionHandler(.cancel); return
+            }
             reports[slot.index, default: SniffReport()].pageStatus = http.statusCode
             // Cloudflare marks its challenge pages; a 403/503 from it is one too.
             let server = (http.value(forHTTPHeaderField: "Server") ?? "").lowercased()
@@ -1030,6 +1136,9 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         guard let slot = slot(for: webView), reports[slot.index]?.pageLoadedAfter == nil else { return }
         reports[slot.index, default: SniffReport()].pageLoadedAfter =
             Date().timeIntervalSince(launchedAt[slot.index] ?? startedAt)
+        reports[slot.index, default: SniffReport()].loadedUrl = webView.url
+        SchemeMemory.remember(webView.url)
+        slot.pendingLoads = []
         let index = slot.index
         webView.evaluateJavaScript("document.title") { [weak self] value, error in
             guard let self = self else { return }
@@ -1058,8 +1167,66 @@ final class StreamSniffer: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             || (e.domain == "WebKitErrorDomain" && e.code == SiteGuard.frameLoadInterruptedCode)
         guard !selfInflicted, let slot = slot(for: webView),
               reports[slot.index]?.pageLoadedAfter == nil, reports[slot.index]?.pageError == nil else { return }
+        if SchemeMemory.isSchemeFailure(e), slot.streams.isEmpty,
+           tryNextScheme(slot, because: e.localizedDescription) { return }
         reports[slot.index, default: SniffReport()].pageError = e.localizedDescription
         sbLog("page failed for \(candidates[slot.index].id): \(e.localizedDescription)")
+    }
+}
+
+extension StreamSniffer {
+    /// Open the slot's next link (the other scheme). False when none is left.
+    private func tryNextScheme(_ slot: Slot, because why: String) -> Bool {
+        guard running, slots[slot.index] === slot, !slot.pendingLoads.isEmpty else { return false }
+        let next = slot.pendingLoads.removeFirst()
+        let from = slot.webView.url?.scheme ?? (next.scheme == "http" ? "https" : "http")
+        let note = "\(from) didn't answer (\(why)); opened it over \(next.scheme ?? "?")"
+        reports[slot.index, default: SniffReport()].fallback = note
+        sbLog("scheme fallback for \(candidates[slot.index].id): \(note) -> \(next.absoluteString)")
+        slot.webView.load(URLRequest(url: next, cachePolicy: .useProtocolCachePolicy,
+                                     timeoutInterval: slot.pendingLoads.isEmpty ? 60 : 8))
+        return true
+    }
+
+    /// The https page tried to load something over plain http (blocked by
+    /// WebKit). If no stream shows up soon: open the blocked player frame on
+    /// its own (top level, where http is allowed), else the page over http.
+    private func noteMixed(_ slot: Slot, _ b: [String: Any]) {
+        guard let s = b["url"] as? String, let u = URL(string: s) else { return }
+        reports[slot.index, default: SniffReport()].mixedBlocked += 1
+        if (b["what"] as? String) == "frame", !slot.mixedFrames.contains(u), slot.mixedFrames.count < 4 {
+            slot.mixedFrames.append(u)
+        }
+        guard running, slots[slot.index] === slot, slot.mixedTimer == nil else { return }
+        slot.mixedTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self, weak slot] _ in
+            guard let self = self, let slot = slot else { return }
+            slot.mixedTimer = nil
+            self.followMixed(slot)
+        }
+    }
+
+    private func followMixed(_ slot: Slot) {
+        guard running, slots[slot.index] === slot, slot.streams.isEmpty else { return }
+        let wv = slot.webView
+        if slot.framesFollowed < 2, !slot.mixedFrames.isEmpty {
+            let frame = slot.mixedFrames.removeFirst()
+            slot.framesFollowed += 1
+            if let h = frame.host?.lowercased() { slot.allowedHosts.insert(h) }
+            var req = URLRequest(url: frame)
+            if let page = wv.url, page.scheme?.hasPrefix("http") == true {
+                req.setValue(page.absoluteString, forHTTPHeaderField: "Referer")
+            }
+            reports[slot.index, default: SniffReport()].fallback = "the page's player is on http (blocked inside https); opened it directly"
+            sbLog("mixed content on \(candidates[slot.index].id): following http frame \(frame.absoluteString)")
+            wv.load(req)
+            return
+        }
+        guard !slot.pageSwitchedToHTTP, let page = wv.url, page.scheme == "https",
+              let http = SchemeMemory.flipped(page) else { return }
+        slot.pageSwitchedToHTTP = true
+        reports[slot.index, default: SniffReport()].fallback = "the https page loads parts over http (blocked); opened it over http"
+        sbLog("mixed content on \(candidates[slot.index].id): reloading over http \(http.absoluteString)")
+        wv.load(URLRequest(url: http))
     }
 }
 

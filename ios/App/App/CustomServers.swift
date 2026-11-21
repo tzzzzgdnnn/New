@@ -266,6 +266,10 @@ final class ServerTestMessageHandler: NSObject, WKScriptMessageHandlerWithReply 
         if let h = rep.humanCheck { page["humanCheck"] = h }
         if !rep.taps.isEmpty { page["taps"] = rep.taps }
         if !rep.siteServers.isEmpty { page["servers"] = rep.siteServers }
+        // http <-> https: where the page really loaded, and what the fallback did.
+        if let u = rep.loadedUrl { page["url"] = u.absoluteString }
+        if let f = rep.fallback { page["fallback"] = f }
+        if rep.mixedBlocked > 0 { page["mixedBlocked"] = rep.mixedBlocked }
         let statusOK = rep.pageStatus.map { $0 < 400 } ?? true
         page["ok"] = statusOK && rep.pageError == nil && (rep.pageLoadedAfter != nil || streamFound)
             || streamFound
