@@ -20,6 +20,7 @@ import {
   saveCustomServer,
   saveProblem,
   testServer,
+  withVerified,
 } from "../customServers";
 import { smartAdd, SMART_STEPS } from "../customSmartAdd";
 import { isLocalAddress, originOf, validateTemplate } from "../../../utils/customServers/template";
@@ -344,7 +345,14 @@ function ServerEditor({ apiKey, server, autoTest, onSaved, onClose }) {
           </p>
         )}
 
-        {!isNew && <TestPanel server={server} autoStart={autoTest} />}
+        {!isNew && (
+          <TestPanel
+            server={server}
+            autoStart={autoTest}
+            // The Test turned verified lists on in storage: the open sheet shows it too (a Save keeps it).
+            onVerified={(kinds) => kinds.length && setDraft((d) => ({ ...d, ...withVerified(d, kinds) }))}
+          />
+        )}
 
         {!isNew && (
           <Group>
@@ -612,7 +620,7 @@ function TemplatesGroup({ draft, setDraft, apiKey }) {
 
 // ── Test ──────────────────────────────────────────────────────────────────
 
-function TestPanel({ server, autoStart }) {
+function TestPanel({ server, autoStart, onVerified }) {
   const [state, setState] = useState(null); // { running, kinds, result }
   const started = useRef(false);
   const stop = useRef(null);
@@ -634,7 +642,8 @@ function TestPanel({ server, autoStart }) {
     });
     setState({ running: false, kinds: Object.fromEntries(result.kinds.map((k) => [k.kind, k.steps])), result });
     await recordTestResult(server.id, result);
-  }, [server]);
+    onVerified?.(result.verified || []);
+  }, [server, onVerified]);
   useEffect(() => {
     if (autoStart && !started.current) {
       started.current = true;

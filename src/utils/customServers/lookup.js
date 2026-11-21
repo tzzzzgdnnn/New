@@ -25,6 +25,10 @@ export const SEARCH_PATTERNS = Object.freeze([
   "/filter?keyword={query}",
 ]);
 
+// The title as written, then as plain words ("Avengers: Endgame" ->
+// "avengers endgame") for site searches that miss on punctuation.
+const queries = (title) => [...new Set([String(title || ""), titleWords(title).join(" ")])].filter(Boolean);
+
 /** The search link for a title. */
 export const searchUrl = (pattern, { query, type }) =>
   pattern.replace("{query}", encodeURIComponent(query)).replace("{type}", type === "tv" ? "tv" : "movie");
@@ -43,13 +47,16 @@ export async function learnLookup({ origin, kind, title, siteSegment, http, extr
   const want = siteSegment.toLowerCase();
   const hits = await Promise.all(
     uniq.map(async (p) => {
-      try {
-        const r = await http(searchUrl(p, { query: title, type: kind }));
-        const text = typeof r?.text === "string" ? r.text.toLowerCase() : "";
-        return r?.status < 400 && text.includes(want) ? p : null;
-      } catch {
-        return null;
+      for (const query of queries(title)) {
+        try {
+          const r = await http(searchUrl(p, { query, type: kind }));
+          const text = typeof r?.text === "string" ? r.text.toLowerCase() : "";
+          if (r?.status < 400 && text.includes(want)) return p;
+        } catch {
+          /* next query */
+        }
       }
+      return null;
     }),
   );
   const url = hits.find(Boolean);
@@ -85,11 +92,14 @@ export function pickSegment(text, { title, year }) {
 /** Find a title's {site} value through the learned search. */
 export async function resolveSite(lookup, { title, year, kind, http }) {
   if (!lookup?.url || !title) return null;
-  try {
-    const r = await http(searchUrl(lookup.url, { query: title, type: kind || lookup.type }));
-    if (!r || r.status >= 400) return null;
-    return pickSegment(r.text, { title, year });
-  } catch {
-    return null;
+  for (const query of queries(title)) {
+    try {
+      const r = await http(searchUrl(lookup.url, { query, type: kind || lookup.type }));
+      const seg = r && r.status < 400 ? pickSegment(r.text, { title, year }) : null;
+      if (seg) return seg;
+    } catch {
+      /* next query */
+    }
   }
+  return null;
 }

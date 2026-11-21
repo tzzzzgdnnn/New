@@ -463,3 +463,112 @@ test("iPhone site connector: carry-over only from non-challenge pages; site serv
   delete window.webkit;
   assert.equal(SS.canAddSites(), false);
 });
+
+// ── Issue #27: bingebang / flystream / movy (offline fixtures, scripts/site-corpus) ──
+
+const { smartAdd, builtInFor } = await import("../src/platform/ios/customSmartAdd.js");
+const fs27 = await import("node:fs");
+const corpus = (dir, extra = {}) => {
+  const base = `${process.cwd()}/scripts/site-corpus/fixtures/${dir}/`;
+  const routes = { ...JSON.parse(fs27.readFileSync(base + "routes.json", "utf8")), ...extra };
+  const seen = [];
+  const http = async (url) => {
+    seen.push(url);
+    const u = new URL(url);
+    const key = u.pathname + u.search;
+    const r = routes[`${u.protocol}${key}`] || routes[key] || routes[key.toLowerCase()];
+    if (!r) return { status: 404, text: "" };
+    return { status: r.status, text: r.text ?? fs27.readFileSync(base + r.file, "utf8"), url };
+  };
+  return { http, seen };
+};
+const FG = { id: 1434, name: "Family Guy", first_air_date: "1999-01-31" };
+const EG = { id: 299534, title: "Avengers: Endgame", release_date: "2019-04-24" };
+const tmdb27 = (calls) => async (path) => {
+  calls.push(path);
+  const k = path.split("?")[0];
+  const q = decodeURIComponent((/query=([^&]*)/.exec(path) || [])[1] || "").toLowerCase();
+  const ids = {
+    "/tv/1": { id: 1, name: "Pride", first_air_date: "2004-04-13" },
+    "/movie/1": { id: 1, title: "Pride", release_date: "2004-01-01" },
+    "/tv/1434": FG,
+    "/tv/1399": { id: 1399, name: "Game of Thrones", first_air_date: "2011-04-17" },
+    "/movie/27205": { id: 27205, title: "Inception", release_date: "2010-07-15" },
+  };
+  if (ids[k]) return ids[k];
+  if (k.startsWith("/search/")) {
+    if (q.startsWith("family guy")) return { results: [{ media_type: "tv", ...FG }] };
+    if (q.startsWith("avengers")) return { results: [{ media_type: "movie", ...EG }] };
+    return { results: [] };
+  }
+  const e = new Error("404 not found");
+  e.status = 404;
+  throw e;
+};
+const add27 = async (link, site) => {
+  const calls = [];
+  const tmdb = tmdb27(calls);
+  const analyze = (url, prefer) =>
+    matchSample(url, { tmdb, anilist: async () => ({}), prefer, timeoutMs: 2000 }).then((r) => (r.ok ? { ...r, templates: { [r.detected.kind]: r.detected.template } } : r));
+  const r = await smartAdd(link, { deps: { http: site.http, siteHttp: site.http, analyze, native: false } });
+  return { r, calls };
+};
+
+test("#27 bingebang: Family Guy 1/1 is {site}/{season}/{episode}, never Pride or {tmdb}", async () => {
+  const { r, calls } = await add27("https://bingebang.sx/tv/play/family-guy-y6bs3k/1/1", corpus("bingebang"));
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.draft.match.title, "Family Guy");
+  assert.equal(r.draft.templates.tv, "https://bingebang.sx/tv/play/{site}/{season}/{episode}");
+  assert.ok(!Object.values(r.draft.templates).some((t) => t.includes("{tmdb}")));
+  assert.ok(!calls.includes("/tv/1") && !calls.includes("/movie/1"), "1/1 is never looked up as an id");
+  assert.equal(r.draft.lists.tv, true);
+});
+
+test("#27 bingebang: Avengers: Endgame matches, site search found with plain words", async () => {
+  const site = corpus("bingebang");
+  const { r } = await add27("https://bingebang.sx/movie/play/avengers-endgame-2019-5iu40l", site);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.draft.match.ids.tmdb, 299534);
+  assert.equal(r.draft.templates.movie, "https://bingebang.sx/movie/play/{site}");
+  assert.ok(site.seen.some((u) => u.endsWith("/api/search/movie?query=avengers%20endgame&page=1")), "no colon in the search");
+  // Its play page is a human check: its title is never matched as a film.
+  assert.ok(CS.CHECK_PAGE_TITLE.test("Quick check · BingeBang"));
+  assert.ok(!CS.CHECK_PAGE_TITLE.test("Avengers: Endgame (2019)"));
+});
+
+test("#27 flystream: a verified TV link turns TV on in storage and in the open sheet, and Save keeps it", async () => {
+  for (const s of CS.listCustomServers()) await CS.deleteCustomServer(s.id);
+  const draft = {
+    name: "Flystream",
+    sample: "https://flystream.net/movie/27205",
+    templates: { movie: "https://flystream.net/movie/{tmdb}", tv: "https://flystream.net/tv/{tmdb}/{season}/{episode}" },
+    guessed: { tv: true },
+    lists: { anime: false, movies: true, tv: false },
+    match: { kind: "movie", ids: { tmdb: 27205 }, title: "Inception", year: 2010 },
+  };
+  const s = await CS.saveCustomServer(draft);
+  await CS.recordRecipe(s.id, { verified: ["movie", "tv"] });
+  const stored = CS.listCustomServers().find((x) => x.id === s.id);
+  assert.equal(stored.lists.tv, true);
+  assert.ok(!stored.guessed?.tv);
+  // The sheet's copy (what the TV switch shows and what Save writes back).
+  const sheet = { ...s, ...CS.withVerified(s, ["movie", "tv"]) };
+  assert.deepEqual(sheet.lists, { anime: false, movies: true, tv: true });
+  const saved = await CS.saveCustomServer(sheet);
+  assert.equal(saved.lists.tv, true);
+  assert.ok(CS.serverFits(saved, { isAnime: false, type: "tv" }));
+  assert.deepEqual(CS.withVerified(s, []).lists, s.lists, "nothing verified changes nothing");
+  await CS.deleteCustomServer(s.id);
+});
+
+test("#27 movy.sx: https first, TV names {season}/{episode}, already built in as Movy", async () => {
+  const site = corpus("movy", { "https:/": { status: 200, text: "<html><title>Movy</title></html>" } });
+  const { r } = await add27("http://movy.sx/tv/1399", site);
+  assert.equal(r.ok, true, r.error);
+  assert.ok(site.seen[0].startsWith("https://movy.sx/"), "https is tried first");
+  for (const t of Object.values(r.draft.templates)) assert.ok(t.startsWith("https://movy.sx/"), t);
+  assert.equal(r.draft.templates.tv, "https://movy.sx/tv/{tmdb}/{season}/{episode}");
+  assert.deepEqual(r.builtIn, { id: "movy-direct", label: "Movy" });
+  assert.deepEqual(builtInFor("https://www.movy.sx/movie/27205"), { id: "movy-direct", label: "Movy" });
+  assert.equal(builtInFor("https://flystream.net/movie/27205"), null);
+});

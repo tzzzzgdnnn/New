@@ -296,12 +296,19 @@ export async function recordRecipe(id, { tap, siteServers, verified = [] } = {})
   if (!s) return;
   if (tap !== undefined) s.tap = tap || null;
   if (siteServers) s.siteServers = normalizeSiteServers(siteServers);
-  // A link that passed its Test is Verified, and its list turns on by itself.
-  for (const k of verified) {
-    if (s.guessed) delete s.guessed[k];
-    s.lists = { ...s.lists, [k === "movie" ? "movies" : k]: true };
-  }
+  Object.assign(s, withVerified(s, verified));
   await writeAll(list);
+}
+
+/** A link that passed its Test is Verified, and its list turns on by itself: the new { lists, guessed }. */
+export function withVerified(s, verified = []) {
+  const guessed = { ...s.guessed };
+  const lists = { ...s.lists };
+  for (const k of verified) {
+    delete guessed[k];
+    lists[k === "movie" ? "movies" : k] = true;
+  }
+  return { lists, guessed };
 }
 
 /**
@@ -688,6 +695,8 @@ export async function analyzeSample(sample, { apiKey = lastTmdbKey(), prefer = n
   if (!res.ok && canTestNatively()) {
     const pageTitle = await directHttp({ url: sample, timeoutMs: 6000 })
       .then((r) => (r?.status < 400 ? titleFromHtml(r.text) : null))
+      // A bot / human check page ("Quick check · BingeBang") names no title.
+      .then((t) => (t && !CHECK_PAGE_TITLE.test(t) ? t : null))
       .catch(() => null);
     if (pageTitle) {
       const again = await matchSample(sample, { tmdb, anilist, prefer, timeoutMs: LOOKUP_TIMEOUT_MS, pageTitle });
@@ -708,6 +717,8 @@ export async function analyzeSample(sample, { apiKey = lastTmdbKey(), prefer = n
   }
   return { ...res, templates, guessed };
 }
+
+export const CHECK_PAGE_TITLE = /^\s*(quick check|just a moment|attention required|checking your browser|security check|verify you are human|ddos-guard)\b/i;
 
 /** A page's own name for its title: og:title, then JSON-LD "name", then <title>. */
 export function titleFromHtml(html) {
@@ -1111,7 +1122,7 @@ async function testServerRun(server, { onStep, retest, signal, nativeTry, waitMs
     : working.length
       ? `Works for ${working.join(", ")}`
       : results.flatMap((k) => k.steps).find((s) => !s.ok)?.detail || "Not working") + (nServers ? ` · ${nServers} site server${nServers === 1 ? "" : "s"}` : "");
-  return { ok, kinds: results, summary, playable, tap, siteServers };
+  return { ok, kinds: results, summary, playable, tap, siteServers, verified };
 }
 
 /** The extra titles a kind is checked with (links built from the server's template). */
