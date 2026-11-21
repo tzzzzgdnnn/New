@@ -294,4 +294,45 @@ check("skip pill: a real opening shows only while inside it, and goes away after
         && SkipPill.visible([opIv], at: 50, jumpShownAt: nil) == nil
 }
 
+check("net pill: wording matches Android exactly") {
+    NetPill.text(bps: 25_400_000, height: 1080, videoBps: 4_200_000) == "● 25.4 Mbps  ·  1080p · 4.2 Mbps video"
+        && NetPill.text(bps: 0, height: 0, videoBps: 0) == "○ 0.0 Mbps  ·  —"
+        && NetPill.text(bps: 31_000_000, height: 2160, videoBps: 0) == "● 31.0 Mbps  ·  4K"
+        && NetPill.connectingText == "● Connecting…"
+}
+
+check("net pill: light is green >= 10 Mbps, amber >= 4, red below (Android rule)") {
+    NetPill.light(bps: 25_000_000) == .green && NetPill.light(bps: 10_000_000) == .green
+        && NetPill.light(bps: 9_999_999) == .amber && NetPill.light(bps: 4_000_000) == .amber
+        && NetPill.light(bps: 3_999_999) == .red && NetPill.light(bps: 0) == .red
+}
+
+check("net pill: speed = bytes over transfer time; nothing new keeps the last speed") {
+    let a = NetPill.Totals(bytes: 1_000_000, transferSec: 1)
+    let b = NetPill.Totals(bytes: 4_000_000, transferSec: 2)
+    return NetPill.reading(prev: a, cur: b, observedBps: 0) == 24_000_000
+        && NetPill.reading(prev: b, cur: b, observedBps: 9_000_000) == nil
+        && NetPill.reading(prev: nil, cur: a, observedBps: 9_000_000) == 9_000_000
+        && NetPill.reading(prev: b, cur: a, observedBps: 7_000_000) == 7_000_000
+        && NetPill.reading(prev: nil, cur: a, observedBps: 0) == nil
+}
+
+check("net pill: totals sum every access-log event") {
+    NetPill.totals([(bytes: 100, transferSec: 0.5), (bytes: 300, transferSec: 1.5), (bytes: -1, transferSec: -1)])
+        == NetPill.Totals(bytes: 400, transferSec: 2)
+}
+
+check("net pill: smoothing starts at the first reading and holds on gaps") {
+    NetPill.smooth(0, 20_000_000) == 20_000_000
+        && NetPill.smooth(20_000_000, nil) == 20_000_000
+        && abs(NetPill.smooth(20_000_000, 10_000_000) - 16_500_000) < 1
+}
+
+check("net pill: throttled when the speed is under the video bitrate") {
+    NetPill.throttled(bps: 3_000_000, videoBps: 4_200_000)
+        && !NetPill.throttled(bps: 25_000_000, videoBps: 4_200_000)
+        && !NetPill.throttled(bps: 0, videoBps: 4_200_000)
+        && NetPill.hideAfter == 2.5
+}
+
 print("\n\(passed) Swift download-math checks passed")

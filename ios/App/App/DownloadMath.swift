@@ -430,3 +430,93 @@ enum SkipPill {
         return false
     }
 }
+
+// MARK: - Connection pill (the Android player's speed readout)
+//
+// The pill the Android player shows over the video, copied 1:1:
+//   "● 25.4 Mbps  ·  1080p · 4.2 Mbps video"
+// measured download speed, the playing rendition's height and its bitrate.
+// Its border is the light: green at >= 10 Mbps, amber at >= 4 Mbps, red below
+// (Android PlayerActivity.updatePill). A speed under the video's own bitrate
+// is what throttling looks like: the light goes amber/red and the first
+// number drops below the "video" one. Android reads ExoPlayer's bandwidth
+// meter; here the speed is measured from AVPlayerItem.accessLog(): bytes
+// transferred over time spent transferring, smoothed. Pure, checked
+// off-device in scripts/DownloadMathTests.swift and scripts/test-net-pill.mjs.
+enum NetPill {
+    enum Light: Equatable { case green, amber, red }
+
+    /// Android: mbps >= 10 green, >= 4 yellow, else red.
+    static let greenMbps = 10.0
+    static let amberMbps = 4.0
+    /// Weight of a new reading in the running speed (higher = jumpier).
+    static let smoothing = 0.35
+    /// Android's controller timeout (setControllerShowTimeoutMs(2500)).
+    static let hideAfter: TimeInterval = 2.5
+    /// Android refreshes the pill every second (the `meter` runnable).
+    static let refreshEvery: TimeInterval = 1
+
+    /// Running totals summed over every access-log event of the item.
+    struct Totals: Equatable {
+        var bytes: Int64
+        var transferSec: Double
+    }
+
+    static func totals(_ events: [(bytes: Int64, transferSec: Double)]) -> Totals {
+        var t = Totals(bytes: 0, transferSec: 0)
+        for e in events {
+            t.bytes += max(0, e.bytes)
+            t.transferSec += max(0, e.transferSec)
+        }
+        return t
+    }
+
+    /// One speed reading in bits/s from two samples of the totals, or nil
+    /// when nothing new arrived (the pill then keeps its last speed, like
+    /// ExoPlayer's meter). The first sample, or one after the log restarted
+    /// (new item), falls back to AVFoundation's own observedBitrate.
+    static func reading(prev: Totals?, cur: Totals, observedBps: Double) -> Double? {
+        if let p = prev, cur.bytes >= p.bytes, cur.transferSec >= p.transferSec {
+            let bytes = cur.bytes - p.bytes
+            let secs = cur.transferSec - p.transferSec
+            if bytes > 0 && secs > 0.01 { return Double(bytes) * 8 / secs }
+            return nil
+        }
+        return observedBps > 0 ? observedBps : nil
+    }
+
+    /// Exponential smoothing; a missing reading keeps the old value.
+    static func smooth(_ prev: Double, _ reading: Double?) -> Double {
+        guard let r = reading, r > 0 else { return prev }
+        if prev <= 0 { return r }
+        return prev + smoothing * (r - prev)
+    }
+
+    static func light(bps: Double) -> Light {
+        let mbps = bps / 1_000_000
+        return mbps >= greenMbps ? .green : mbps >= amberMbps ? .amber : .red
+    }
+
+    /// Measured speed under the playing rendition's bitrate.
+    static func throttled(bps: Double, videoBps: Double) -> Bool {
+        bps > 0 && videoBps > 0 && bps < videoBps
+    }
+
+    /// "4K", "1080p", or "—" when unknown (Android's `res`).
+    static func resolution(height: Int) -> String {
+        height > 0 ? (height >= 2160 ? "4K" : "\(height)p") : "—"
+    }
+
+    private static func one(_ v: Double) -> String {
+        String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), v)
+    }
+
+    /// The pill's text, worded exactly like Android's.
+    static func text(bps: Double, height: Int, videoBps: Double) -> String {
+        let dot = bps > 0 ? "●" : "○"
+        let rate = videoBps > 0 ? " · \(one(videoBps / 1_000_000)) Mbps video" : ""
+        return "\(dot) \(one(bps / 1_000_000)) Mbps  ·  \(resolution(height: height))\(rate)"
+    }
+
+    static let connectingText = "● Connecting…"
+}

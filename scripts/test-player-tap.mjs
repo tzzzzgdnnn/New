@@ -39,7 +39,7 @@ test("delegate skips buttons/sliders and visible cards only", () => {
 });
 
 test("decorative overlays above the controls never swallow touches", () => {
-  for (const v of ["spinner", "statusLabel", "toastLabel", "healthLabel"]) {
+  for (const v of ["spinner", "statusLabel", "toastLabel"]) {
     assert.match(src, new RegExp(`${v}\\.isUserInteractionEnabled = false`), v);
   }
 });

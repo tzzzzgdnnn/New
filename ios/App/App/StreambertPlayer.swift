@@ -1541,134 +1541,62 @@ final class PaddedLabel: UILabel {
     }
 }
 
-// MARK: - Connection health light
+// MARK: - Connection pill
 //
-// A small dot that stays in the top corner during playback (it does not fade
-// with the controls). Every 2 s it reads the access log: green when the
-// network delivers >= 1.5x the bitrate of the playing variant, yellow when it
-// is close (1.0-1.5x), a stall happened in the last 30 s, or frames are being
-// dropped; red when it is below the variant bitrate, buffering, or 2+ stalls
-// in 30 s. Tapping it shows "Connection: Good · 24 Mbps".
+// The Android player's speed readout, same look: a capsule over the video
+// with a dark translucent fill (#99000000), a 1 pt border in the light's
+// colour, white 13 pt medium text, 14/8 pt padding. Logic in NetPill
+// (DownloadMath.swift). Shows with the controls and fades after
+// NetPill.hideAfter (Android's 2.5 s controller timeout); a tap on the video
+// brings it back (the PlayerTap rules).
 
-final class ConnectionHealthMonitor {
-    enum Level { case unknown, good, fair, poor }
-
-    private static let interval: TimeInterval = 2
-    private static let stallWindow: TimeInterval = 30
-    private static let goodRatio = 1.5
-
-    private weak var player: AVPlayer?
-    private var timer: Timer?
-    private var stallObserver: NSObjectProtocol?
-    private var stalls: [Date] = []
-    private var lastDropped = 0
-    private(set) var level: Level = .unknown
-    private(set) var observedMbps: Double = 0
-    var onChange: ((Level) -> Void)?
-
-    func start(player: AVPlayer) {
-        stop()
-        self.player = player
-        stalls = []
-        lastDropped = 0
-        stallObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemPlaybackStalled, object: nil, queue: .main
-        ) { [weak self] note in
-            guard let self = self, let item = note.object as? AVPlayerItem,
-                  item === self.player?.currentItem else { return }
-            self.stalls.append(Date())
-            self.evaluate()
-        }
-        timer = Timer.scheduledTimer(withTimeInterval: Self.interval, repeats: true) { [weak self] _ in
-            self?.evaluate()
-        }
-    }
-
-    func stop() {
-        timer?.invalidate(); timer = nil
-        if let o = stallObserver { NotificationCenter.default.removeObserver(o) }
-        stallObserver = nil
-    }
-
-    deinit { stop() }
-
-    private func evaluate() {
-        guard let p = player, let item = p.currentItem, item.status == .readyToPlay,
-              p.timeControlStatus != .paused || p.reasonForWaitingToPlay != nil else { return }
-        let now = Date()
-        stalls.removeAll { now.timeIntervalSince($0) > Self.stallWindow }
-        let event = item.accessLog()?.events.last
-        let observed = event?.observedBitrate ?? 0
-        let indicated = event?.indicatedBitrate ?? 0
-        let dropped = event?.numberOfDroppedVideoFrames ?? 0
-        let droppedRising = dropped > lastDropped && lastDropped > 0
-        lastDropped = dropped
-        if observed > 0 { observedMbps = observed / 1_000_000 }
-        let buffering = p.timeControlStatus == .waitingToPlayAtSpecifiedRate
-        let ratio = (observed > 0 && indicated > 0) ? observed / indicated : nil
-
-        let next: Level
-        if buffering || stalls.count >= 2 || (ratio.map { $0 < 1 } ?? false) {
-            next = .poor
-        } else if !stalls.isEmpty || droppedRising || (ratio.map { $0 < Self.goodRatio } ?? false) {
-            next = .fair
-        } else if ratio != nil {
-            next = .good
-        } else {
-            next = level // no bitrate data yet: keep what we had
-        }
-        if next != level {
-            level = next
-            onChange?(next)
-        }
-    }
-}
-
-final class HealthDotView: UIControl {
-    private let dot = UIView()
-    private static let dotSize: CGFloat = 9
-
+final class NetPillLabel: PaddedLabel {
     override init(frame: CGRect) {
         super.init(frame: frame)
-        dot.isUserInteractionEnabled = false
-        dot.layer.cornerRadius = Self.dotSize / 2
-        dot.layer.shadowOffset = .zero
-        dot.layer.shadowRadius = 4
-        dot.layer.shadowOpacity = 0.9
-        dot.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(dot)
-        NSLayoutConstraint.activate([
-            dot.widthAnchor.constraint(equalToConstant: Self.dotSize),
-            dot.heightAnchor.constraint(equalToConstant: Self.dotSize),
-            dot.centerXAnchor.constraint(equalTo: centerXAnchor),
-            dot.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-        accessibilityLabel = "Connection health"
-        set(.unknown, animated: false)
+        insets = UIEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
+        font = .systemFont(ofSize: 13, weight: .medium)
+        textColor = .white
+        backgroundColor = UIColor(white: 0, alpha: 0x99 / 255.0)
+        layer.borderWidth = 1
+        layer.borderColor = UIColor(white: 1, alpha: 0x33 / 255.0).cgColor
+        clipsToBounds = true
+        numberOfLines = 1
+        isUserInteractionEnabled = false
+        setText(NetPill.connectingText)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    static func color(for level: ConnectionHealthMonitor.Level) -> UIColor {
-        switch level {
-        case .good: return UIColor(red: 0.20, green: 0.84, blue: 0.40, alpha: 1)
-        case .fair: return UIColor(red: 1.00, green: 0.80, blue: 0.10, alpha: 1)
-        case .poor: return UIColor(red: 1.00, green: 0.23, blue: 0.19, alpha: 1)
-        case .unknown: return UIColor(white: 0.6, alpha: 1)
-        }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layer.cornerRadius = bounds.height / 2 // capsule, like Android's 100px radius
     }
 
-    func set(_ level: ConnectionHealthMonitor.Level, animated: Bool) {
-        let c = Self.color(for: level)
-        dot.backgroundColor = c
-        dot.layer.shadowColor = c.cgColor
-        guard animated, level == .fair || level == .poor else { return }
-        // Brief pulse so a worse connection is noticed.
-        UIView.animate(withDuration: 0.18, animations: {
-            self.dot.transform = CGAffineTransform(scaleX: 1.8, y: 1.8)
-        }, completion: { _ in
-            UIView.animate(withDuration: 0.25) { self.dot.transform = .identity }
-        })
+    /// Android letter spacing 0.02 em.
+    func setText(_ t: String) {
+        attributedText = NSAttributedString(string: t, attributes: [
+            .kern: 13 * 0.02, .foregroundColor: UIColor.white,
+            .font: UIFont.systemFont(ofSize: 13, weight: .medium),
+        ])
+    }
+
+    /// Android's colours, border at 0x88 alpha.
+    static func color(_ light: NetPill.Light) -> UIColor {
+        let rgb: UInt32
+        switch light {
+        case .green: rgb = 0x2ECC71
+        case .amber: rgb = 0xF1C40F
+        case .red: rgb = 0xE74C3C
+        }
+        return UIColor(red: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                       blue: CGFloat(rgb & 0xFF) / 255, alpha: 0x88 / 255.0)
+    }
+
+    func show(bps: Double, height: Int, videoBps: Double) {
+        setText(NetPill.text(bps: bps, height: height, videoBps: videoBps))
+        layer.borderColor = Self.color(NetPill.light(bps: bps)).cgColor
+        accessibilityLabel = NetPill.throttled(bps: bps, videoBps: videoBps)
+            ? "Connection slower than the video" : "Connection speed"
     }
 }
 
@@ -1757,10 +1685,14 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
     fileprivate var variantHeights: [Int] = []
     fileprivate var variantPeaks: [Int: Double] = [:]
     fileprivate var variantsKnown = false
-    private let healthDot = HealthDotView()
-    private let healthLabel = PaddedLabel()
-    private let healthMonitor = ConnectionHealthMonitor()
-    private var healthLabelWork: DispatchWorkItem?
+    private let netPill = NetPillLabel()
+    private var netTimer: Timer?
+    private var netTotals: NetPill.Totals?
+    private var netBps: Double = 0
+    private var netPillHideWork: DispatchWorkItem?
+    private var netPillTop: NSLayoutConstraint?
+    private var netPillTrailingSafe: NSLayoutConstraint?
+    private var netPillTrailingVideo: NSLayoutConstraint?
     private var userPaused = false
     /// Last real playback position; a failover or server switch resumes here.
     private var lastPosition: Double = 0
@@ -1869,7 +1801,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         setupVideoView()
         setupControls()
         setupOverlays()
-        setupHealthLight()
+        setupNetPill()
         setupGestures()
         setupSubtitles()
         setupUpNext()
@@ -2131,7 +2063,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         if let o = chatKeyboardObserver { NotificationCenter.default.removeObserver(o) }
         firstFrameObs?.invalidate()
         upNextTimer?.invalidate()
-        healthMonitor.stop()
+        netTimer?.invalidate()
     }
 
     // MARK: Player
@@ -2200,8 +2132,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         // swaps in the next server while the player is already on screen).
         userPaused = false
         if viewIfLoaded?.window != nil { resumePlayback() }
-        healthMonitor.start(player: p)
-        healthDot.isHidden = false
+        startNetMeter()
 
         generation += 1
         let gen = generation
@@ -2476,7 +2407,6 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
         NSLayoutConstraint.activate([
             topBar.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 12),
-            // Leaves the top-right corner to the connection light.
             topBar.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -30),
             topBar.topAnchor.constraint(equalTo: safe.topAnchor, constant: 8),
             topStack.leadingAnchor.constraint(equalTo: topBar.contentView.leadingAnchor, constant: 12),
@@ -2518,67 +2448,91 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         }
     }
 
-    // MARK: Connection health light
+    // MARK: Connection pill
 
-    private static let healthHitSize: CGFloat = 28
-
-    private func setupHealthLight() {
-        healthDot.translatesAutoresizingMaskIntoConstraints = false
-        healthDot.isHidden = true
-        healthDot.addTarget(self, action: #selector(healthTapped), for: .touchUpInside)
-        view.addSubview(healthDot) // not inside `controls`: never fades out
-
-        healthLabel.translatesAutoresizingMaskIntoConstraints = false
-        healthLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        healthLabel.textColor = .white
-        healthLabel.backgroundColor = UIColor(white: 0.08, alpha: 0.85)
-        healthLabel.layer.cornerRadius = 12
-        healthLabel.clipsToBounds = true
-        healthLabel.insets = UIEdgeInsets(top: 5, left: 10, bottom: 5, right: 10)
-        healthLabel.alpha = 0
-        healthLabel.isUserInteractionEnabled = false
-        view.addSubview(healthLabel)
-
-        // Safe area keeps it clear of the notch / Dynamic Island either way up.
+    private func setupNetPill() {
+        netPill.translatesAutoresizingMaskIntoConstraints = false
+        netPill.alpha = 0
+        view.addSubview(netPill) // above the controls; fades on its own clock
         let safe = view.safeAreaLayoutGuide
+        // Top right, just under the top bar so it never covers its buttons.
+        let top = netPill.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 8)
+        let trailing = netPill.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -18)
+        let trailingVideo = netPill.trailingAnchor.constraint(equalTo: videoView.trailingAnchor, constant: -18)
+        netPillTop = top
+        netPillTrailingSafe = trailing
+        netPillTrailingVideo = trailingVideo
         NSLayoutConstraint.activate([
-            healthDot.widthAnchor.constraint(equalToConstant: Self.healthHitSize),
-            healthDot.heightAnchor.constraint(equalToConstant: Self.healthHitSize),
-            healthDot.topAnchor.constraint(equalTo: safe.topAnchor, constant: -6),
-            healthDot.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -2),
-            healthLabel.centerYAnchor.constraint(equalTo: healthDot.centerYAnchor),
-            healthLabel.trailingAnchor.constraint(equalTo: healthDot.leadingAnchor, constant: -2),
+            top, trailing,
+            netPill.leadingAnchor.constraint(greaterThanOrEqualTo: safe.leadingAnchor, constant: 12),
         ])
-        healthMonitor.onChange = { [weak self] level in
-            guard let self = self else { return }
-            self.healthDot.set(level, animated: true)
-            if level == .poor || level == .fair { self.showHealthLabel() }
+    }
+
+    /// Keeps the pill over the video (left of the landscape chat column, like
+    /// Android) and clear of the party chat button.
+    fileprivate func layoutNetPill() {
+        let videoSplit = chatSplitLandscapeConstraints.first?.isActive == true
+        netPillTrailingSafe?.isActive = !videoSplit
+        netPillTrailingVideo?.isActive = videoSplit
+        let extra: CGFloat = (chatUIReady && !chatButton.isHidden) ? 42 : 0
+        netPillTrailingSafe?.constant = -18 - extra
+    }
+
+    private func startNetMeter() {
+        netTimer?.invalidate()
+        netTotals = nil
+        netPill.setText(NetPill.connectingText)
+        netTimer = Timer.scheduledTimer(withTimeInterval: NetPill.refreshEvery, repeats: true) { [weak self] _ in
+            self?.updateNetPill()
         }
     }
 
-    private func healthText() -> String {
-        let name: String
-        switch healthMonitor.level {
-        case .good: name = "Good"
-        case .fair: name = "Slow"
-        case .poor: name = "Poor"
-        case .unknown: name = "Measuring"
-        }
-        let mbps = healthMonitor.observedMbps
-        return mbps > 0 ? "Connection: \(name) · \(Int(mbps.rounded())) Mbps" : "Connection: \(name)"
+    private func stopNetMeter() {
+        netTimer?.invalidate(); netTimer = nil
+        netPillHideWork?.cancel(); netPillHideWork = nil
     }
 
-    @objc private func healthTapped() { showHealthLabel() }
+    /// Android's updatePill, once a second: speed, rendition height, bitrate.
+    private func updateNetPill() {
+        guard let item = player?.currentItem, item.status == .readyToPlay else { return }
+        let events = item.accessLog()?.events ?? []
+        let cur = NetPill.totals(events.map { (bytes: $0.numberOfBytesTransferred, transferSec: $0.transferDuration) })
+        let observed = events.last?.observedBitrate ?? 0
+        let reading = NetPill.reading(prev: netTotals, cur: cur, observedBps: observed.isFinite ? observed : 0)
+        netTotals = cur
+        netBps = NetPill.smooth(netBps, reading)
+        let indicated = events.last?.indicatedBitrate ?? 0
+        let size = item.presentationSize
+        let height = size.height > 0 ? Int(size.height.rounded()) : shownVideoHeight
+        netPill.show(bps: netBps, height: height, videoBps: indicated.isFinite ? indicated : 0)
+    }
 
-    private func showHealthLabel() {
-        healthLabel.text = healthText()
-        UIView.animate(withDuration: 0.2) { self.healthLabel.alpha = 1 }
-        healthLabelWork?.cancel()
+    /// The pill shows with the controls and fades NetPill.hideAfter later
+    /// (or with the controls, whichever comes first). Paused / scrubbing
+    /// keeps it, like the controls.
+    private func setNetPill(visible: Bool) {
+        netPillHideWork?.cancel(); netPillHideWork = nil
+        layoutNetPill()
+        if visible { view.bringSubviewToFront(netPill) }
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.netPill.alpha = visible ? 1 : 0
+        }
+        if visible { scheduleNetPillHide() }
+    }
+
+    private func scheduleNetPillHide() {
+        netPillHideWork?.cancel()
         let w = DispatchWorkItem { [weak self] in
-            UIView.animate(withDuration: 0.3) { self?.healthLabel.alpha = 0 }
+            guard let self = self, !self.isClosing, !self.isScrubbing,
+                  self.view.window != nil,
+                  self.player?.timeControlStatus == .playing else { return }
+            self.netPillHideWork = nil
+            UIView.animate(withDuration: 0.2, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
+                self.netPill.alpha = 0
+            }
         }
-        healthLabelWork = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: w)
+        netPillHideWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + NetPill.hideAfter, execute: w)
     }
 
     // MARK: Toast + failure screen
@@ -2783,6 +2737,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         if isClosing { return }
         if visible && !controlsShown { controlsShownAt = CACurrentMediaTime() }
         updateSubtitlePlacement(controlsVisible: visible)
+        setNetPill(visible: visible)
         UIView.animate(withDuration: 0.25) {
             self.controls.alpha = visible ? 1 : 0
             self.view.layoutIfNeeded()
@@ -2795,6 +2750,8 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
 
     private func scheduleHide() {
         hideWork?.cancel()
+        // A tap that keeps the controls up also keeps (or brings back) the pill.
+        if controlsShown && !isClosing { setNetPill(visible: true) }
         let w = DispatchWorkItem { [weak self] in
             guard let self = self, !self.isClosing, !self.isScrubbing,
                   self.view.window != nil,
@@ -2819,7 +2776,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         reportProgress()
         player?.pause()
         generation += 1
-        healthMonitor.stop()
+        stopNetMeter()
         let cb = onClose
         let position = lastPosition
         onWillClose?()
@@ -2850,7 +2807,7 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         hideWork?.cancel(); hideWork = nil
         tapHideWork?.cancel(); tapHideWork = nil
         toastWork?.cancel(); toastWork = nil
-        healthLabelWork?.cancel(); healthLabelWork = nil
+        netPillHideWork?.cancel(); netPillHideWork = nil
         clearDubStallHint()
         if let t = timeObserver { player?.removeTimeObserver(t); timeObserver = nil }
         statusObs?.invalidate(); statusObs = nil
@@ -4453,7 +4410,7 @@ extension StreambertPlayerViewController: UITextFieldDelegate {
         ]
 
         // The light and the Up Next card stay above the landscape chat column.
-        view.bringSubviewToFront(healthDot)
+        view.bringSubviewToFront(netPill)
         view.bringSubviewToFront(upNextCard)
 
         chatKeyboardObserver = NotificationCenter.default.addObserver(
@@ -4488,6 +4445,7 @@ extension StreambertPlayerViewController: UITextFieldDelegate {
         chatColumn.layer.cornerRadius = portrait ? 14 : 0
         chatColumnBg.alpha = portrait ? 0 : 1
         chatSplitApplied = split
+        layoutNetPill()
     }
 
     /// Re-run the layout (video frame + chat) in place; playback is untouched.
@@ -4506,6 +4464,7 @@ extension StreambertPlayerViewController: UITextFieldDelegate {
         chatColumnBg.isHidden = !split
         chatButton.isHidden = !(chatActive && chatFullScreen)
         chatBadge.isHidden = chatUnread == 0 || chatButton.isHidden
+        layoutNetPill()
         chatBadge.text = chatUnread > 9 ? "9+" : "\(chatUnread)"
         chatFullButton.isHidden = !chatActive
         let fullSymbol = chatFullScreen ? "rectangle.split.2x1" : "rectangle.expand.vertical"
