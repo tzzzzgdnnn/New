@@ -15,3 +15,12 @@ for t in test-nav test-profiles test-search test-home test-diag test-servers tes
     --external:happy-dom --log-level=warning --outfile="$OUT/$t.mjs"
   node "$OUT/$t.mjs"
 done
+# Web-app build (VITE_WEB): the browser embed player (#19 leak/prewarm/failover, #26 Cinezo).
+for t in test-web-player; do
+  npx esbuild "scripts/$t.mjs" --bundle --platform=node --format=esm \
+    --loader:.json=json --loader:.js=jsx --loader:.css=empty --jsx=automatic \
+    --define:import.meta.env='{"VITE_TARGET":"ios","VITE_WEB":"1","VITE_TMDB_TOKEN":""}' \
+    --define:process.env.NODE_ENV='"development"' \
+    --external:happy-dom --log-level=warning --outfile="$OUT/$t.mjs"
+  node "$OUT/$t.mjs"
+done

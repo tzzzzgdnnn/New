@@ -154,9 +154,25 @@ function dropWarm() {
   w.video.remove();
 }
 
+// #19: an embed server page (iframe) on screen holds the warm-up off. A hidden
+// player buffering while an embed streams was a second video decode + network
+// stream at once, enough memory for iOS to kill the Safari / home-screen tab.
+const embedHolds = new Set();
+/** An embed on screen (`on`) drops the warm-up player and blocks new ones until released. */
+export function holdPrewarm(owner, on) {
+  if (on) {
+    embedHolds.add(owner);
+    dropWarm();
+  } else embedHolds.delete(owner);
+}
+export const prewarmHeld = () => embedHolds.size > 0;
+/** Test hook: the hidden warm-up <video>, if any. */
+export const warmVideo = () => warm?.video || null;
+
 /** Load `src` into a hidden player now, so playDirect(src) starts at once. */
 export function prewarmDirect(src, { startAt = 0, nativeOnly = false } = {}) {
   if (SbPlayer) return; // Android: the built-in player starts fast on its own
+  if (embedHolds.size) return; // an embed is playing: never buffer a second stream
   if (!src || typeof document === "undefined" || !document.body) return;
   if (warm && warm.src === src && !warm.dead && Date.now() - warm.at < WARM_MAX_AGE_MS) return;
   dropWarm();
@@ -184,6 +200,24 @@ export function prewarmDirect(src, { startAt = 0, nativeOnly = false } = {}) {
     video.load();
   }
   warm = w;
+}
+
+/**
+ * iPhone web app: called inside the Play tap when the stream is still being
+ * looked up. Puts the player's <video> in the box now and starts it (no
+ * source yet) inside the tap, so iOS lets the stream play, and open Apple's
+ * own full-screen player, the moment it is found, with no second tap.
+ */
+export function primeDirectVideo(box) {
+  if (SbPlayer || !isIPhoneUA() || window.__sbWatchParty) return;
+  let video = box.querySelector(":scope > video.sb-direct-video");
+  if (!video) {
+    video = makeVideo();
+    video.style.cssText = "position:absolute;inset:0;width:100%;height:100%;background:#000;z-index:3;visibility:hidden";
+    box.appendChild(video);
+  }
+  video.__sbPrimed = navigator.userActivation ? navigator.userActivation.isActive : true;
+  try { video.play()?.catch?.(() => {}); } catch {}
 }
 
 /** Forget the warmed-up player (leaving a title page). */
@@ -368,7 +402,11 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
   // iPhone: Apple's own player only opens from a tap made once the video has
   // loaded, so (unless Apple's player is already up from the last episode)
   // it waits on one big Play button; that tap opens Apple's player and plays.
-  const iphoneWait = !party && IS_IPHONE && !video.webkitDisplayingFullscreen;
+  // Inside the Play tap (or on a player unlocked in that tap) it plays right
+  // away: no playsinline, so iOS opens Apple's own full-screen player.
+  const inTap = IS_IPHONE && (video.__sbPrimed || !!navigator.userActivation?.isActive);
+  video.__sbPrimed = false;
+  const iphoneWait = !party && IS_IPHONE && !video.webkitDisplayingFullscreen && !inTap;
   if (iphoneWait) {
     video.autoplay = false;
     showBtn("▶  Play");
@@ -414,7 +452,16 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
     p?.catch?.(() => showBtn("▶  Play"));
   };
   on(video, "webkitbeginfullscreen", () => (bigBtn.style.display = "none"));
-  on(video, "webkitendfullscreen", () => !party && !done && !video.ended && showBtn("⛶  Full screen"));
+  // Apple's player closed (Done / swipe down): back on the title page,
+  // paused where it stopped, with one clean Resume button (never the inline
+  // web player running in the page).
+  on(video, "webkitendfullscreen", () => {
+    if (party || done || video.ended) return;
+    try { video.pause(); } catch {}
+    onTime?.(video.currentTime, video.duration);
+    showBtn("▶  Resume");
+    window.dispatchEvent(new CustomEvent("sb-web-player-closed", { detail: { time: video.currentTime } }));
+  });
   on(document, "fullscreenchange", () => {
     if (fsElement()) bigBtn.style.display = "none";
     else if (!party && !done && !video.paused) showBtn("⛶  Full screen");

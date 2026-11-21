@@ -482,6 +482,18 @@ const BROWSER_ONLY = !!(import.meta.env?.VITE_WEB && !import.meta.env?.VITE_ANDR
 // Web app (fixes #19): only servers verified playing in a browser. Vidfast first.
 export const WEB_EMBED_ORDER = ["vidfast", "cinejoy-direct", "cinezo"];
 export const WEB_ALLOWED = new Set(WEB_EMBED_ORDER);
+// Web app: servers framed through their bare player page instead of the site's
+// watch page. Cinezo's player (player.cinezo.live) posts PLAYER_EVENT
+// progress to the page that frames it, so Auto sees it start (#26) and it
+// saves your place; the watch page (www.cinezo.st) frames that same player one
+// level deeper, where nothing reaches us, and is one more page in memory (#19).
+// Verified playing in WebKit iPhone, sandboxed, movie 550 and tv 1396 S1E1.
+export const WEB_PLAYER_URLS = {
+  cinezo: {
+    movie: "https://player.cinezo.live/embed/movie/{tmdb}",
+    tv: "https://player.cinezo.live/embed/tv/{tmdb}/{season}/{episode}",
+  },
+};
 export const WEB_UNFRAMEABLE = new Set(["aether", "7movies", "hexa", "vidnest"]);
 export const webEmbedRank = (id) => { const i = WEB_EMBED_ORDER.indexOf(id); return i < 0 ? WEB_EMBED_ORDER.length : i; };
 export const PLAYER_SOURCES = BROWSER_ONLY

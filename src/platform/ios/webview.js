@@ -22,7 +22,7 @@ import { cinejoyCandidates, cachedCinejoy, forgetCinejoy, prefetchCinejoy, CINEJ
 import { sevenMoviesCandidates, SEVENMOVIES_IDS } from "./sevenmovies";
 import { flixerCandidates, FLIXER_ID } from "./flixer";
 import { riveCandidates, RIVE_IDS } from "./rivestream";
-import { playDirect, forceFullscreen } from "../web/directPlayer";
+import { playDirect, forceFullscreen, holdPrewarm, primeDirectVideo } from "../web/directPlayer";
 import { parseServerKey } from "../../utils/servers/catalog";
 import { diag } from "../../utils/diag";
 import { customCandidates, withCustom, pickedCustomId, isCustomPlaceholder } from "./customServers";
@@ -377,16 +377,53 @@ function upgrade(wv) {
   // like any other progress so the movie resumes instead of restarting.
   let embedProg = null;
   let startWatch = null; // see armStartWatch below
-  window.addEventListener("message", (e) => {
+  // #19: everything this player registers outside its own element (window
+  // listeners, timers, the prewarm hold) is undone by teardown() when the
+  // <webview> leaves the page. Before, every title opened left a window
+  // "message" listener behind holding the whole player (iframe, closures).
+  const cleanups = [];
+  const listen = (target, type, fn, opts) => {
+    target.addEventListener(type, fn, opts);
+    cleanups.push(() => target.removeEventListener(type, fn, opts));
+  };
+  // Every iframe navigation goes through here: a real embed page on screen
+  // holds the hidden warm-up player off (no second stream while it plays).
+  const setFrame = (u) => {
+    iframe.src = u;
+    holdPrewarm(wv, !isBlank(u));
+  };
+  const timers = new Set();
+  const later = (fn, ms) => {
+    const t = setTimeout(() => { timers.delete(t); fn(); }, ms);
+    timers.add(t);
+    return t;
+  };
+  cleanups.push(() => { timers.forEach(clearTimeout); timers.clear(); });
+  listen(window, "message", (e) => {
     if (e.source !== iframe.contentWindow) return;
     let d = e.data;
     if (typeof d === "string") { try { d = JSON.parse(d); } catch { return; } }
+    // Web: the embed says whether it has the title. Vidfast posts
+    // {event:"status", data:404} for a title it doesn't have (and then shows its
+    // own error page): never shown, the next server takes over at once.
+    if (d?.event === "status" && Number(d.data) >= 400) return embedFailed(`not on this server (${d.data})`);
+    if ((d?.event === "status" && Number(d.data) >= 200 && Number(d.data) < 300) ||
+        d?.type === "PLAYER_EVENT" ||
+        (d?.type === "MEDIA_DATA" && d.data && Object.keys(d.data).length)) revealEmbed();
+    // Embed players that post PLAYER_EVENT (Cinezo's player.cinezo.live,
+    // Vidfast): a play / timeupdate past 0 s means it is running, even
+    // before a duration is known, so the no-start watch never skips it (#26).
+    if (d?.type === "PLAYER_EVENT" && /^(play|playing|timeupdate)$/.test(d.data?.event || "") && Number(d.data?.currentTime) > 0) {
+      startWatch?.started();
+      window.__sbEmbedPlayingAt = Date.now();
+    }
     // vidrift says outright when it can't play: next server.
-    if (d?.type === "vidrift:wont-play") { startWatch?.cancel(); diag("player", `vidrift won't play: ${d.reason || ""}`); fire("did-fail-load"); webAutoNext("it refused to play here"); return; }
+    if (d?.type === "vidrift:wont-play") { diag("player", `vidrift won't play: ${d.reason || ""}`); return embedFailed("it refused to play here"); }
     const x = d?.data && typeof d.data === "object" ? d.data : d;
     const t = Number(x?.currentTime ?? x?.time ?? x?.position);
     const dur = Number(x?.duration);
     if (!(t > 0) || !(dur > 60) || !isFinite(dur) || t > dur + 5) return;
+    revealEmbed();
     startWatch?.started();
     window.__sbEmbedPlayingAt = Date.now(); // the PWA updater waits while an embed plays
     const ctx = currentCtx();
@@ -447,6 +484,45 @@ function upgrade(wv) {
   };
   const hideCard = () => (card.style.display = "none");
 
+  // Web app: a third-party embed page is never shown until it says it has the
+  // title (a ready message: status 200, its media data, a player event or a
+  // position). Until then our own "Finding the stream…" card covers it; an
+  // error / 404 / "disable sandbox" page that never says so is never seen:
+  // after EMBED_READY_MS, or on an error message, the next server takes over
+  // (Auto) or our own "not available" card shows.
+  const GATE = BROWSER_ONLY;
+  const EMBED_READY_MS = 20000;
+  let embedReady = !GATE;
+  let readyTimer = null;
+  cleanups.push(() => clearTimeout(readyTimer));
+  const gateEmbed = () => {
+    if (!GATE) return;
+    embedReady = false;
+    clearTimeout(readyTimer);
+    iframe.style.visibility = "hidden";
+    showCard("Finding the stream…", false);
+    readyTimer = setTimeout(() => embedFailed("it didn't load"), EMBED_READY_MS);
+  };
+  const revealEmbed = () => {
+    if (embedReady || isBlank(iframe.src)) return;
+    embedReady = true;
+    clearTimeout(readyTimer);
+    iframe.style.visibility = "";
+    hideCard();
+  };
+  const embedFailed = (why) => {
+    if (isBlank(iframe.src)) return;
+    clearTimeout(readyTimer);
+    startWatch?.cancel();
+    stopWeb();
+    diag("player", `embed failed (${why}): ${String(iframe.src).slice(0, 60)}`);
+    fire("did-fail-load");
+    const auto = BROWSER_ONLY && isAutoPick() && !inParty();
+    if (auto) nextServer(why); // reads the failed page's address first
+    setFrame("about:blank");
+    if (!auto) showCard("Not available on this server. Pick another server.", false);
+  };
+
   let nativeFor = null; // URL the native player is handling
   let nativeToken = null;
   let lastNativeAt = 0;
@@ -463,7 +539,7 @@ function upgrade(wv) {
     lastNativeAt = Date.now();
     nativeFor = url;
     stopWeb();
-    iframe.src = "about:blank";
+    setFrame("about:blank");
     cardBtn.textContent = "▶  Play";
     showCard("Opening the native player…", false);
     note.style.display = "none";
@@ -485,7 +561,7 @@ function upgrade(wv) {
       nativeFor = null;
       loadUrl(url, { webOnly: true });
       note.style.display = "";
-      setTimeout(() => (note.style.display = "none"), 5000);
+      later(() => (note.style.display = "none"), 5000);
     });
     onNativeClosed = ({ time }) => {
       if (nativeFor !== url) return;
@@ -554,7 +630,7 @@ function upgrade(wv) {
   let directFor = null;
   // Nothing ad-free has this one: say so (never an ad/captcha embed).
   const noStream = () => {
-    iframe.src = "about:blank";
+    setFrame("about:blank");
     showCard("Not available on the web yet. Try again later or use the app.", false);
   };
   const embedFor = (url) => {
@@ -576,7 +652,7 @@ function upgrade(wv) {
     if (!anipmWebReady || !ctx.anilistId) return false;
     const wanted = ctx.dubMode === "sub" ? "sub" : "dub";
     directFor = url;
-    iframe.src = "about:blank";
+    setFrame("about:blank");
     fire("dom-ready");
     const fallback = () => {
       if (directFor !== url) return;
@@ -619,6 +695,8 @@ function upgrade(wv) {
     return true;
   };
   const inParty = () => !!window.__sbWatchParty;
+  const titleKeyOf = (c) => `${c?.type}:${c?.tmdbId}:${c?.season ?? ""}:${c?.episode ?? ""}`;
+  const directMissed = new Set(); // titles Cinejoy had no playable stream for (web)
   const partyTries = new Map(); // title url -> direct retries in this party
   const partyNoSync = (embedUrl) => {
     const ctx = currentCtx();
@@ -626,7 +704,7 @@ function upgrade(wv) {
     const key = keyOf(ctx);
     const n = (partyTries.get(key) || 0) + 1;
     partyTries.set(key, n);
-    iframe.src = "about:blank";
+    setFrame("about:blank");
     diag("player", `party: embed ${String(embedUrl).slice(0, 60)} can't sync (try ${n})`);
     if (n > 2) {
       showCard("No synced stream for this title right now. Pick something else for the party.", false);
@@ -652,7 +730,7 @@ function upgrade(wv) {
     const pickedDirect = DIRECT_IDS.has(picked) || SEVENMOVIES_IDS.includes(picked);
     if (picked && !pickedDirect && !isAutoPick() && !/\.invalid\//.test(url) && !inParty()) return false;
     directFor = url;
-    iframe.src = "about:blank";
+    setFrame("about:blank");
     fire("dom-ready");
     showCard("Finding the stream…", false);
     const toEmbed = () => {
@@ -712,11 +790,24 @@ function upgrade(wv) {
     const picked = readStored("playerSource");
     // In a party everyone plays the synced direct stream, whatever server this phone picked.
     if (picked && picked !== CINEJOY_ID && !isAutoPick() && !/cinejoy\.invalid/.test(url) && !inParty()) return false;
-    // Web Auto (#19): Vidfast first; Cinejoy direct only when its own URL comes up.
-    if (BROWSER_ONLY && !inParty() && !/cinejoy\.invalid/.test(url)) return false;
+    // Web Auto: Cinejoy's direct stream first, in our player (Apple's own
+    // full-screen player on iPhone); an embed only when it has no stream.
+    const key = titleKeyOf(ctx);
+    if (BROWSER_ONLY && directMissed.has(key) && !/cinejoy\.invalid/.test(url)) return false;
     directFor = url;
-    iframe.src = "about:blank";
+    setFrame("about:blank");
     fire("dom-ready");
+    // No direct stream: the embed (the page's own server), or in Auto with
+    // Cinejoy itself picked, the next server; never Cinejoy again for this title.
+    const noDirect = () => {
+      if (directFor !== url) return;
+      directMissed.add(key);
+      hideCard();
+      // The player unlocked for the stream (primeDirectVideo) isn't needed.
+      wv.querySelectorAll(":scope > video.sb-direct-video").forEach((v) => !v.getAttribute("src") && !v.__sbHls && v.remove());
+      if (BROWSER_ONLY && /cinejoy\.invalid/.test(url) && isAutoPick() && !inParty()) return nextServer("no direct stream");
+      loadUrl(embedFor(url), { webOnly: true });
+    };
     const start = (src) => {
       hideCard();
       log("playing", "Cinejoy (direct)");
@@ -731,7 +822,8 @@ function upgrade(wv) {
           if (directFor !== url) return;
           diag("player", `web direct failed: ${why}`);
           stopDirect = null;
-          loadUrl(embedFor(url), { webOnly: true });
+          forgetCinejoy(ctx);
+          noDirect();
         },
       });
       stopDirect = () => { prog.flush(); stop?.(); };
@@ -741,6 +833,9 @@ function upgrade(wv) {
       start(hit.source);
       return true;
     }
+    // iPhone: unlock a player inside this tap, so the stream can open Apple's
+    // own full-screen player as soon as it is found (no second tap).
+    primeDirectVideo(wv);
     showCard("Finding the stream…", false);
     Promise.race([prefetchCinejoy(ctx), new Promise((r) => setTimeout(() => r(null), 8000))])
       .then((r) => {
@@ -748,20 +843,24 @@ function upgrade(wv) {
         if (!r?.ok) throw new Error("no stream");
         start(r.source);
       })
-      .catch(() => {
-        if (directFor === url) { hideCard(); loadUrl(embedFor(url), { webOnly: true }); }
-      });
+      .catch(noDirect);
     return true;
   };
 
   // The page's server failed: say why and move to the next server.
   const failedServers = new Map(); // title key -> Set of servers that failed
+  const autoSwitches = new Map(); // title key -> automatic switches made (hard cap, #19)
+  const lastAutoPick = new Map(); // title key -> server the last automatic switch went to
   const nextServer = (why) => {
     const ctx = currentCtx();
-    const key = `${ctx.type}:${ctx.tmdbId}:${ctx.season ?? ""}:${ctx.episode ?? ""}`;
+    const key = titleKeyOf(ctx);
     const current = menuId(readStored("playerSource"), ctx);
     const failed = failedServers.get(key) || new Set();
-    failed.add(current);
+    if (directMissed.has(key)) failed.add(CINEJOY_ID);
+    // Never the Auto placeholder itself: the server that really failed is the
+    // stored pick, the one the last automatic switch went to, or the one shown.
+    if (current && current !== "auto") failed.add(current);
+    if (lastAutoPick.has(key)) failed.add(lastAutoPick.get(key));
     // The embed actually on screen (e.g. Cinejoy's fallback page) failed too.
     try {
       const host = new URL(iframe.src).host;
@@ -770,15 +869,21 @@ function upgrade(wv) {
     } catch {}
     failedServers.set(key, failed);
     const list = serverListFor(ctx).filter((s) => PLAYER_SOURCES.some((p) => p.id === parseServerKey(s.id).sourceId));
-    const next = list.find((s) => !failed.has(s.id));
+    const switches = autoSwitches.get(key) || 0;
+    // Bounded: at most one automatic switch per listed server for a title, so
+    // a failure that can't be pinned on a server can never loop (reload after
+    // reload of embed pages).
+    const next = switches < list.length ? list.find((s) => !failed.has(s.id)) : null;
     const label = list.find((s) => s.id === current)?.label || "This server";
     diag("player", `auto: ${label} failed (${why}); next: ${next ? next.label : "none"}`);
     if (!next) {
       showCard(`${label} couldn't play this (${why}). No other server worked — pick one in Server or try again later.`, false);
       return;
     }
+    autoSwitches.set(key, switches + 1);
+    lastAutoPick.set(key, next.id);
     showCard(`${label} couldn't play this (${why}). Trying ${next.label}…`, false);
-    setTimeout(hideCard, 4000);
+    later(() => GATE || hideCard(), 4000); // web: the next embed's own card takes over
     const ev = new CustomEvent("sb-select-server", { detail: next.id });
     ev.sbAuto = true; // an automatic switch: the viewer's own choice stays as it was
     window.dispatchEvent(ev);
@@ -819,7 +924,7 @@ function upgrade(wv) {
         headers: s.headers || {},
         onTime: (pos, dur) => {
           // Our player is running: drop the embed page (stops its audio/ads).
-          if (!blanked && pos > 0) { blanked = true; iframe.src = "about:blank"; }
+          if (!blanked && pos > 0) { blanked = true; setFrame("about:blank"); }
           prog.onTime(pos, dur);
         },
         onFail: (why) => {
@@ -843,7 +948,7 @@ function upgrade(wv) {
       });
       stopDirect = () => { prog.flush(); stop?.(); };
     };
-    window.addEventListener("sb-android-stream", (e) => {
+    listen(window, "sb-android-stream", (e) => {
       const u = String(e?.detail?.url || "");
       if (!u || !wv.isConnected || directFor) return;
       const embed = iframe.getAttribute("src") || "";
@@ -872,7 +977,7 @@ function upgrade(wv) {
     if (isBlank(url)) {
       nativeFor = null;
       hideCard();
-      iframe.src = "about:blank";
+      setFrame("about:blank");
       return;
     }
     // Android app: direct streams open the built-in full-screen player, so
@@ -890,7 +995,7 @@ function upgrade(wv) {
     // A custom site never loads in the visible web view: its ads and pop-ups
     // are only blocked in the native stream finder.
     if (isCustomPlaceholder(url)) {
-      iframe.src = "about:blank";
+      setFrame("about:blank");
       showCard("No stream found on this server. Pick another server.", false);
       return;
     }
@@ -900,10 +1005,11 @@ function upgrade(wv) {
       stallMs: LOAD_TIMEOUT_MS,
       play: (u) => {
         sandboxFor(u);
-        iframe.src = u;
+        gateEmbed();
+        setFrame(u);
         postContext(u);
       },
-      onExhausted: () => { fire("did-fail-load"); webAutoNext("it didn't load"); },
+      onExhausted: () => (GATE ? embedFailed("it didn't load") : (fire("did-fail-load"), webAutoNext("it didn't load"))),
     });
     webFallback.start();
   };
@@ -949,6 +1055,9 @@ function upgrade(wv) {
     wv.addEventListener("pointerdown", onTap, true);
     const expire = () => {
       if (done || iframe.src !== src || isBlank(src)) return cancel();
+      // Web: the player said it has the title and is on screen, waiting for a
+      // tap (iPhone blocks autoplay with sound): keep it (#26).
+      if (GATE && embedReady) return cancel();
       cancel();
       silentSkips += 1;
       diag("player", `embed did not start in ${START_WATCH_MS} ms: next server (${String(src).slice(0, 60)})`);
@@ -956,7 +1065,7 @@ function upgrade(wv) {
       if (BROWSER_ONLY && isAutoPick() && !inParty()) webAutoNext("it didn't start");
       else {
         showCard("This server didn't start. Pick another server.", false);
-        setTimeout(hideCard, 2500);
+        later(hideCard, 2500);
       }
     };
     let t = setTimeout(expire, START_WATCH_MS);
@@ -993,7 +1102,7 @@ function upgrade(wv) {
   // the player through the src observer. When the URL does not change (same
   // server, or the page is still waiting on anime data) reopen it here, once.
   let selectTimer = null;
-  targets.add({
+  const target = {
     wv,
     onReplay: () => {
       const u = wv.getAttribute("src");
@@ -1012,13 +1121,56 @@ function upgrade(wv) {
       };
       retry(SELECT_RETRIES);
     },
-  });
+  };
+  targets.add(target);
 
-  new MutationObserver(() => loadUrl(wv.getAttribute("src"))).observe(wv, {
-    attributes: true,
-    attributeFilter: ["src"],
-  });
+  const srcObserver = new MutationObserver(() => loadUrl(wv.getAttribute("src")));
+  srcObserver.observe(wv, { attributes: true, attributeFilter: ["src"] });
+
+  // #19: the <webview> left the page (title closed, server UA swap remounts
+  // it): stop everything it started, so nothing keeps the old player, its
+  // embed page or its stream alive. Safe to call twice.
+  wv.__sbTeardown = () => {
+    if (!wv.__sbUpgraded) return;
+    wv.__sbUpgraded = false;
+    delete wv.__sbTeardown;
+    srcObserver.disconnect();
+    targets.delete(target);
+    clearTimeout(selectTimer);
+    startWatch?.cancel();
+    startWatch = null;
+    stopWeb();
+    webFallback = null;
+    try { stopDirect?.(); } catch {}
+    stopDirect = null;
+    directFor = null;
+    probes?.abort();
+    if (nativeToken) pending.delete(nativeToken);
+    nativeToken = null;
+    nativeFor = null;
+    embedProg?.p.flush();
+    embedProg = null;
+    while (cleanups.length) { try { cleanups.pop()(); } catch {} }
+    // Unload the embed page now (its video, timers and ads), then drop it.
+    try { iframe.src = "about:blank"; } catch {}
+    holdPrewarm(wv, false);
+    iframe.remove();
+    card.remove();
+    note.remove();
+  };
   loadUrl(wv.getAttribute("src"));
+}
+
+/** Webviews in `root` (itself or below) that were upgraded. */
+const upgradedIn = (root) => {
+  if (root?.nodeType !== 1) return [];
+  const all = root.tagName === "WEBVIEW" ? [root] : [];
+  root.querySelectorAll?.("webview").forEach((w) => all.push(w));
+  return all.filter((w) => w.__sbUpgraded);
+};
+/** Tear down every upgraded webview in `root` that is no longer in the page. */
+export function releaseDetached(root) {
+  for (const wv of upgradedIn(root)) if (!wv.isConnected) wv.__sbTeardown?.();
 }
 
 export function installWebviewPolyfill() {
@@ -1027,7 +1179,26 @@ export function installWebviewPolyfill() {
     if (root.tagName === "WEBVIEW") upgrade(root);
     root.querySelectorAll?.("webview").forEach(upgrade);
   };
-  new MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach(scan))).observe(
+  // Removed webviews are released on the next tick, unless they were only
+  // moved (back in the page by then).
+  const removed = new Set();
+  let releaseTimer = null;
+  const queueRelease = (node) => {
+    for (const wv of upgradedIn(node)) removed.add(wv);
+    if (!removed.size || releaseTimer) return;
+    releaseTimer = setTimeout(() => {
+      releaseTimer = null;
+      const list = [...removed];
+      removed.clear();
+      for (const wv of list) if (!wv.isConnected) wv.__sbTeardown?.();
+    }, 0);
+  };
+  new MutationObserver((muts) =>
+    muts.forEach((m) => {
+      m.removedNodes.forEach(queueRelease);
+      m.addedNodes.forEach(scan);
+    }),
+  ).observe(
     document.documentElement,
     { childList: true, subtree: true },
   );
