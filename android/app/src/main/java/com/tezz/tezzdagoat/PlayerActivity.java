@@ -58,6 +58,7 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.media3.common.C;
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
@@ -434,6 +435,10 @@ public class PlayerActivity extends AppCompatActivity {
                 .build();
 
         player = new ExoPlayer.Builder(this)
+                // Best-quality rule: assume a fast link at the start, so the
+                // first segments come from the top rendition instead of the
+                // lowest; ABR still steps down if the connection can't keep up.
+                .setBandwidthMeter(new DefaultBandwidthMeter.Builder(this).setInitialBitrateEstimate(20_000_000L).build())
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(new UnwrapDataSource.Factory(new DefaultDataSource.Factory(this, http))))
                 .setLoadControl(load)
                 .setSeekBackIncrementMs(10_000)

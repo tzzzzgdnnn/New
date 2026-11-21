@@ -2182,9 +2182,9 @@ final class StreambertPlayerViewController: UIViewController, AVPictureInPicture
         // Max quality = no caps, and start on the best variant instead of
         // climbing up from the lowest one.
         applyQuality(to: item)
-        // Auto: a modest cap for the first segments so the first frame comes
-        // fast; lifted (applyQuality) once playback runs.
-        if qualityHeight == 0 { item.preferredPeakBitRate = 2_500_000 }
+        // Best-quality rule: Auto starts uncapped on the best variant the
+        // network allows (no low start cap; it used to begin at 2.5 Mb/s,
+        // i.e. 480p, and only climb later).
         if #available(iOS 14.0, *) { item.startsOnFirstEligibleVariant = false }
         // Small buffer to start; raised after the first frame.
         item.preferredForwardBufferDuration = 2

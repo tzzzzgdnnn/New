@@ -8,6 +8,7 @@
 // Android start at once, with no playlist or first-segment wait.
 import Hls from "hls.js";
 import { registerPlugin } from "@capacitor/core";
+import { topLevelIndex } from "../../utils/servers/quality";
 
 // Android app: the built-in player (PlayerActivity, ExoPlayer), like the
 // iPhone app's native player. Undefined in every other build.
@@ -90,16 +91,27 @@ class UnwrapLoader extends Hls.DefaultConfig.loader {
 const HLS_BASE = {
   loader: UnwrapLoader,
   enableWorker: true,
-  // Lowest rung first: the picture shows in a fraction of a second, then ABR
-  // climbs to the best quality the connection allows.
-  startLevel: 0,
+  // Best-quality rule: start on the top rendition (set on MANIFEST_PARSED via
+  // topLevelIndex) and never cap it to the small inline box; ABR only steps
+  // down if the connection really can't keep up.
+  startLevel: -1,
   testBandwidth: false,
-  capLevelToPlayerSize: true,
+  capLevelToPlayerSize: false,
+  abrEwmaDefaultEstimate: 20_000_000,
   backBufferLength: 30,
   startFragPrefetch: true,
   fragLoadingMaxRetry: 4,
   manifestLoadingMaxRetry: 2,
 };
+/** Best-quality rule: every hls.js player starts on the stream's top rendition. */
+function startOnTop(hls) {
+  hls.on(Hls.Events.MANIFEST_PARSED, (_, d) => {
+    const i = topLevelIndex(d?.levels || hls.levels);
+    if (i >= 0) {
+      hls.startLevel = i;
+    }
+  });
+}
 const PLAY_BUFFER_S = 30;
 const WARM_BUFFER_S = 8; // buffered ahead while waiting for Play (light on data)
 const WARM_MAX_AGE_MS = 10 * 60_000; // stream tokens expire; rewarm after this
@@ -189,6 +201,7 @@ export function prewarmDirect(src, { startAt = 0, nativeOnly = false } = {}) {
     });
     w.onErr = (_, d) => d.fatal && (w.dead = true);
     hls.on(Hls.Events.ERROR, w.onErr);
+    startOnTop(hls);
     hls.loadSource(src);
     hls.attachMedia(video);
     w.hls = hls;
@@ -370,13 +383,16 @@ export function playDirect(box, src, { startAt = 0, onFail, onTime, timeoutMs = 
       loader: UnwrapLoader,
       enableWorker: true,
       startLevel: -1,
-      capLevelToPlayerSize: true,
+      capLevelToPlayerSize: false, // best-quality rule: never capped to the box
+      abrEwmaDefaultEstimate: 20_000_000,
+      testBandwidth: false,
       maxBufferLength: 30,
       backBufferLength: 30,
       startFragPrefetch: true,
       fragLoadingMaxRetry: 4,
     });
     hls.on(Hls.Events.ERROR, (_, d) => d.fatal && fail(d.details));
+    startOnTop(hls);
     hls.loadSource(src);
     hls.attachMedia(video);
     video.__sbHls = hls; // Watch Party: restart a loader stuck after a seek
